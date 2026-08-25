@@ -1,0 +1,54 @@
+name: Sync labels
+
+# Manual only. Applies .github/labels.yml to the repository's issue labels.
+# Existing labels are updated in place; missing ones are created. Nothing is
+# deleted, so labels not listed in the file are left alone.
+on:
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply labels
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > labels.json
+          import json, re, sys
+          labels, current = [], None
+          for line in open('.github/labels.yml'):
+              line = line.rstrip('\n')
+              if not line.strip() or line.lstrip().startswith('#'):
+                  continue
+              m = re.match(r'- name:\s*(.+)$', line.strip())
+              if m:
+                  current = {'name': m.group(1).strip().strip('"')}
+                  labels.append(current)
+                  continue
+              m = re.match(r'(color|description):\s*(.+)$', line.strip())
+              if m and current is not None:
+                  current[m.group(1)] = m.group(2).strip().strip('"')
+          json.dump(labels, sys.stdout)
+          PY
+
+          jq -c '.[]' labels.json | while read -r label; do
+            name=$(jq -r '.name' <<<"$label")
+            color=$(jq -r '.color' <<<"$label")
+            desc=$(jq -r '.description // ""' <<<"$label")
+            if gh label list --repo "$REPO" --limit 200 \
+                 --json name --jq '.[].name' | grep -qxF "$name"; then
+              gh label edit "$name" --repo "$REPO" --color "$color" --description "$desc"
+              echo "updated $name"
+            else
+              gh label create "$name" --repo "$REPO" --color "$color" --description "$desc"
+              echo "created $name"
+            fi
+          done

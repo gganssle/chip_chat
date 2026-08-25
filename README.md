@@ -67,6 +67,22 @@ Planning complete; implementation not started. The build plan runs twelve phases
 weeks of evenings and weekends. Phase 0 is Terraform scaffolding and verifying current service
 names and tiers across all four platforms.
 
+The work is filed as GitHub issues, each carrying exactly one priority label that encodes
+implementation order. Label definitions live in [`.github/labels.yml`](.github/labels.yml).
+
+| Label | What it covers |
+| --- | --- |
+| `P0` | Foundation and blockers — accounts, Terraform, the span schema, the week-one slice, the spend cap |
+| `P1` | Data foundations — harvest, synthetic generator, Databricks lakehouse, Snowflake serving layer |
+| `P2` | The five lanes, the agent, and the public app |
+| `P3` | Evaluation and hardening, including both launch gates |
+| `P4` | Cost, operations and documentation |
+| `P5` | Deferred past V0 — V1 features and the named RFC revisit triggers |
+
+Two ordering notes that override a strict reading of the labels. The **week-one ugly slice** cuts
+across every phase on purpose and is P0 for that reason. And the **inline spend cap** ships before
+the URL is shared with anyone, not when the Phase 10 hardening checklist is finally reached.
+
 ## Two things not to get wrong
 
 1. **Identity is never a tool argument.** It is bound to the Snowflake session by the app and
