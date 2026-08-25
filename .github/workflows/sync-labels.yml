@@ -6,14 +6,18 @@ name: Sync labels
 on:
   workflow_dispatch:
 
+# Declaring any permission zeroes out every scope not listed, so contents:read
+# has to be explicit or actions/checkout gets a token that cannot see the repo
+# and fails with "Repository not found".
 permissions:
+  contents: read
   issues: write
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Apply labels
         env:
