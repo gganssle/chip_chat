@@ -1,0 +1,32 @@
+# Issue labels for chip_chat.
+#
+# P0-P5 encode implementation order. P0 is the most critical and happens first;
+# P5 is deferred past V0. Every issue in this repo carries exactly one of them.
+#
+# This file is the source of truth. Run the "Sync labels" workflow
+# (Actions -> Sync labels -> Run workflow) to apply names, colors and
+# descriptions to the repository.
+
+- name: P0
+  color: "B60205"
+  description: "Foundation and blockers. Do these first — everything else waits."
+
+- name: P1
+  color: "D93F0B"
+  description: "Data foundations: harvest, generator, lakehouse, Snowflake serving layer."
+
+- name: P2
+  color: "FBCA04"
+  description: "The five lanes, the agent, and the public app."
+
+- name: P3
+  color: "0E8A16"
+  description: "Evaluation and hardening. Includes both launch gates."
+
+- name: P4
+  color: "1D76DB"
+  description: "Cost, operations and documentation."
+
+- name: P5
+  color: "5319E7"
+  description: "Deferred past V0: V1 features and named RFC revisit triggers."
