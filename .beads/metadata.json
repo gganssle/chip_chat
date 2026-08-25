@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "chip",
+  "project_id": "0c231e7a-867e-4539-bae3-66a63362a838"
+}
