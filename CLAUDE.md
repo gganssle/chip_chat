@@ -57,6 +57,32 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 - If a required sync or push is blocked, stop and report the exact command and error.
 <!-- END BEADS INTEGRATION -->
 
+## Beads ↔ GitHub Issues
+
+GitHub Issues stays the public, human-facing tracker; beads is the working tracker agents read
+and write. Every bead imported from GitHub keeps its `External:` link back to the issue.
+
+The sync needs a token in the environment (it is deliberately not stored in `.beads/config.yaml`,
+which is committed):
+
+```bash
+export GITHUB_TOKEN=$(gh auth token)
+
+bd github status                 # verify owner/repo/token
+bd github sync --pull-only       # GitHub -> beads (safe, local only)
+bd github pull <issue-number>    # pull one issue the bulk sync missed
+bd github sync --push-only       # beads -> GitHub (creates/edits real issues — ask first)
+bd github sync                   # bidirectional
+```
+
+Owner and repo are already configured (`gganssle/chip_chat`) via `bd config`.
+
+Conventions:
+- Priority mirrors the GitHub `P0`–`P3` label; labels are copied onto the bead on import.
+- Pulling is local and reversible. Pushing writes to the public repo — confirm before running it.
+- `bd github sync --pull-only` can skip an issue created seconds earlier; re-run it, and use
+  `bd github pull <n>` for stragglers.
+
 
 ## Build & Test
 
