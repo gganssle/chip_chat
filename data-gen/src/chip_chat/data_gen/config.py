@@ -88,6 +88,83 @@ class Distribution:
     weights: tuple[float, ...]
 
 
+MEASURES = (
+    "order_count",
+    "lifetime_spend",
+    "days_since_order",
+    "days_since_first_order",
+    "usual_share",
+    "distinct_baskets",
+    "distinct_stores",
+    "store_share",
+    "entrees_per_order",
+    "points_balance",
+)
+"""What a fixture may be selected on: the vocabulary of measured facts.
+
+Every name here is a field of
+:class:`~chip_chat.data_gen.fixtures.CustomerFacts`, measured from one
+customer's orders. ``test_fixtures.py`` asserts the two agree, so a fact added
+there and forgotten here is a test failure rather than a config key that
+quietly never matches.
+
+The vocabulary is closed on purpose. ``at_least``/``at_most`` naming a measure
+that does not exist is a :class:`~chip_chat.data_gen.errors.ConfigError`, not a
+bound that silently passes — a criterion misspelt into inertness would let an
+archetype ship fixtures that demonstrate nothing, which is the exact failure
+issue #26 exists to prevent.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class FixtureSpec:
+    """What makes a customer a good exemplar of one archetype.
+
+    Issue #26 asks that "a query surfaces a genuinely interesting customer for
+    each archetype", and this is that query, stated as data. It is beside the
+    archetype in ``population.toml`` for the reason the archetype itself is:
+    which customer is worth showing a visitor is a product decision, and
+    PRD section 09 makes it the decision that bounds what the assistant can
+    demonstrate at all.
+
+    A candidate must clear every bound. There is no scoring and no partial
+    credit, because the ticket's rule is absolute — *"if a fixture cannot
+    demonstrate its own metric, it is not finished"* — and a weighted score
+    would let a Regular with no dominant usual place well by ordering a lot.
+
+    Attributes:
+        narrative: A :meth:`str.format` template for
+            :attr:`~chip_chat.data_gen.records.PersonaFixture.narrative`,
+            filled from the customer's measured facts. Formatting lives in the
+            template rather than in code — ``{points_balance:,} points`` and
+            ``{usual_share:.0%} of them`` — so the sentence can be rewritten
+            without touching Python. A field the facts do not supply is a
+            :class:`~chip_chat.data_gen.errors.ConfigError` at generation
+            time, never a ``{placeholder}`` shown to a visitor.
+        rank_by: Which measure orders the candidates that qualify, highest
+            first. Prefix with ``-`` for lowest first, which is how the
+            Explorer asks for the *least* repetitive customer. Names a
+            measure from :data:`MEASURES`.
+        at_least: Lower bounds, keyed by measure. Inclusive.
+        at_most: Upper bounds, keyed by measure. Inclusive.
+    """
+
+    narrative: str
+    rank_by: str
+    at_least: tuple[tuple[str, float], ...]
+    at_most: tuple[tuple[str, float], ...]
+
+    @property
+    def measure(self) -> str:
+        """Return the measure :attr:`rank_by` names, without its direction."""
+        return self.rank_by.removeprefix("-")
+
+    @property
+    def ascending(self) -> bool:
+        """Return whether the best candidate is the one with the *least* of it."""
+        return self.rank_by.startswith("-")
+
+
 @dataclass(frozen=True, slots=True)
 class PersonaSpec:
     """One archetype: how a customer of this kind behaves over eighteen months.
@@ -143,6 +220,10 @@ class PersonaSpec:
         store_loyalty: Probability an order happens at the customer's home
             store rather than another.
         delivery_share: Probability an order is priced at delivery prices.
+        fixture: What makes a customer of this archetype worth showing a
+            visitor. The fields above decide how the archetype *behaves*; this
+            one decides which of the resulting customers demonstrates that
+            behaviour well enough to be a fixture.
     """
 
     persona_id: str
@@ -168,6 +249,7 @@ class PersonaSpec:
     extra_probability: float
     store_loyalty: float
     delivery_share: float
+    fixture: FixtureSpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -349,6 +431,14 @@ class GeneratorConfig:
             slide from where their archetype's shares put them. Without it
             every lapsed customer lapses on the same afternoon, which reads as
             a generator rather than as a population.
+        fixtures_per_persona: How many exemplar customers each archetype
+            contributes to ``persona_fixtures``. Issue #26 asks for "more than
+            three concrete instances of each archetype, so persona switching
+            shows variety rather than the same three accounts", which is the
+            floor this number has to clear. An archetype with fewer qualifying
+            customers than this contributes the ones it has rather than making
+            some up, and ``test_fixtures.py`` asserts the shipped population
+            is not one of those.
         palate_concentration: How sharply one customer prefers some catalogue
             items over others. This is a Dirichlet concentration: below one
             gives most customers a few favourites, at one they have none, and
@@ -370,6 +460,7 @@ class GeneratorConfig:
     store_popularity_exponent: float
     store_popularity_offset: float
     window_jitter_days: int
+    fixtures_per_persona: int
     palate_concentration: float
     personas: tuple[PersonaSpec, ...]
     timing: TimingConfig
@@ -461,6 +552,9 @@ def _config(raw: Mapping[str, Any]) -> GeneratorConfig:
             "population.store_popularity_offset", population, minimum=TOLERANCE
         ),
         window_jitter_days=_count("population.window_jitter_days", population, minimum=0),
+        fixtures_per_persona=_count(
+            "population.fixtures_per_persona", population, minimum=1
+        ),
         palate_concentration=_number(
             "population.palate_concentration", population, minimum=TOLERANCE
         ),
@@ -525,7 +619,71 @@ def _persona(entry: Mapping[str, Any], index: int) -> PersonaSpec:
         extra_probability=_fraction(f"{where}.extra_probability", entry),
         store_loyalty=_fraction(f"{where}.store_loyalty", entry),
         delivery_share=_fraction(f"{where}.delivery_share", entry),
+        fixture=_fixture(f"{where}.fixture", entry),
     )
+
+
+def _fixture(where: str, entry: Mapping[str, Any]) -> FixtureSpec:
+    """Build one archetype's fixture criteria, or raise naming the key.
+
+    Required, not optional. An archetype with no criteria would contribute no
+    fixture and nothing would say so, which is how a newly added archetype
+    ends up invisible to the demo it was added for.
+    """
+    table = entry.get("fixture")
+    if not isinstance(table, dict):
+        raise ConfigError(
+            f"{where} must be a table. Every archetype needs fixture criteria: "
+            "without them it contributes no exemplar customer, and a visitor "
+            "can never be assigned one."
+        )
+    rank_by = _text(f"{where}.rank_by", table)
+    _measure(f"{where}.rank_by", rank_by.removeprefix("-"))
+    at_least = _bounds(f"{where}.at_least", table)
+    at_most = _bounds(f"{where}.at_most", table)
+    lower = dict(at_least)
+    for name, ceiling in at_most:
+        if name in lower and lower[name] > ceiling:
+            raise ConfigError(
+                f"{where} asks for {name} at least {lower[name]} and at most "
+                f"{ceiling}; no customer can clear both, so the archetype "
+                "would contribute no fixture at all"
+            )
+    return FixtureSpec(
+        narrative=_text(f"{where}.narrative", table),
+        rank_by=rank_by,
+        at_least=at_least,
+        at_most=at_most,
+    )
+
+
+def _bounds(where: str, table: Mapping[str, Any]) -> tuple[tuple[str, float], ...]:
+    """Return one bounds table as sorted ``(measure, value)`` pairs.
+
+    Absent means unbounded. Sorted so that the same criteria written in a
+    different order are the same criteria, which keeps the population's digest
+    a function of what the config says rather than of how it was typed.
+    """
+    raw = table.get(where.split(".")[-1])
+    if raw is None:
+        return ()
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{where} must be a table of measures, got {raw!r}")
+    bounds = []
+    for name in sorted(raw):
+        _measure(where, name)
+        bounds.append((name, _number(f"{where}.{name}", raw, minimum=0.0)))
+    return tuple(bounds)
+
+
+def _measure(where: str, name: str) -> None:
+    """Raise unless ``name`` is one of :data:`MEASURES`."""
+    if name not in MEASURES:
+        raise ConfigError(
+            f"{where} names {name!r}, which is not a measured fact about a "
+            f"customer; expected one of {list(MEASURES)}. A criterion that "
+            "names nothing is a criterion that never excludes anyone."
+        )
 
 
 def _timing(raw: Mapping[str, Any]) -> TimingConfig:

@@ -37,6 +37,13 @@ that only records what it cost traces to nothing: two rewards may be priced
 the same, and a cost is not an identity. The column holds the published
 ``rewards.name`` verbatim, so the trace is a join onto the harvested Rewards
 Exchange rather than an inference from a number.
+
+A sixth table is here that section 04 does not list at all —
+``persona_fixtures``, from issue #26 — and
+``docs/decisions/persona-fixtures.md`` argues it. In one line: ``personas``
+says what kinds of customer exist, and ``persona_fixtures`` says *which
+particular customers* are worth showing a visitor, which is a different
+question and one the population cannot answer until it has been generated.
 """
 
 import hashlib
@@ -57,6 +64,7 @@ issue #33 ingests them as two streams with different clocks."""
 
 TABLES = (
     "personas",
+    "persona_fixtures",
     "demo_visitors",
     "orders",
     "order_items",
@@ -108,13 +116,140 @@ class Persona:
             may legitimately differ; RFC-001 section 04 is explicit that the
             serving layer says so rather than reconciling silently.
         seed_points: Loyalty points the archetype starts with.
-        narrative: One sentence a visitor is shown when assigned this persona.
+        narrative: One sentence describing this *kind* of customer, from the
+            config. The archetype's tagline, not any customer's story: the
+            sentence a visitor is actually shown is
+            :attr:`PersonaFixture.narrative`, which is written from the
+            history of the particular customer they were assigned and can
+            therefore name their store, their points and their usual. Issue
+            #26 asks for a narrative "specific enough to write that sentence
+            from"; a row shared by eighty customers cannot be, so the two
+            columns are different sentences with different jobs.
     """
 
     persona_id: str
     label: str
     home_store: int
     seed_points: int
+    narrative: str
+
+
+@dataclass(frozen=True, slots=True)
+class PersonaFixture:
+    """One customer chosen to *be* an archetype for a visitor arriving.
+
+    Issue #26's subject. ``personas`` says what kinds of customer the
+    population contains; this says which particular ones are worth handing to
+    a visitor, and it is a different question — the answer depends on
+    eighteen months of generated history, so it cannot be written in the
+    config beside the archetype and has to be measured after the fact.
+
+    The selection rule is the ticket's own: *"if a fixture cannot demonstrate
+    its own metric, it is not finished."* A customer becomes a fixture only by
+    clearing the bounds its archetype sets on its own defining behaviour — the
+    Regular needs a genuinely dominant usual, the Lapsed Customer needs
+    unredeemed points and months of silence, the Explorer needs orders varied
+    enough that no usual stands out. There is no code path that admits a
+    customer who fails its archetype's bounds, which is what makes
+    "every archetype's behaviour is really in the data" checkable rather than
+    hopeful. See :mod:`chip_chat.data_gen.fixtures`.
+
+    Every measured column here is also an argument for the sentence in
+    :attr:`narrative`, which is written *from* them. A reviewer who doubts the
+    narrative re-derives it from the row rather than trusting it, which is the
+    same reason ``order_items`` carries ``unit_price``.
+
+    Two absences are deliberate.
+
+    **No display name, and no name in the narrative.** ``display_name`` is one
+    of the three columns a visitor may edit (RFC-001 section 04), so a
+    narrative with a name baked into it is a sentence that goes stale the
+    moment they change it. The opening message of issue #67 joins the live
+    name to this sentence; the sentence itself is nameless, which is also how
+    the ticket writes it — *"a regular at the Ballard store, 1,250 points, and
+    a well-documented weakness for double barbacoa."*
+
+    **No claim about rewards.** :attr:`points_balance` is what this
+    population's ledger sums to under the provisional arithmetic in
+    ``[loyalty]``. It is stored value the assistant can surface, which is what
+    PRD requirement P3 needs of it; it is not a reconciled Chipotle Rewards
+    balance, and issue #27 owns making it one.
+
+    Attributes:
+        demo_id: Which customer. Joins to ``demo_visitors`` and to every
+            visitor-scoped table.
+        persona_id: Which archetype they are an exemplar of.
+        label: That archetype's label, carried here so the entry flow can
+            render a fixture without a second lookup.
+        rank: Position among this archetype's fixtures, from one. Rank one is
+            the strongest exemplar by the archetype's own measure — the most
+            dominant usual for the Regular, the most varied orders for the
+            Explorer. A demo that wants one customer takes rank one; a demo
+            showing that personas differ takes several.
+        home_store: Where they actually order, derived from ``orders.store_id``
+            — which is ``customer_360.favourite_store``'s definition and not
+            ``personas.home_store``, an archetype's narrative setting. The two
+            may legitimately differ.
+        home_store_name: That store's published name, or ``None`` if the
+            locator publishes none. Read off the catalogue, never invented:
+            the narrative names a real restaurant or it names none.
+        store_share: The fraction of their orders placed there. The Regular's
+            is near one and the Explorer's is not, which is half of what makes
+            them different people.
+        distinct_stores: How many stores they have ordered from at all.
+        entrees_per_order: Mean entrees per order. Above two is somebody
+            ordering for other people, which is what makes the group orderer
+            visible in data generated before V0 scopes them in.
+        order_count: How many orders they have placed.
+        lifetime_spend: What those orders totalled.
+        first_order_at: Their first order.
+        last_order_at: Their most recent.
+        days_since_order: Days from :attr:`last_order_at` to the end of the
+            generated window — *not* to now. The window's end is fixed in the
+            config, so this number is reproducible; measuring it against the
+            wall clock would make a lapsed customer lapse further every day.
+        points_balance: What their ledger sums to. Unredeemed stored value,
+            under the provisional arithmetic named above.
+        usual_item_id: The entree in the basket they order most often, or
+            ``None`` when they have placed no order carrying one. A
+            ``menu_items.item_id``, as everywhere else in this package.
+        usual_modifiers: How they have it built. ``modifiers.modifier_id``
+            values of that item, sorted.
+        usual_share: The fraction of their orders that are exactly that
+            basket. The Regular's defining number and the Explorer's, read in
+            opposite directions. Deliberately *not* called confidence: the
+            ``usual_order`` gold mart computes a confidence its own way and
+            this must not be mistaken for it. Fixtures are chosen at the
+            extremes of this measure precisely so that any reasonable
+            definition of confidence agrees about them.
+        distinct_baskets: How many different baskets they have ordered. The
+            Explorer's defining number.
+        narrative: The sentence a visitor is shown on being assigned this
+            customer. Filled from the columns above out of the template its
+            archetype carries in the config, so every number in it is a
+            number in this row and every food in it is a food in the
+            catalogue.
+    """
+
+    demo_id: str
+    persona_id: str
+    label: str
+    rank: int
+    home_store: int
+    home_store_name: str | None
+    store_share: float
+    distinct_stores: int
+    entrees_per_order: float
+    order_count: int
+    lifetime_spend: Decimal
+    first_order_at: datetime
+    last_order_at: datetime
+    days_since_order: int
+    points_balance: int
+    usual_item_id: str | None
+    usual_modifiers: tuple[str, ...]
+    usual_share: float
+    distinct_baskets: int
     narrative: str
 
 
@@ -262,6 +397,7 @@ class SyntheticPopulation:
         window_starts_at: The first instant an order could fall in.
         window_ends_at: The last.
         personas: The archetypes.
+        persona_fixtures: The customers chosen to demonstrate each archetype.
         demo_visitors: The synthetic customers.
         orders: Their orders.
         order_items: Those orders' lines.
@@ -274,6 +410,7 @@ class SyntheticPopulation:
     window_starts_at: datetime
     window_ends_at: datetime
     personas: tuple[Persona, ...]
+    persona_fixtures: tuple[PersonaFixture, ...]
     demo_visitors: tuple[DemoVisitor, ...]
     orders: tuple[Order, ...]
     order_items: tuple[OrderItem, ...]

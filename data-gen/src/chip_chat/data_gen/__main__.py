@@ -30,16 +30,17 @@ import argparse
 import dataclasses
 import json
 import sys
+from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 
 from chip_chat.catalog import DEFAULT_PREFIX as CATALOG_PREFIX
 from chip_chat.catalog import load_catalog
 from chip_chat.catalog.errors import CatalogError
-from chip_chat.data_gen.config import load_config
+from chip_chat.data_gen.config import GeneratorConfig, load_config
 from chip_chat.data_gen.errors import GeneratorError
 from chip_chat.data_gen.generate import generate_population
-from chip_chat.data_gen.records import DEFAULT_PREFIX
+from chip_chat.data_gen.records import DEFAULT_PREFIX, SyntheticPopulation
 from chip_chat.data_gen.rewards import load_rewards_terms
 from chip_chat.harvest.blobs import LocalBlobStore
 from chip_chat.harvest.sources.chipotle import DEFAULT_POLICY_PREFIX
@@ -125,8 +126,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"wrote {len(written)} files under {args.landing / args.prefix}",
         file=sys.stderr,
     )
+    _report_fixtures(population, config)
     print(json.dumps(population.manifest(), indent=2, sort_keys=True))
     return 0
+
+
+def _report_fixtures(population: SyntheticPopulation, config: GeneratorConfig) -> None:
+    """Say how many fixtures each archetype supplied, and flag any that fell short.
+
+    Selection never pads: an archetype whose customers cannot clear its own
+    bounds contributes fewer fixtures rather than a worse one. That is the right
+    behaviour and the wrong thing to be silent about — a retune that quietly
+    leaves the Lapsed Customer with one exemplar has broken the demo without
+    breaking the run. So it is said out loud, here, where whoever just retuned
+    the file is looking.
+    """
+    counts = Counter(row.persona_id for row in population.persona_fixtures)
+    wanted = config.fixtures_per_persona
+    short = [spec for spec in config.personas if counts[spec.persona_id] < wanted]
+    summary = ", ".join(
+        f"{spec.persona_id} {counts[spec.persona_id]}" for spec in config.personas
+    )
+    print(f"persona fixtures ({wanted} wanted each): {summary}", file=sys.stderr)
+    for spec in short:
+        print(
+            f"  warning: {spec.persona_id} supplied {counts[spec.persona_id]} of "
+            f"{wanted}; too few of its customers clear its own criteria, so the "
+            "behaviour it exists to demonstrate is thin in this population",
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":

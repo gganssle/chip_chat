@@ -33,6 +33,14 @@ palate_concentration = 0.55
 # archetype's shares put them. Without it every lapsed customer lapses on the
 # same afternoon, which reads as a generator rather than as a population.
 window_jitter_days = 21
+# How many exemplar customers each archetype contributes to `persona_fixtures`.
+# Issue #26 asks for "more than three concrete instances of each archetype, so
+# persona switching shows variety rather than the same three accounts", so four
+# is the floor and not a preference. An archetype whose customers cannot supply
+# four that clear its `[personas.fixture]` bounds contributes the ones it has
+# rather than promoting one that fails its own test; `test_fixtures.py` asserts
+# this population is not one of those.
+fixtures_per_persona = 4
 
 [timing]
 # Monday first. Friday is the peak, Sunday the trough.
@@ -244,6 +252,26 @@ extra_probability = 0.05
 store_loyalty = 0.97
 delivery_share = 0.08
 
+# What makes a customer of this archetype worth showing a visitor (issue #26).
+# A candidate must clear EVERY bound; there is no scoring, because the ticket's
+# rule is absolute -- "if a fixture cannot demonstrate its own metric, it is
+# not finished" -- and a weighted score would let a regular with no usual place
+# well by ordering a lot. `rank_by` orders the ones that qualify, highest
+# first; a leading `-` reads it lowest first. Bounds and `rank_by` may name any
+# measure in `chip_chat.data_gen.config.MEASURES`; a name outside it is a
+# ConfigError rather than a bound that quietly never bites.
+[personas.fixture]
+# The PRD's Regular, measured by turns-to-reorder with a target of one. That
+# target is only reachable if the usual is unambiguous, so the bar is the usual
+# itself: at least six orders in seven are the identical basket.
+rank_by = "usual_share"
+narrative = "a regular at {store}, {points_balance:,} points on the card, and {usual_share:.0%} of {order_count} orders the same {usual_order}."
+
+[personas.fixture.at_least]
+order_count = 30
+usual_share = 0.85
+store_share = 0.90
+
 [[personas]]
 persona_id = "lapsed"
 label = "The Lapsed Regular"
@@ -271,6 +299,34 @@ extra_probability = 0.06
 store_loyalty = 0.90
 delivery_share = 0.15
 
+# What makes a customer of this archetype worth showing a visitor (issue #26).
+# A candidate must clear EVERY bound; there is no scoring, because the ticket's
+# rule is absolute -- "if a fixture cannot demonstrate its own metric, it is
+# not finished" -- and a weighted score would let a regular with no usual place
+# well by ordering a lot. `rank_by` orders the ones that qualify, highest
+# first; a leading `-` reads it lowest first. Bounds and `rank_by` may name any
+# measure in `chip_chat.data_gen.config.MEASURES`; a name outside it is a
+# ConfigError rather than a bound that quietly never bites.
+[personas.fixture]
+# The PRD's Lapsed Customer, measured by whether stored value is surfaced
+# before they think to ask. Both halves are required: months of silence AND a
+# balance worth mentioning. Silence alone is a customer with nothing to
+# surface, and points alone is a customer who was in last week.
+#
+# `points_balance` is deliberately the current `[loyalty].redemption_threshold`
+# and deliberately not a reference to it. It is a SELECTION bar -- "enough
+# stored value that a visitor would want to hear about it" -- and issue #27
+# reconciles the rewards arithmetic against the published terms. When #27 moves
+# the threshold, this number is retuned beside it rather than dragged along by
+# it, because the two answer different questions.
+rank_by = "points_balance"
+narrative = "a regular at {store} until {last_order_month}, and not seen since -- {points_balance:,} points still unredeemed from {order_count} orders."
+
+[personas.fixture.at_least]
+order_count = 20
+days_since_order = 90
+points_balance = 1250
+
 [[personas]]
 persona_id = "explorer"
 label = "The Explorer"
@@ -295,6 +351,31 @@ drink_probability = 0.35
 extra_probability = 0.22
 store_loyalty = 0.55
 delivery_share = 0.20
+
+# What makes a customer of this archetype worth showing a visitor (issue #26).
+# A candidate must clear EVERY bound; there is no scoring, because the ticket's
+# rule is absolute -- "if a fixture cannot demonstrate its own metric, it is
+# not finished" -- and a weighted score would let a regular with no usual place
+# well by ordering a lot. `rank_by` orders the ones that qualify, highest
+# first; a leading `-` reads it lowest first. Bounds and `rank_by` may name any
+# measure in `chip_chat.data_gen.config.MEASURES`; a name outside it is a
+# ConfigError rather than a bound that quietly never bites.
+[personas.fixture]
+# The PRD's Explorer, measured by whether answers are correct, sourced and
+# appropriately hedged. The bound is inverted on purpose: a LOW `usual_share`
+# is the qualification, because a customer with no dominant order is what
+# exercises the honest "I am not sure what your usual is" path. Ranking by
+# `-usual_share` puts the least predictable customer first.
+rank_by = "-usual_share"
+narrative = "{order_count} orders across {distinct_stores} stores and {distinct_baskets} different baskets among them; the nearest thing to a usual is {usual_order}, and that is only {usual_share:.0%} of them."
+
+[personas.fixture.at_least]
+order_count = 20
+distinct_stores = 5
+distinct_baskets = 20
+
+[personas.fixture.at_most]
+usual_share = 0.15
 
 [[personas]]
 persona_id = "office_manager"
@@ -323,6 +404,32 @@ extra_probability = 0.10
 store_loyalty = 0.93
 delivery_share = 0.65
 
+# What makes a customer of this archetype worth showing a visitor (issue #26).
+# A candidate must clear EVERY bound; there is no scoring, because the ticket's
+# rule is absolute -- "if a fixture cannot demonstrate its own metric, it is
+# not finished" -- and a weighted score would let a regular with no usual place
+# well by ordering a lot. `rank_by` orders the ones that qualify, highest
+# first; a leading `-` reads it lowest first. Bounds and `rank_by` may name any
+# measure in `chip_chat.data_gen.config.MEASURES`; a name outside it is a
+# ConfigError rather than a bound that quietly never bites.
+[personas.fixture]
+# Out of scope for V0 as a persona, in scope as data: issue #26 asks that the
+# group orderer "shape the generated data so that nothing has to be regenerated
+# when it arrives". A fixture that already demonstrates multi-entree ordering
+# is that shaping made checkable.
+rank_by = "entrees_per_order"
+# Deliberately says nothing about points. This archetype outspends the
+# redemption rule -- `[loyalty]` lets a customer redeem at most once per
+# order, so one earning more than `redemption_threshold` per visit
+# accumulates a balance no real programme would show. It is the
+# provisional arithmetic issue #27 reconciles (filed as a bead against
+# it), and what this fixture is here to demonstrate is group ordering.
+narrative = "puts in the floor's lunch order at {store}: {order_count} orders averaging {entrees_per_order:.1f} entrees, ${lifetime_spend:,.0f} in all."
+
+[personas.fixture.at_least]
+order_count = 20
+entrees_per_order = 4.0
+
 [[personas]]
 persona_id = "weekend_family"
 label = "The Weekend Family"
@@ -348,6 +455,22 @@ drink_probability = 0.75
 extra_probability = 0.12
 store_loyalty = 0.88
 delivery_share = 0.35
+
+# What makes a customer of this archetype worth showing a visitor (issue #26).
+# A candidate must clear EVERY bound; there is no scoring, because the ticket's
+# rule is absolute -- "if a fixture cannot demonstrate its own metric, it is
+# not finished" -- and a weighted score would let a regular with no usual place
+# well by ordering a lot. `rank_by` orders the ones that qualify, highest
+# first; a leading `-` reads it lowest first. Bounds and `rank_by` may name any
+# measure in `chip_chat.data_gen.config.MEASURES`; a name outside it is a
+# ConfigError rather than a bound that quietly never bites.
+[personas.fixture]
+rank_by = "entrees_per_order"
+narrative = "feeds the table at {store} most weekends -- {order_count} orders averaging {entrees_per_order:.1f} entrees, usually including {usual_order}."
+
+[personas.fixture.at_least]
+order_count = 20
+entrees_per_order = 3.0
 
 [[personas]]
 persona_id = "newcomer"
@@ -376,6 +499,26 @@ extra_probability = 0.10
 store_loyalty = 0.80
 delivery_share = 0.25
 
+# What makes a customer of this archetype worth showing a visitor (issue #26).
+# A candidate must clear EVERY bound; there is no scoring, because the ticket's
+# rule is absolute -- "if a fixture cannot demonstrate its own metric, it is
+# not finished" -- and a weighted score would let a regular with no usual place
+# well by ordering a lot. `rank_by` orders the ones that qualify, highest
+# first; a leading `-` reads it lowest first. Bounds and `rank_by` may name any
+# measure in `chip_chat.data_gen.config.MEASURES`; a name outside it is a
+# ConfigError rather than a bound that quietly never bites.
+[personas.fixture]
+# Recognised by how recently their history STARTS, which is the one thing that
+# makes a newcomer a newcomer.
+rank_by = "order_count"
+narrative = "new since {first_order_month} -- {order_count} orders so far, most often {usual_order}, and still working the usual out."
+
+[personas.fixture.at_least]
+order_count = 8
+
+[personas.fixture.at_most]
+days_since_first_order = 200
+
 [[personas]]
 persona_id = "occasional"
 label = "The Occasional Visitor"
@@ -400,3 +543,22 @@ drink_probability = 0.30
 extra_probability = 0.08
 store_loyalty = 0.60
 delivery_share = 0.20
+
+# What makes a customer of this archetype worth showing a visitor (issue #26).
+# A candidate must clear EVERY bound; there is no scoring, because the ticket's
+# rule is absolute -- "if a fixture cannot demonstrate its own metric, it is
+# not finished" -- and a weighted score would let a regular with no usual place
+# well by ordering a lot. `rank_by` orders the ones that qualify, highest
+# first; a leading `-` reads it lowest first. Bounds and `rank_by` may name any
+# measure in `chip_chat.data_gen.config.MEASURES`; a name outside it is a
+# ConfigError rather than a bound that quietly never bites.
+[personas.fixture]
+rank_by = "distinct_stores"
+narrative = "turns up every couple of months and usually somewhere new: {order_count} orders across {distinct_stores} stores since {first_order_month}."
+
+[personas.fixture.at_least]
+order_count = 5
+days_since_first_order = 300
+
+[personas.fixture.at_most]
+order_count = 20
