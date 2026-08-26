@@ -1,0 +1,125 @@
+"""The vision model's slot vocabulary, generated from the catalogue.
+
+DO NOT EDIT. This module is written by ``chip_chat.catalog.vocabulary`` from a
+built catalogue and is overwritten whenever the catalogue is rebuilt. A term
+here exists because a published menu row exists; editing one by hand would
+reintroduce exactly the drift RFC-001 section 07 generates it to prevent.
+
+Catalogue content version:
+    0e5eb9c65accf0ff50d77903eab0cba31918157bc21402a88a520240d520a604
+"""
+
+from enum import StrEnum
+
+
+class Vessel(StrEnum):
+    """Published vessel the model may return."""
+
+    BOWL = "bowl"
+    """Bowl."""
+    BURRITO = "burrito"
+    """Burrito."""
+
+
+class Protein(StrEnum):
+    """Published protein the model may return."""
+
+    CHICKEN = "chicken"
+    """Chicken."""
+    STEAK = "steak"
+    """Steak."""
+
+
+class Rice(StrEnum):
+    """Published rice the model may return."""
+
+    WHITE_RICE = "white_rice"
+    """White Rice."""
+
+
+class Bean(StrEnum):
+    """Published beans the model may return."""
+
+    BLACK_BEANS = "black_beans"
+    """Black Beans."""
+
+
+class Salsa(StrEnum):
+    """Published salsas the model may return."""
+
+    # The catalogue published no term for this slot.
+    pass
+
+
+class Topping(StrEnum):
+    """Published toppings the model may return."""
+
+    CHEESE = "cheese"
+    """Cheese."""
+    GUACAMOLE = "guacamole"
+    """Guacamole."""
+
+
+SLOT_ITEMS: dict[str, dict[str, tuple[str, ...]]] = {
+    # Slot to term to the catalogue items the term may resolve to.
+    # More than one is normal: Chipotle publishes guacamole under two
+    # identifiers and white rice under two more, so which one a described
+    # meal means depends on the entree it is on. Resolve (entree, term)
+    # against the catalogue's `modifiers` table; this is the candidate set.
+    # `vessel` and `protein` are empty on purpose: each is half of an
+    # entree, and the pair resolves through the catalogue's
+    # `(item_type, primary_filling)` rather than through either half.
+    "vessel": {
+        "bowl": (),
+        "burrito": (),
+    },
+    "protein": {
+        "chicken": (),
+        "steak": (),
+    },
+    "rice": {
+        "white_rice": ("CMG-5001",),
+    },
+    "beans": {
+        "black_beans": ("CMG-5051",),
+    },
+    "salsas": {},
+    "toppings": {
+        "cheese": ("CMG-5252",),
+        "guacamole": ("CMG-1001",),
+    },
+}
+
+
+def _slot(values: list[str]) -> dict[str, object]:
+    """One slot: a value from the catalogue, and how sure the model is."""
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["value", "confidence"],
+        "properties": {
+            "value": {"type": "string", "enum": values},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        },
+    }
+
+
+DESCRIBE_SCHEMA: dict[str, object] = {
+    # RFC-001 section 07, stage 4. The model may return nothing else.
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["is_chipotle_style", "meals_visible"],
+    "properties": {
+        "is_chipotle_style": {"type": "boolean"},
+        "vessel": _slot(["bowl", "burrito"]),
+        "protein": _slot(["chicken", "steak"]),
+        "rice": _slot(["white_rice"]),
+        "beans": _slot(["black_beans"]),
+        "salsas": {"type": "array", "items": _slot([])},
+        "toppings": {"type": "array", "items": _slot(["cheese", "guacamole"])},
+        "meals_visible": {"type": "integer", "minimum": 0},
+        # Display-only. Nothing downstream parses it, which is what
+        # keeps the one free-text field from becoming a product name.
+        "notes": {"type": "string"},
+    },
+}
