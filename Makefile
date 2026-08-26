@@ -72,3 +72,38 @@ trace: ## Send one demo session to OTEL_EXPORTER_OTLP_ENDPOINT
 clean: ## Remove caches and build artefacts
 	rm -rf .mypy_cache .pytest_cache .ruff_cache
 	find . -name '__pycache__' -type d -prune -not -path './.beads/*' -exec rm -rf {} +
+
+# --- Infrastructure ---------------------------------------------------------
+#
+# Terraform for every Azure resource. `make infra-destroy` is the one-command
+# teardown that issue #5 exists for.
+
+TF        ?= terraform
+TF_DIR    := infra/terraform
+TF_RUN    := $(TF) -chdir=$(TF_DIR)
+
+.PHONY: infra-bootstrap infra-init infra-fmt infra-validate infra-plan infra-apply infra-destroy infra-output
+
+infra-bootstrap: ## Create the remote state storage account (once per subscription)
+	./infra/scripts/bootstrap-state.sh
+
+infra-init: ## Initialise Terraform against the remote backend
+	$(TF_RUN) init
+
+infra-fmt: ## Format the Terraform
+	$(TF) fmt -recursive $(TF_DIR)
+
+infra-validate: ## Validate the Terraform
+	$(TF_RUN) validate
+
+infra-plan: ## Show what apply would change
+	$(TF_RUN) plan
+
+infra-apply: ## Stand up the Azure estate
+	$(TF_RUN) apply
+
+infra-destroy: ## Tear the whole Azure estate down
+	$(TF_RUN) destroy
+
+infra-output: ## Print stack outputs
+	$(TF_RUN) output

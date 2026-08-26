@@ -1,0 +1,53 @@
+# Copy to terraform.tfvars and edit. terraform.tfvars is gitignored; this file is
+# not. Nothing here is a secret — secrets live in Key Vault and never reach
+# Terraform.
+#
+# Every value below is already the default. The file exists to show the shape of
+# the two things you are most likely to change.
+
+# subscription_id = "c8b63a71-218d-4d4c-991c-b963ed2fd1f0"
+# location        = "eastus2"
+# environment     = "demo"
+
+# --- A disposable second stack ----------------------------------------------
+#
+# Set environment to anything but "demo" and the stack builds its own resource
+# group, Key Vault and identity beside the live one instead of adopting Phase 0's.
+#
+#   terraform workspace new scratch
+#   terraform apply -var environment=scratch -var adopt_existing_foundation=false
+#
+# Two of the free tiers are one-per-subscription (AI Search Free, and F0 on each
+# Cognitive Services kind), so a second stack has to pay for them or the apply
+# fails on a quota error:
+#
+# environment               = "scratch"
+# adopt_existing_foundation = false
+# search_sku                = "basic"   # ~$74/month while it exists
+# content_safety_sku        = "S0"
+# document_intelligence_sku = "S0"
+
+# --- Model deployments (issue #8) -------------------------------------------
+#
+# Empty by default: #5 stands up the environment, #8 chooses the models and
+# confirms in-region quota. Capacity is thousands of tokens per minute and is a
+# spend control as much as a performance setting — check available quota with
+#
+#   az cognitiveservices usage list -l eastus2 -o table
+#
+# before raising it.
+#
+# model_deployments = {
+#   chat = {
+#     model_name    = "gpt-4.1-mini"
+#     model_version = "2025-04-14"
+#     sku_name      = "GlobalStandard"
+#     capacity      = 10
+#   }
+#   vision = {
+#     model_name    = "gpt-4.1-mini"
+#     model_version = "2025-04-14"
+#     sku_name      = "GlobalStandard"
+#     capacity      = 10
+#   }
+# }

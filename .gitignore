@@ -23,11 +23,15 @@ htmlcov/
 
 # --- Terraform --------------------------------------------------------------
 .terraform/
-.terraform.lock.hcl
+# .terraform.lock.hcl is deliberately NOT ignored: it pins provider versions and
+# checksums, which is the only thing making `terraform plan` reproducible
+# between a laptop and CI.
 *.tfstate
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
+tfplan
+*.tfplan
 crash.log
 override.tf
 override.tf.json

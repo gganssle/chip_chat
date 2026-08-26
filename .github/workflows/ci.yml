@@ -38,3 +38,30 @@ jobs:
 
       - name: Tests
         run: make test
+
+  terraform:
+    name: terraform fmt and validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+          # The wrapper rewrites stdout and breaks the exit code of fmt -check.
+          terraform_wrapper: false
+
+      - name: Format check
+        run: terraform -chdir=infra/terraform fmt -check -recursive
+
+      # -backend=false because validate needs the providers but must not reach
+      # for remote state, which would want Azure credentials CI does not have.
+      # The committed lock file is what makes this reproducible.
+      - name: Init
+        run: terraform -chdir=infra/terraform init -backend=false -input=false
+
+      - name: Validate
+        run: terraform -chdir=infra/terraform validate
+
+      - name: Shellcheck the bootstrap script
+        run: shellcheck infra/scripts/bootstrap-state.sh
