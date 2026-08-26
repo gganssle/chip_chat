@@ -8,7 +8,15 @@ requires-python = ">=3.13"
 # rows stage 5 resolves against, and harvest for the blob store that reads a
 # built catalogue off disk. An eval that re-implemented any of them would be
 # scoring something other than the pipeline.
+#
+# The golden set holds `agent` for the same reason and a second one. It scores
+# the agent, so the first thing on the far side of its `Deployment` seam is the
+# real loop rather than a re-implementation of it; and the citation rule it
+# checks is `chip_chat.agent.envelope`'s -- a citation is an id the retriever
+# returned, and a copy of that rule here could disagree with the renderer.
+# One way only: nothing in `agent/` imports `eval`.
 dependencies = [
+    "chip-chat-agent",
     "chip-chat-catalog",
     "chip-chat-harvest",
     "chip-chat-otel",
@@ -23,6 +31,7 @@ build-backend = "hatchling.build"
 packages = ["src/chip_chat"]
 
 [tool.uv.sources]
+chip-chat-agent = { workspace = true }
 chip-chat-catalog = { workspace = true }
 chip-chat-harvest = { workspace = true }
 chip-chat-otel = { workspace = true }

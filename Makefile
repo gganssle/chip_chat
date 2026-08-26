@@ -194,6 +194,25 @@ verify-tools: ## Measure tool selection across the five lanes
 verify-tools-bare: ## The same cases, with no system prompt at all
 	$(UV) run python -m chip_chat.agent.selection --no-prompt
 
+# --- Evaluation sets --------------------------------------------------------
+#
+# Both checks are free: they load a set, refuse one that contradicts itself, and
+# report which of its ticket's scope clauses it meets. Neither calls a model, so
+# both belong in CI. Pass --catalog a build the deployment actually serves —
+# that is what turns the golden set's menu terms into a staleness detector
+# rather than a comment.
+
+.PHONY: golden-check golden photos-check
+
+golden-check: ## Check the golden set's coverage, free
+	$(UV) run python -m chip_chat.eval.golden --check
+
+golden: ## Run the golden set against the week-one slice and write the baseline
+	$(UV) run python -m chip_chat.eval.golden --out eval/golden/BASELINE.md
+
+photos-check: ## Check the labeled photo set's coverage, free
+	$(UV) run python -m chip_chat.eval.photos --check
+
 # --- Deploying the chat app -------------------------------------------------
 #
 # Terraform owns the estate; a deploy owns the image. compute.tf deliberately
