@@ -130,6 +130,20 @@ output "web_url" {
   value = "https://${azurerm_container_app.web.ingress[0].fqdn}"
 }
 
+output "container_registry_login_server" {
+  description = "Registry the chat app's image is pushed to. `az acr login --name <this>` uses your own Entra token; there is no admin password."
+  value       = azurerm_container_registry.main.login_server
+}
+
+output "container_registry_name" {
+  value = azurerm_container_registry.main.name
+}
+
+output "container_app_name" {
+  description = "What `az containerapp update --image` targets when a new image is pushed."
+  value       = azurerm_container_app.web.name
+}
+
 output "ops_api_hostname" {
   value = azurerm_function_app_flex_consumption.ops.default_hostname
 }

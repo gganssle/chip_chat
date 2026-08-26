@@ -11,6 +11,55 @@ resource "azurerm_container_app_environment" "main" {
   tags = local.tags
 }
 
+# What the chat app is handed. Everything here is a name, an endpoint or a
+# ceiling; there is not a secret among them, which is why they are plain `env`
+# entries rather than Container Apps secrets.
+#
+# The CHIP_CHAT_* names are the ones the code actually reads -- see
+# chip_chat.agent.foundry, chip_chat.api.limits and chip_chat.otel.config. A
+# setting the application does not read is worse than an absent one, because it
+# looks like configuration.
+locals {
+  web_env = merge(
+    {
+      AZURE_CLIENT_ID                       = azurerm_user_assigned_identity.app.client_id
+      AZURE_KEY_VAULT_URI                   = azurerm_key_vault.main.vault_uri
+      APPLICATIONINSIGHTS_CONNECTION_STRING = azurerm_application_insights.main.connection_string
+      AZURE_STORAGE_ACCOUNT                 = azurerm_storage_account.data.name
+      AZURE_UPLOADS_CONTAINER               = azurerm_storage_container.uploads.name
+
+      # Photo lane and retrieval, neither wired yet. Present so that the phase
+      # that wires them is a code change and not also a Terraform change.
+      AZURE_SEARCH_ENDPOINT                = one(azurerm_search_service.main[*].name) == null ? "" : "https://${one(azurerm_search_service.main[*].name)}.search.windows.net"
+      AZURE_CONTENT_SAFETY_ENDPOINT        = azurerm_cognitive_account.content_safety.endpoint
+      AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT = azurerm_cognitive_account.document_intelligence.endpoint
+
+      # Which deployment answers for which lane. The eval swap point.
+      CHIP_CHAT_FOUNDRY_ENDPOINT          = azurerm_cognitive_account.foundry.endpoint
+      CHIP_CHAT_FOUNDRY_CHAT_DEPLOYMENT   = var.chat_deployment
+      CHIP_CHAT_FOUNDRY_VISION_DEPLOYMENT = var.vision_deployment
+
+      # deployment.environment on every span, so the deployed app's traces are
+      # distinguishable from a laptop's in the same backend.
+      CHIP_CHAT_ENVIRONMENT = var.environment
+
+      # The inline spend cap. These are the numbers standing between a URL with
+      # no authentication and an invoice.
+      CHIP_CHAT_DAILY_TOKEN_CEILING        = tostring(var.spend_caps.daily_token_ceiling)
+      CHIP_CHAT_SESSION_TURN_CAP           = tostring(var.spend_caps.session_turn_cap)
+      CHIP_CHAT_SESSION_TOKEN_CAP          = tostring(var.spend_caps.session_token_cap)
+      CHIP_CHAT_SOURCE_REQUESTS_PER_WINDOW = tostring(var.spend_caps.source_requests_per_window)
+      CHIP_CHAT_SOURCE_WINDOW_SECONDS      = tostring(var.spend_caps.source_window_seconds)
+      CHIP_CHAT_TURN_TOKEN_RESERVATION     = tostring(var.spend_caps.turn_token_reservation)
+      CHIP_CHAT_BUDGET_RESET_TIMEZONE      = var.spend_caps.budget_reset_timezone
+
+      # The circuit breaker, in the run position. One portal edit throws it.
+      CHIP_CHAT_KILL_SWITCH = var.kill_switch
+    },
+    var.otlp_endpoint == "" ? {} : { OTEL_EXPORTER_OTLP_ENDPOINT = var.otlp_endpoint },
+  )
+}
+
 resource "azurerm_container_app" "web" {
   name                         = "ca-${local.base}-web"
   resource_group_name          = azurerm_resource_group.main.name
@@ -20,6 +69,13 @@ resource "azurerm_container_app" "web" {
   identity {
     type         = "UserAssigned"
     identity_ids = [azurerm_user_assigned_identity.app.id]
+  }
+
+  # Pull by identity. No admin user, no password, nothing to rotate — see
+  # registry.tf.
+  registry {
+    server   = azurerm_container_registry.main.login_server
+    identity = azurerm_user_assigned_identity.app.id
   }
 
   ingress {
@@ -56,54 +112,34 @@ resource "azurerm_container_app" "web" {
       cpu    = 0.25
       memory = "0.5Gi"
 
-      env {
-        name  = "AZURE_CLIENT_ID"
-        value = azurerm_user_assigned_identity.app.client_id
+      dynamic "env" {
+        for_each = local.web_env
+        content {
+          name  = env.key
+          value = env.value
+        }
       }
 
-      env {
-        name  = "AZURE_KEY_VAULT_URI"
-        value = azurerm_key_vault.main.vault_uri
+      # /healthz is outside the spend cap and outside the rate limit on purpose
+      # (chip_chat.api.app): a probe that could be refused for spending money it
+      # never spends would take the app down every time the ceiling was reached.
+      liveness_probe {
+        transport = "HTTP"
+        port      = var.web_target_port
+        path      = "/healthz"
       }
 
-      env {
-        name  = "APPLICATIONINSIGHTS_CONNECTION_STRING"
-        value = azurerm_application_insights.main.connection_string
-      }
-
-      env {
-        name  = "AZURE_STORAGE_ACCOUNT"
-        value = azurerm_storage_account.data.name
-      }
-
-      env {
-        name  = "AZURE_UPLOADS_CONTAINER"
-        value = azurerm_storage_container.uploads.name
-      }
-
-      env {
-        name  = "AZURE_SEARCH_ENDPOINT"
-        value = one(azurerm_search_service.main[*].name) == null ? "" : "https://${one(azurerm_search_service.main[*].name)}.search.windows.net"
-      }
-
-      env {
-        name  = "AZURE_FOUNDRY_ENDPOINT"
-        value = azurerm_cognitive_account.foundry.endpoint
-      }
-
-      env {
-        name  = "AZURE_CONTENT_SAFETY_ENDPOINT"
-        value = azurerm_cognitive_account.content_safety.endpoint
-      }
-
-      env {
-        name  = "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT"
-        value = azurerm_cognitive_account.document_intelligence.endpoint
+      readiness_probe {
+        transport = "HTTP"
+        port      = var.web_target_port
+        path      = "/healthz"
       }
     }
   }
 
   tags = local.tags
+
+  depends_on = [azurerm_role_assignment.app_acr_pull]
 
   lifecycle {
     # Phase 0 stands up the environment; it does not ship the app. Once a real

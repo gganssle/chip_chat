@@ -15,6 +15,19 @@
 provider "azurerm" {
   subscription_id = var.subscription_id
 
+  # A subscription only has the resource providers somebody has registered, and
+  # azurerm stopped registering them automatically. Creating a registry on a
+  # subscription that has never had one fails with a 409
+  # MissingSubscriptionRegistration -- which reads like a permissions problem and
+  # is not one. Registering it here means the next fresh subscription does not
+  # rediscover that.
+  #
+  # "core" is azurerm's own default set. Everything else this stack uses was
+  # already registered by the Phase 0 work; Microsoft.ContainerRegistry is the
+  # one that arrived with issue #16.
+  resource_provider_registrations = "core"
+  resource_providers_to_register  = ["Microsoft.ContainerRegistry"]
+
   features {
     key_vault {
       # Purge on destroy so the globally unique vault name is immediately
