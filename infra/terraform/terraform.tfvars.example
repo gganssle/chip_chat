@@ -17,13 +17,14 @@
 #   terraform workspace new scratch
 #   terraform apply -var environment=scratch -var adopt_existing_foundation=false
 #
-# Two of the free tiers are one-per-subscription (AI Search Free, and F0 on each
-# Cognitive Services kind), so a second stack has to pay for them or the apply
-# fails on a quota error:
+# The F0 Cognitive Services tiers are one-per-subscription per kind, so a second
+# stack has to pay for them or the apply fails on a quota error. AI Search Free
+# is one-per-subscription too, but var.search_sku already defaults to "basic"
+# (see that variable), so a scratch stack inherits a paid tier without asking —
+# ~$74/month per stack, and it bills whether or not the stack is used:
 #
 # environment               = "scratch"
 # adopt_existing_foundation = false
-# search_sku                = "basic"   # ~$74/month while it exists
 # content_safety_sku        = "S0"
 # document_intelligence_sku = "S0"
 

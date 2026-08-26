@@ -232,7 +232,7 @@ decision.
 
 | Guardrail | Where | Why |
 | --- | --- | --- |
-| AI Search **Free** tier | `var.search_sku` | Basic is $0.101/hour ≈ $73.73/month. The semantic reranker runs on Free, capped at 1,000 semantic queries a month — a hard ceiling, since the pay-as-you-go plan requires Basic. [The reranker decision](../docs/service-inventory.md#the-reranker-decision-issue-10) |
+| AI Search **Basic** tier — *the one guardrail deliberately spent* | `var.search_sku` | $0.101/hour ≈ $73.73/month, billed whether or not anyone queries it. Free was the recorded decision and the account owner overrode it on 2026-08-26 (cc-6wz) to get past the capacity outage below; that did not work, and no search service exists yet. Basic buys managed identity (so `local_authentication_enabled` is off) and lifts the 1,000-semantic-queries-a-month hard ceiling. [The reranker decision](../docs/service-inventory.md#the-reranker-decision-issue-10) |
 | Container Apps **min replicas 0** | `var.web_min_replicas` | An idle replica still bills, at roughly an eighth of the active vCPU rate. |
 | An **HTTP scale rule**, not CPU or memory | `compute.tf` | Not tuning. Scale-to-zero has two documented ways to strand an app: no ingress and no scale rule means it can never wake, and the KEDA CPU/memory scalers cannot scale to zero at all. |
 | Blob lifecycle **deleting uploads after a day** | `var.uploads_retention_days` | Data hygiene first, cost second. |
@@ -272,7 +272,8 @@ User-facing copy should say "within 48 hours" and mean it.
 
 ## Known issue: AI Search will not provision
 
-As of 2026-08-26, creating the Free-tier search service in East US 2 fails:
+As of 2026-08-26, creating the search service in East US 2 fails **at every
+tier**:
 
 ```
 InsufficientResourcesAvailable: The region 'eastus2' is currently out of the
@@ -280,15 +281,23 @@ resources required to provision new services.
 ```
 
 This is Azure's shared **regional capacity**, not subscription quota — the usage
-API reports free 0 of 1 used — and it reproduces through the `az` CLI as readily
-as through Terraform. The region is not negotiable (Cortex Analyst), so waiting
-is the option that keeps the design intact.
+API reports free 0 of 1, basic 0 of 16, standard 0 of 16 — and it reproduces
+through the `az` CLI as readily as through Terraform. The region is not
+negotiable (Cortex Analyst), so waiting is the option that keeps the design
+intact.
+
+**Paying does not step around it.** The obvious escalation was Basic at
+~$74/month, on the theory that the exhausted pool was the shared *free* one. The
+account owner authorised that on 2026-08-26 (`cc-6wz`) and it returned the
+identical 400 — verified at both tiers, through Terraform and through
+`az search service create`. `var.search_sku` is now `"basic"` and stays that way,
+because it is the authorised tier and is what should exist the moment capacity
+returns, but there is nothing left to buy: this is Azure's to fix.
 
 `var.search_enabled = false` applies the rest of the estate meanwhile. Note that
 it also unblocks the Container App, which references the search endpoint and is
 therefore ordered behind it. Retrieval is Phase 5, so nothing earlier is blocked.
-Tracked as bead `cc-3wo`; if capacity does not return, the escalation is Basic at
-~$74/month, which is a cost decision for the account owner.
+Tracked as bead `cc-3wo`.
 
 
 ---

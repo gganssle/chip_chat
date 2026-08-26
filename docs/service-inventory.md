@@ -288,6 +288,11 @@ it contradicts and what to do about it.
 
 11. **The reranker is available free.** See below; this closes issue #10 and means
     the ~$75/month Basic line item can stay out of the cost model for now.
+    *(Superseded 2026-08-26: Basic was authorised and is now configured, so the
+    line item is back in the cost model the moment the service can be created —
+    which it currently cannot, at any tier. See the note under "The reranker
+    decision" below, and cc-3d5 for what a fixed $73.73/month does to the budget
+    thresholds.)*
 
 12. **The $75/month Basic estimate was accurate.** $0.101/hour is $73.73 over a
     730-hour month. *system-design.md*'s "roughly $75/month" needs no correction.
@@ -328,6 +333,13 @@ it contradicts and what to do about it.
     firewall, no private endpoints. That's an acceptable PoC trade-off, but it should
     be a stated one rather than a surprise, and it's the strongest non-reranker
     argument for Basic.
+    *(Resolved in configuration on 2026-08-26: with Basic authorised,
+    `search.tf` sets `local_authentication_enabled = false`, so the data plane is
+    reachable only through the two role assignments on the app's user-assigned
+    identity. Nothing ever consumed a search key — the app is handed
+    `AZURE_SEARCH_ENDPOINT` and its identity — so this removed a credential
+    rather than changing a code path. It takes effect when the service can
+    actually be created.)*
 
 18. **The free AI Search tier can starve the indexer.** 50 MB of storage and 3 indexes
     are generous for this corpus, but with a skillset attached the indexer is capped
@@ -351,6 +363,20 @@ it contradicts and what to do about it.
 ---
 
 ## The reranker decision (issue #10)
+
+> **Superseded on 2026-08-26, on cost grounds that were then overtaken by an
+> outage.** The account owner authorised the Basic tier (cc-6wz) to get past the
+> capacity failure in cc-3wo, so `var.search_sku` is now `"basic"` and the
+> semantic ceiling below no longer binds. That authorisation did not achieve
+> what it was bought for: East US 2 is out of AI Search capacity **at every
+> tier**, not merely in the shared free pool, so Basic returns the same
+> `InsufficientResourcesAvailable` as Free and no search service exists yet.
+> Verified 2026-08-26 through both Terraform and `az search service create`,
+> against untouched regional quota (free 0/1, basic 0/16, standard 0/16).
+>
+> The analysis below is left intact because its reasoning is still sound and
+> will apply again if the tier is ever reconsidered. Only its premise — that a
+> Free service can be created in this region — turned out to be false.
 
 **Answer: option 1 — the free tier is fine, with a stated ceiling.**
 

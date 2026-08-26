@@ -77,14 +77,30 @@ variable "cost_alert_email" {
 
 variable "search_sku" {
   description = <<-EOT
-    Azure AI Search tier. "free" is the decision recorded in
-    docs/service-inventory.md#the-reranker-decision-issue-10: the semantic
-    reranker runs on Free, capped at 1,000 semantic queries a month, and Basic is
-    ~$74/month. Free is limited to one service per subscription and has no
-    managed identity, which is why local_authentication_enabled stays on below.
+    Azure AI Search tier. "basic" since 2026-08-26, authorised by the account
+    owner to get past the capacity outage in cc-3wo. It did not work: eastus2
+    is out of Search capacity for every tier, not just the free pool, so the
+    service still cannot be created. See search.tf for the evidence.
+
+    Kept at "basic" anyway, because it is the authorised tier, because it is
+    what should exist when capacity returns, and because Free is no more
+    creatable today than Basic is. This supersedes the Free-tier recommendation
+    in docs/service-inventory.md#the-reranker-decision-issue-10 — the reasoning
+    there is still correct, its premise (that a Free service can be created)
+    is not.
+
+    Basic is $0.101/hour, $73.73 over a 730-hour month, confirmed against the
+    Azure Retail Prices API meter "Basic Unit" in eastus2 on 2026-08-26. It also
+    buys the two things Free lacked and that the rest of this estate assumes:
+    managed identity, so the service is reached by RBAC rather than an API key,
+    and the standard semantic billing plan, which turns the 1,000-semantic-
+    queries-a-month hard ceiling into $1.00 per 1,000 past the free allowance.
+
+    Going back to "free" is a real revert, not a knob: it re-enables local
+    authentication below and re-imposes that ceiling.
   EOT
   type        = string
-  default     = "free"
+  default     = "basic"
 
   validation {
     condition     = contains(["free", "basic", "standard"], var.search_sku)
@@ -398,6 +414,14 @@ variable "search_enabled" {
     Set false to apply the rest of the estate while the pool is full, then set it
     back to true and re-apply. Retrieval is Phase 5, so this blocks nothing
     earlier. Tracked as cc-3wo.
+
+    STILL UNRESOLVED as of 2026-08-26. Paying for Basic was tried (cc-6wz) on
+    the theory that the exhausted pool was the free one; it is not, the region
+    is out of Search capacity at every tier, and Basic returns the identical
+    400. So this escape hatch is still the only way to apply the rest of the
+    estate, and it is still `true` on purpose: a committed `false` would go on
+    silently skipping the service long after Azure fixes its capacity, whereas
+    a loud failure self-heals.
   EOT
   type        = bool
   default     = true
