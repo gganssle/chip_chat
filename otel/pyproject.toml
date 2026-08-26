@@ -3,7 +3,13 @@ name = "chip-chat-otel"
 version = "0.0.0"
 description = "Shared OpenInference/OpenTelemetry instrumentation for Chip Chat."
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "azure-monitor-opentelemetry-exporter>=1.0.0b30",
+    "openinference-semantic-conventions>=0.1.14",
+    "opentelemetry-api>=1.30",
+    "opentelemetry-exporter-otlp-proto-http>=1.30",
+    "opentelemetry-sdk>=1.30",
+]
 
 [build-system]
 requires = ["hatchling"]

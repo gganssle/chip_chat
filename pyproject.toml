@@ -103,6 +103,10 @@ ban-relative-imports = "all"
 
 [tool.ruff.lint.per-file-ignores]
 "*/tests/*" = ["S101"]
+# The span helpers nest to mirror the span tree, and those tests assert on that
+# tree. Flattening the `with` blocks would hide the very shape under test, and
+# where a `pytest.raises` sits between two helpers it would change the meaning.
+"otel/tests/*" = ["S101", "SIM117"]
 
 # ---------------------------------------------------------------------------
 # mypy — strict on otel/ and agent/, checked everywhere.
