@@ -57,7 +57,9 @@ from chip_chat.catalog.records import (
     VocabularyTerm,
 )
 from chip_chat.otel import TokenUsage, ToolName, agent_step, tool_call
-from chip_chat.vision.describe import VisionAnswer
+from chip_chat.vision.describe import MealDescriber, VisionAnswer
+from chip_chat.vision.lane import PhotoLane
+from chip_chat.vision.matcher import MealMatcher
 from chip_chat.vision.moderation import ModerationUnavailableError, SafetyCategory
 from chip_chat.vision.store import BlobRef
 from chip_chat.vision.vocabulary import Vocabulary
@@ -73,6 +75,7 @@ __all__ = [
     "PDF_DOCUMENT",
     "REFERENCE_RESTAURANT",
     "SHELL_SCRIPT",
+    "STUB_PHOTO_REF",
     "STUB_VISION_USAGE",
     "SVG_WITH_SCRIPT",
     "XMP_LOCATION_MARKER",
@@ -89,6 +92,7 @@ __all__ = [
     "jpeg_signed_but_not_jpeg",
     "jpeg_with_appended_archive",
     "menu_catalog",
+    "photo_lane",
     "photo_tool_call",
     "photo_with_location",
     "png_declaring",
@@ -652,6 +656,59 @@ class StubVisionModel:
         if self.error is not None:
             raise self.error
         return VisionAnswer(content=self.response or "", usage=self.usage)
+
+
+STUB_PHOTO_REF = BlobRef(container="uploads", name="2026-01-01/a-photograph.jpg")
+"""The photograph :func:`photo_lane` stores, and the ref a test passes back in.
+
+A ``container/name`` key, which is the only form that ever crosses a tool
+boundary -- RFC-001 section 07, and the reason the tool span may record its
+arguments verbatim."""
+
+
+def photo_lane(
+    *,
+    model: "StubVisionModel | None" = None,
+    terms: Mapping[str, Sequence[str]] | None = None,
+    restaurant_id: int | None = None,
+) -> tuple[PhotoLane, InMemoryBlobStore]:
+    """Build a whole photo lane out of doubles, with a photograph already in it.
+
+    Both stages, from one vocabulary and one catalogue built from the same terms
+    -- which matters, because stage 5 checks the build stage 4 was constrained
+    to and two fixtures assembled independently would drift apart and raise.
+
+    Ships here rather than in a ``tests`` directory because the agent's tool and
+    the API's request path both need a lane to drive, and neither can import
+    the other's fixtures.
+
+    Args:
+        model: The stage-4 double. Defaults to a fresh :class:`StubVisionModel`,
+            which answers :data:`DESCRIBED_MEAL` and reports
+            :data:`STUB_VISION_USAGE`.
+        terms: The vocabulary and catalogue to build. Defaults to
+            :data:`DEFAULT_TERMS`.
+        restaurant_id: Whose prices to quote. Defaults to the catalogue's
+            reference restaurant.
+
+    Returns:
+        The lane, and the store holding :data:`STUB_PHOTO_REF` -- returned so a
+        test can take the photograph away again and watch the lane decline.
+    """
+    images = InMemoryBlobStore(container=STUB_PHOTO_REF.container)
+    images.put(STUB_PHOTO_REF.name, solid_image(fmt="JPEG"), content_type="image/jpeg")
+    return (
+        PhotoLane(
+            MealDescriber(
+                model if model is not None else StubVisionModel(),
+                images=images,
+                vocabulary=generated_vocabulary(terms),
+            ),
+            MealMatcher(menu_catalog(terms)),
+            restaurant_id=restaurant_id,
+        ),
+        images,
+    )
 
 
 @contextmanager
