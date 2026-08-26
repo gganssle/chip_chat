@@ -49,8 +49,8 @@ chat.turn                          the visitor's message in, the reply out
 ├─ guard.content_safety            image moderation, before inference
 ├─ agent.step                      round trip 0
 │  ├─ llm.completion               model, tokens, finish reason
-│  └─ tool.match_meal_from_photo
-│     ├─ vision.describe           slots and confidences the model returned
+│  └─ tool.match_meal_from_photo   what the whole lane cost
+│     ├─ vision.describe           the photograph, its slots, and its tokens
 │     └─ matcher.resolve           what those slots resolved to in the catalogue
 ├─ agent.step                      round trip 1 — propose
 │  ├─ llm.completion
@@ -66,6 +66,19 @@ That is [RFC-001 section 09](rfc-001.md#observability) exactly, and it is assert
 in `otel/tests/test_smoke.py` rather than left to the eye. **If what you see in
 Phoenix disagrees with the RFC, the bug is in `otel/` and belongs fixed there** —
 not patched around in whatever you were instrumenting at the time.
+
+Two things about the photo lane specifically. `vision.describe` is an **LLM
+span** — Phoenix renders it as a model call with the photograph attached, and it
+carries token counts like any other, because the photo lane is the expensive
+one. And both of its halves sit under **one** `tool.match_meal_from_photo`: run
+stage 4 and stage 5 as separate tool calls and you get two well-formed traces
+that no longer answer *what did the lane make of this photograph* in one place.
+
+Adding up the tokens: sum `llm.token_count.total` across the LLM spans and you
+have exactly what the providers charged for the turn. `chip_chat.tokens.total`
+on `chat.turn` says the same number without the walk, which is what Application
+Insights needs — it searches attributes and does not walk trace trees. The two
+vocabularies are separate on purpose; `otel/README.md` explains why.
 
 Three things worth noticing while you are in there:
 
