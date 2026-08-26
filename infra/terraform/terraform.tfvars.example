@@ -51,3 +51,33 @@
 #     capacity      = 10
 #   }
 # }
+
+# --- Databricks (issue #31) -------------------------------------------------
+#
+# Every value below is already the default. Two are worth knowing about.
+#
+# The node type is NOT the obvious one. East US 2 will not start most 4-vCPU
+# types on this subscription: Standard_D4ds_v5 (Databricks' own default) has a
+# quota of zero cores, and D4ds_v4 / DS3_v2 / F4s_v2 / D4s_v3 / E4ds_v4 are not
+# offered in the region at all. Neither failure shows up at plan time. Check
+# both before changing it:
+#
+#   az vm list-usage -l eastus2 -o table
+#   az vm list-skus -l eastus2 --resource-type virtualMachines \
+#     --query "[?name=='Standard_F4ads_v7'].{n:name,f:family,r:restrictions}"
+#
+# databricks_node_type               = "Standard_F4ads_v7"
+# databricks_autotermination_minutes = 10
+
+# The app tier authenticates to Databricks with the id-chip-chat-app managed
+# identity, so there is no PAT and nothing in Key Vault to rotate. Turning this
+# on ALSO needs an account admin to enable on-behalf-of tokens at
+# accounts.azuredatabricks.net -> Settings -> Feature enablement.
+#
+# databricks_service_principal_token_enabled = false
+
+# Escape hatch, not a design choice: set false only if the Databricks account
+# has no auto-assign metastore in this region yet, so the rest of the stack can
+# apply while someone sets one.
+#
+# databricks_unity_catalog_enabled = true

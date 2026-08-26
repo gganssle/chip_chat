@@ -117,6 +117,12 @@ ban-relative-imports = "all"
 # boundary sits, which is the point of the file.
 "otel/src/chip_chat/otel/smoke.py" = ["SIM117"]
 "otel/src/chip_chat/otel/boundary.py" = ["SIM117"]
+# Databricks notebooks are source files here but modules nowhere: they run on a
+# Spark driver that injects `spark` and `dbutils` into the global namespace, and
+# the `# COMMAND ----------` separators are load-bearing. Formatting and the rest
+# of the lint rules still apply — only the undefined-name rule is lifted, because
+# the names really are defined, just not by this file.
+"databricks/notebooks/*.py" = ["F821"]
 
 # ---------------------------------------------------------------------------
 # mypy — strict on otel/ and agent/, checked everywhere.
@@ -144,6 +150,9 @@ mypy_path = [
     "vision/src",
     "web/src",
 ]
+# Same reason as the ruff ignore above: a notebook is not importable off the
+# driver, and `spark`/`dbutils` have no stubs to check it against.
+exclude = ["^databricks/notebooks/"]
 check_untyped_defs = true
 warn_redundant_casts = true
 warn_unused_configs = true

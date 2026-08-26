@@ -58,3 +58,17 @@ provider "random" {}
 data "azurerm_client_config" "current" {}
 
 data "azurerm_subscription" "current" {}
+
+# The Databricks provider authenticates against the workspace created in
+# databricks.tf, as whoever `az login` says you are. There is no token here and
+# no client secret: `azure_workspace_resource_id` makes the provider mint a
+# short-lived Entra token for the workspace API through the Azure CLI, the same
+# credential azurerm is already using.
+#
+# Both providers in one root module is deliberate. The alternative — a second
+# stack that runs after the first — would mean the workspace and the cost policy
+# that constrains it could exist apart from each other, and the window in which
+# a workspace has no policy is exactly the window this issue is about.
+provider "databricks" {
+  azure_workspace_resource_id = azurerm_databricks_workspace.main.id
+}
