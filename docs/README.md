@@ -8,6 +8,7 @@ contributor — human or agent — has them locally. Read them in this order.
 | [system-design.md](system-design.md) | Phases, sequencing, cost guardrails |
 | [cilantro-prd.md](cilantro-prd.md) | Requirements (E/K/A/P/T/V/S ids), launch gates, metrics |
 | [rfc-001.md](rfc-001.md) | Components, data model, tool contracts, span schema, decisions |
+| [action-surface.md](action-surface.md) | What the four write tools take, and what they refuse — read off the real ordering flow and rewards terms |
 | [service-inventory.md](service-inventory.md) | Verified service names, tiers, quotas and prices — and where the three documents above are now wrong |
 | [local-setup.md](local-setup.md) | Getting a machine from clean to a passing `make ci` — CLIs, authentication, and how secrets reach a local process |
 | [local-tracing.md](local-tracing.md) | The development loop with Phoenix: start the stack, send a turn, read the span tree |
@@ -18,6 +19,12 @@ contributor — human or agent — has them locally. Read them in this order.
 The system design frames the problem, the PRD defines what to build, and the RFC
 defines how. When two documents disagree, the table above decides: whichever one
 owns the subject wins.
+
+The action surface is a *narrowing* of the RFC rather than a fourth plan. The RFC fixes
+eleven tools; that document fixes what the four write tools' arguments contain and what
+they reject, from the published menu and rewards terms rather than from imagination, and
+marks every claim it could not source as invented. It never adds a tool — where the real
+ordering flow implies one, it says so and leaves the RFC's list alone.
 
 The service inventory is a fourth kind of document: it does not decide anything, it
 *checks*. All three planning documents close by warning that service names and tiers
