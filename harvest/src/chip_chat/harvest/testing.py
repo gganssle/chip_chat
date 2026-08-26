@@ -156,7 +156,10 @@ def fake_response(
         body: The raw body.
         status_code: The HTTP status.
         content_type: The ``Content-Type`` header.
-        **headers: Any further response headers, lowercase.
+        **headers: Any further response headers. Underscores become hyphens,
+            so ``last_modified=`` sets ``last-modified`` — a keyword argument
+            cannot carry a hyphen and the alternative is building the response
+            by hand every time a test needs a real header name.
 
     Returns:
         The response.
@@ -165,7 +168,10 @@ def fake_response(
         url=url,
         status_code=status_code,
         content=body,
-        headers={"content-type": content_type, **headers},
+        headers={
+            "content-type": content_type,
+            **{name.replace("_", "-"): value for name, value in headers.items()},
+        },
     )
 
 

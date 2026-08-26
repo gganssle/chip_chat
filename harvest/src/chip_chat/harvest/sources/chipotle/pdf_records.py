@@ -48,6 +48,28 @@ TABLES = (
 )
 """Table names, in the order the manifest lists them."""
 
+TABLE_KEYS: dict[str, tuple[str, ...]] = {
+    "pdf_documents": ("content_sha256",),
+    "pdf_tables": ("table_id",),
+    "pdf_table_cells": ("table_id", "row_index", "column_index"),
+    "pdf_nutrition_findings": ("table_id", "row_index", "column_index", "nutrient_key"),
+}
+"""What identifies a row, for the week-on-week diff of issue #38.
+
+A PDF is identified by the digest of its own bytes, so a re-issued sheet is a
+new ``pdf_documents`` row and an addition rather than a modification — which is
+the honest reading: the old sheet was not edited, a different one was
+published. Everything below it hangs off ``table_id``, which is derived from
+that digest.
+
+Chipotle published no PDF nutrition sheets on 26 August 2026, so all four of
+these tables are empty and this diff has nothing to compare. That is the case
+it has to handle correctly rather than the case it is for: when a sheet does
+appear, it appears as four tables of additions in one week's report.
+
+See ``TABLE_KEYS`` in :mod:`chip_chat.harvest.sources.chipotle.records`.
+"""
+
 
 class Finding(StrEnum):
     """What comparing one PDF figure against the structured source produced.

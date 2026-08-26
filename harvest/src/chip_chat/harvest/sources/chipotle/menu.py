@@ -119,6 +119,7 @@ def harvest_menu(
     restaurant_ids: Sequence[str | int] = DEFAULT_RESTAURANT_IDS,
     *,
     home_url: str = HOME_URL,
+    refresh: bool = False,
 ) -> MenuDocuments:
     """Land the menu documents in the blob store and return them.
 
@@ -129,6 +130,10 @@ def harvest_menu(
         harvester: The framework instance doing the fetching.
         restaurant_ids: Restaurants to price the catalogue at.
         home_url: The page the API configuration is read from.
+        refresh: Ask the source again for every document, conditionally
+            where the cache holds a validator. This is what the weekly
+            re-harvest of issue #38 passes: without it a warm landing zone is
+            never revisited, and the corpus quietly stops being current.
 
     Returns:
         The documents, ready to parse.
@@ -141,7 +146,7 @@ def harvest_menu(
     """
 
     def fetch(url: str, headers: Mapping[str, str] | None) -> CachedDocument:
-        return harvester.fetch(url, headers=headers)
+        return harvester.fetch(url, headers=headers, refresh=refresh)
 
     return _collect(fetch, restaurant_ids, home_url)
 

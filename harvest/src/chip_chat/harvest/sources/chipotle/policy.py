@@ -147,6 +147,7 @@ def harvest_policy(
     *,
     home_url: str = HOME_URL,
     store_count: int = DEFAULT_STORE_COUNT,
+    refresh: bool = False,
 ) -> PolicyDocuments:
     """Land the policy documents in the blob store and return them.
 
@@ -158,6 +159,10 @@ def harvest_policy(
         harvester: The framework instance doing the fetching.
         home_url: The page the API configuration is read from.
         store_count: How many stores to read from the locator.
+        refresh: Ask the source again for every document, conditionally
+            where the cache holds a validator. This is what the weekly
+            re-harvest of issue #38 passes: without it a warm landing zone is
+            never revisited, and the corpus quietly stops being current.
 
     Returns:
         The documents, ready to parse.
@@ -170,7 +175,7 @@ def harvest_policy(
     """
 
     def fetch(url: str, headers: Mapping[str, str] | None) -> CachedDocument:
-        return harvester.fetch(url, headers=headers)
+        return harvester.fetch(url, headers=headers, refresh=refresh)
 
     return _collect(fetch, home_url, store_count)
 

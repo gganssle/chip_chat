@@ -11,12 +11,20 @@ Those two fields are captured here, at the edge, because by the time a chunk
 reaches the retrieval index there is nowhere left to recover them from, and
 RFC-001 section 08 requires them to survive into the response payload as
 citations.
+
+The pointer also records the response's ``ETag`` and ``Last-Modified``, which
+are the only reason a *weekly* re-harvest is a different thing from a weekly
+re-download. Issue #38 asks that a re-harvest "does not re-fetch what has not
+changed", and a client cannot know whether a page changed without asking; what
+it can do is ask conditionally, and be answered with a 304 and no body at all.
+:meth:`DocumentCache.validators` hands those two headers to the harvester and
+:meth:`DocumentCache.touch` records the answer.
 """
 
 import hashlib
 import json
-from collections.abc import Iterator
-from dataclasses import dataclass
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -64,6 +72,21 @@ def digest_of(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _optional_str(value: Any) -> str | None:
+    """Return ``value`` as a non-empty string, or ``None``.
+
+    Pointers written before these fields existed simply do not carry them, and
+    a cache that predates a re-harvest is the normal case rather than an error
+    — the first re-harvest is what fills them in.
+    """
+    return str(value) if value else None
+
+
+def _optional_time(value: Any) -> datetime | None:
+    """Return ``value`` parsed as an ISO timestamp, or ``None``."""
+    return datetime.fromisoformat(str(value)) if value else None
+
+
 @dataclass(frozen=True, slots=True)
 class CachedDocument:
     """One harvested response, plus the provenance that travels with it.
@@ -79,6 +102,18 @@ class CachedDocument:
         content: The raw body, exactly as received.
         previous_sha256: The digest this URL resolved to before the most
             recent fetch changed it, or ``None`` if it never changed.
+        etag: The ``ETag`` header, verbatim, or ``None`` if the server sent
+            none. Offered back as ``If-None-Match`` on a re-harvest.
+        last_modified: The ``Last-Modified`` header, verbatim, or ``None``.
+            Offered back as ``If-Modified-Since``. Kept as the server's own
+            string rather than parsed into a datetime: HTTP dates round-trip
+            through :mod:`datetime` badly, and the only thing this value is
+            ever used for is to be handed straight back.
+        revalidated_at: When a conditional request last confirmed this body
+            was still current *without* re-fetching it, or ``None`` if that
+            has never happened. ``harvested_at`` moves with it — the corpus is
+            as fresh as its last confirmation — and this field is what keeps
+            the distinction recoverable afterwards.
     """
 
     requested_url: str
@@ -89,6 +124,9 @@ class CachedDocument:
     content_sha256: str
     content: bytes
     previous_sha256: str | None = None
+    etag: str | None = None
+    last_modified: str | None = None
+    revalidated_at: datetime | None = None
 
     @property
     def text(self) -> str:
@@ -218,16 +256,109 @@ class DocumentCache:
             content_sha256=content_sha256,
             content=response.content,
             previous_sha256=previous,
+            etag=response.headers.get("etag"),
+            last_modified=response.headers.get("last-modified"),
+            revalidated_at=None,
         )
         self._blobs.write(self.pointer_key(url), self._dump(document))
         return document
 
-    def urls(self) -> Iterator[str]:
-        """Yield the canonical URL of every document in the cache."""
+    def validators(self, url: str) -> tuple[str | None, str | None]:
+        """Return the ``ETag`` and ``Last-Modified`` recorded for ``url``.
+
+        Only the pointer is read, never the body — the caller wants two short
+        strings to put in request headers, and reading a megabyte of PDF to
+        find them would make revalidation cost more than the fetch it saves.
+
+        Args:
+            url: An absolute URL.
+
+        Returns:
+            ``(etag, last_modified)``, either of which may be ``None``. Both
+            are ``None`` when the URL has never been fetched, which is the
+            same answer as a server that offers no validators: ask
+            unconditionally.
+        """
+        raw_pointer = self._blobs.read(self.pointer_key(url))
+        if raw_pointer is None:
+            return (None, None)
+        pointer = json.loads(raw_pointer)
+        etag = pointer.get("etag")
+        last_modified = pointer.get("last_modified")
+        return (
+            str(etag) if etag else None,
+            str(last_modified) if last_modified else None,
+        )
+
+    def touch(self, url: str, harvested_at: datetime) -> CachedDocument | None:
+        """Record that ``url`` was confirmed unchanged at ``harvested_at``.
+
+        This is what a 304 means: the body already in the store is the current
+        one, and the corpus is fresh as of now. So ``harvested_at`` moves and
+        nothing else does — no blob is written, ``previous_sha256`` is left
+        alone because nothing changed, and ``revalidated_at`` records that this
+        timestamp came from a confirmation rather than from bytes.
+
+        Args:
+            url: An absolute URL.
+            harvested_at: When the server confirmed it. Must be timezone-aware.
+
+        Returns:
+            The updated document, or ``None`` if there is no pointer for
+            ``url`` — which a well-behaved server cannot cause, since a 304 is
+            only ever a reply to validators this cache supplied.
+
+        Raises:
+            ValueError: If ``harvested_at`` is naive.
+            CacheCorruptError: If the body the pointer names is missing or
+                altered. A 304 asserts a body is current; it cannot make one
+                exist.
+        """
+        if harvested_at.tzinfo is None:
+            raise ValueError("harvested_at must be timezone-aware")
+        key = self.pointer_key(url)
+        raw_pointer = self._blobs.read(key)
+        if raw_pointer is None:
+            return None
+        document = self._load(raw_pointer)
+        touched = replace(
+            document, harvested_at=harvested_at, revalidated_at=harvested_at
+        )
+        self._blobs.write(key, self._dump(touched))
+        return touched
+
+    def pointers(self) -> Iterator[Mapping[str, Any]]:
+        """Yield every pointer in the cache, as written, in key order.
+
+        The bodies are deliberately not read. Everything freshness is measured
+        on — ``requested_url``, ``harvested_at``, ``content_sha256`` — is in
+        the pointer, and a corpus report that had to read every PDF to count
+        them would be a report nobody runs weekly.
+
+        Yields:
+            The decoded pointer objects.
+
+        Raises:
+            CacheCorruptError: If a pointer is not readable as JSON. A
+                freshness number computed over a store with an unreadable
+                pointer in it would be quietly short.
+        """
         for key in self._blobs.keys(self.index_prefix):
             raw_pointer = self._blobs.read(key)
-            if raw_pointer is not None:
-                yield str(json.loads(raw_pointer)["requested_url"])
+            if raw_pointer is None:
+                continue
+            try:
+                pointer = json.loads(raw_pointer)
+            except json.JSONDecodeError as error:
+                raise CacheCorruptError(f"{key}: pointer is not JSON: {error}") from error
+            if not isinstance(pointer, dict):
+                raise CacheCorruptError(f"{key}: pointer is not an object")
+            yield pointer
+
+    def urls(self) -> Iterator[str]:
+        """Yield the canonical URL of every document in the cache."""
+        for pointer in self.pointers():
+            yield str(pointer["requested_url"])
 
     def _dump(self, document: CachedDocument) -> bytes:
         pointer = {
@@ -239,6 +370,13 @@ class DocumentCache:
             "content_sha256": document.content_sha256,
             "content_key": self.content_key(document.content_sha256),
             "previous_sha256": document.previous_sha256,
+            "etag": document.etag,
+            "last_modified": document.last_modified,
+            "revalidated_at": (
+                document.revalidated_at.isoformat()
+                if document.revalidated_at is not None
+                else None
+            ),
         }
         return json.dumps(pointer, indent=2, sort_keys=True).encode("utf-8")
 
@@ -264,4 +402,7 @@ class DocumentCache:
             content_sha256=content_sha256,
             content=content,
             previous_sha256=pointer["previous_sha256"],
+            etag=_optional_str(pointer.get("etag")),
+            last_modified=_optional_str(pointer.get("last_modified")),
+            revalidated_at=_optional_time(pointer.get("revalidated_at")),
         )

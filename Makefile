@@ -236,6 +236,37 @@ dataset: ## Rebuild eval/dataset/DATASET.json after adding a case or a frame
 dataset-upload: ## Create the Arize dataset, or add a version holding the new entries
 	$(UV) run --with arize python -m chip_chat.eval.dataset --upload
 
+# --- The corpus -------------------------------------------------------------
+#
+# The weekly re-harvest of issue #38 and the freshness check it enforces. Both
+# read and write a landing zone; neither costs anything but a third party's
+# bandwidth, which is why the re-harvest is politeness-gated and conditional
+# and the check is free.
+#
+# `reharvest` is what .github/workflows/reharvest.yml runs. Its exit statuses
+# are three, not two: 0 published and fresh, 1 the harvest failed and nothing
+# was published, 2 it published but the corpus is still stale. The last is a
+# different problem with a different fix and should not read as the same
+# failure.
+
+LANDING      ?= landing
+STORES       ?= 30
+MAX_AGE_DAYS ?= 8
+REPORT       ?=
+
+.PHONY: reharvest freshness
+
+reharvest: ## Re-harvest the corpus, report what changed, publish if it completed
+	$(UV) run python -m chip_chat.harvest.sources.chipotle.reharvest \
+		--landing $(LANDING) \
+		--stores $(STORES) \
+		--max-age-days $(MAX_AGE_DAYS) \
+		$(if $(REPORT),--report $(REPORT),)
+
+freshness: ## Report how old the corpus is, and fail if it has stopped moving
+	$(UV) run python -m chip_chat.harvest \
+		--landing $(LANDING) --max-age-days $(MAX_AGE_DAYS)
+
 # --- Deploying the chat app -------------------------------------------------
 #
 # Terraform owns the estate; a deploy owns the image. compute.tf deliberately

@@ -50,6 +50,33 @@ around them, far lighter to fetch, and arrive structured instead of scraped.
    retrieval index there is nowhere left to recover them from — and RFC-001
    section 08 requires them to survive into the response payload as citations.
 
+## The weekly re-harvest
+
+Issue #38. Refresh the corpus, report what changed, and publish the result only
+if the whole run completed.
+
+```bash
+make reharvest                 # or: python -m chip_chat.harvest.sources.chipotle.reharvest --landing landing
+make freshness                 # or: python -m chip_chat.harvest --landing landing --max-age-days 8
+```
+
+Everything a run produces is staged under `corpus/runs/<run_id>/`, and one write
+of `corpus/current.json` at the end is what makes it live. A run that dies
+halfway leaves last week's release exactly where it was — the same rule RFC-001
+section 08 states for the retrieval index, at the layer that exists today.
+
+`freshness` reports the **oldest** `harvested_at` in the corpus, and with
+`--max-age-days` it exits non-zero on one that has stopped moving. An empty
+landing zone counts as stale.
+
+The measurement machinery is source-agnostic and lives in the framework:
+`chip_chat.harvest.freshness`, `.changes` and `.release`. Each source declares
+what identifies a row of each of its parsed tables — `TABLE_KEYS`, beside
+`TABLES` — and that is all a second source would need to be diffed the same way.
+
+Full write-up, including what the source does and does not offer in the way of
+validators, in [`docs/corpus-freshness.md`](../docs/corpus-freshness.md).
+
 ## The cache
 
 Bodies are stored under the SHA-256 of their own bytes, with one small JSON
@@ -57,6 +84,13 @@ pointer per URL naming the digest it currently resolves to. Re-harvesting an
 unchanged page therefore writes nothing, and re-harvesting a changed one
 writes a new blob *beside* the old one and records the digest it replaced.
 A weekly re-harvest can diff rather than blindly overwrite.
+
+The pointer also records the response's `ETag` and `Last-Modified`. Pass
+`refresh=True` to `fetch` and those go back out as `If-None-Match` and
+`If-Modified-Since`, so a page that has not changed answers 304 and sends no
+body at all — `harvested_at` moves forward, the stored bytes do not. That is
+what makes a *weekly* re-harvest a different thing from a weekly re-download;
+`harvester.revalidations` against `harvester.requests_made` is the evidence.
 
 `BlobStore` is the storage seam. `LocalBlobStore` writes a directory tree and
 `InMemoryBlobStore` writes nothing at all; the ADLS Gen2 raw landing zone

@@ -92,6 +92,7 @@ def harvest_nutrition(
     *,
     home_url: str = HOME_URL,
     allergens_url: str = ALLERGENS_URL,
+    refresh: bool = False,
 ) -> NutritionDocuments:
     """Land the nutrition documents in the blob store and return them.
 
@@ -105,6 +106,10 @@ def harvest_nutrition(
             makes statements about.
         home_url: The page the API configuration is read from.
         allergens_url: The page the published caveats are read from.
+        refresh: Ask the source again for every document, conditionally
+            where the cache holds a validator. This is what the weekly
+            re-harvest of issue #38 passes: without it a warm landing zone is
+            never revisited, and the corpus quietly stops being current.
 
     Returns:
         The documents, ready to parse.
@@ -117,7 +122,7 @@ def harvest_nutrition(
     """
 
     def fetch(url: str, headers: Mapping[str, str] | None) -> CachedDocument:
-        return harvester.fetch(url, headers=headers)
+        return harvester.fetch(url, headers=headers, refresh=refresh)
 
     return _collect(fetch, restaurant_ids, home_url, allergens_url)
 
