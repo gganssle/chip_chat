@@ -182,3 +182,60 @@ output "application_insights_connection_string" {
 output "budget_name" {
   value = azurerm_consumption_budget_subscription.monthly.name
 }
+
+# --- Databricks -------------------------------------------------------------
+
+output "databricks_workspace_name" {
+  value = azurerm_databricks_workspace.main.name
+}
+
+output "databricks_workspace_url" {
+  description = "Workspace endpoint. Also written to the Key Vault secret `databricks-host`, so the app tier reads one place for host and token."
+  value       = "https://${azurerm_databricks_workspace.main.workspace_url}"
+}
+
+output "databricks_workspace_id" {
+  value = azurerm_databricks_workspace.main.workspace_id
+}
+
+output "databricks_job_policy_id" {
+  description = "The single-node, job-only, ten-minute cluster policy. Any new job's compute should reference this rather than restating the rules."
+  value       = databricks_cluster_policy.job_single_node.id
+}
+
+output "databricks_pipeline_policy_id" {
+  description = "Separate policy for Lakeflow pipeline compute — it has no autotermination_minutes, which pipeline compute rejects. Use this one for #33 and #34."
+  value       = databricks_cluster_policy.pipeline_single_node.id
+}
+
+output "databricks_interactive_policy_id" {
+  value = databricks_cluster_policy.interactive_single_node.id
+}
+
+output "databricks_jobs_service_principal_application_id" {
+  description = "Application id of the service principal automated jobs run as. It has no credential: `run_as` is resolved inside Databricks, so nothing is issued, stored or rotated."
+  value       = databricks_service_principal.jobs.application_id
+}
+
+output "databricks_app_service_principal_application_id" {
+  description = "The id-chip-chat-app managed identity, registered in Databricks. The app tier presents an Entra token as this principal — there is no PAT in the normal path."
+  value       = databricks_service_principal.app.application_id
+}
+
+output "databricks_access_connector_principal_id" {
+  description = "Managed identity Unity Catalog authenticates to ADLS with. Holds Storage Blob Data Contributor on the data account and nothing else."
+  value       = azurerm_databricks_access_connector.unity.identity[0].principal_id
+}
+
+output "databricks_external_locations" {
+  description = "Unity Catalog external locations, keyed by name. Null while var.databricks_unity_catalog_enabled is false."
+  value = var.databricks_unity_catalog_enabled ? {
+    (databricks_external_location.raw[0].name)       = databricks_external_location.raw[0].url
+    (databricks_external_location.lakehouse[0].name) = databricks_external_location.lakehouse[0].url
+  } : null
+}
+
+output "databricks_smoke_job_id" {
+  description = "The end-to-end ADLS job. Run it with: databricks jobs run-now <id>"
+  value       = databricks_job.adls_smoke.id
+}

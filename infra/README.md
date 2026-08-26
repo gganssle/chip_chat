@@ -76,6 +76,8 @@ is served by variables and workspaces instead. Files are split by concern.
 | `observability.tf` | Log Analytics workspace, Application Insights |
 | `compute.tf` | Container Apps environment and app, Flex Consumption plan and Function App |
 | `registry.tf` | Container registry for the agent image, plus its pull and push grants |
+| `databricks.tf` | Databricks workspace, Unity Catalog access connector and its ADLS grant, storage credential, external locations, Key Vault entries |
+| `databricks_compute.tf` | Cluster policies, cluster-create entitlements, the jobs service principal, the app identity's registration, the ADLS smoke job |
 | `imports.tf` | Adoption of the Phase 0 estate |
 | `backend.tf` | Remote state |
 
@@ -238,6 +240,13 @@ decision.
 | Model deployment capacity **10K TPM**, and none by default | `var.model_deployments` | Tokens-per-minute quota is a spend control as much as a performance setting. |
 | Container Apps **max replicas 2** | `var.web_max_replicas` | Scale-out is spend. |
 | Container registry **Basic** tier | `var.container_registry_sku` | There is no free tier. Basic is ~$0.167/day (~$5/month) and includes 10 GB — two orders of magnitude more than one 60 MB agent image. Standard and Premium buy storage, geo-replication and private endpoints that nothing here uses. Set `var.container_registry_enabled = false` on a disposable stack that does not need the agent. |
+| Databricks **single-node compute**, all three policies | `databricks_compute.tf` | `num_workers` fixed at zero. There is no second VM to forget about and no autoscale ceiling to get wrong. |
+| Databricks **job policy forbids all-purpose clusters** | `databricks_cluster_policy.job_single_node` | All-purpose is $0.55/DBU-hr against $0.30 for jobs, for compute that is easy to leave running. A cluster made under this policy cannot outlive its run. |
+| Databricks **10-minute autotermination**, interactive only | `var.databricks_autotermination_minutes` | Fixed, not a maximum — a maximum still lets someone type 4320. Job and pipeline compute reject the attribute and terminate structurally instead. |
+| Databricks **node type allowlist**, all 4-vCPU | `var.databricks_node_type_allowlist` | Editing the list is where the decision to spend more belongs. |
+| Databricks **no instance pools** | `databricks_compute.tf` | Pools keep VMs warm, which is the opposite of the point. |
+| Databricks **no cluster-create entitlement** on `users` | `databricks_entitlements.users` | What turns the policies from selectable into mandatory for everyone who is not an admin. |
+| Databricks **no SQL access** on `users` | `databricks_entitlements.users` | Serverless SQL is ~$8/hour for a Small warehouse and no cluster policy binds it. |
 
 ### What none of this prevents
 
@@ -283,6 +292,290 @@ Tracked as bead `cc-3wo`; if capacity does not return, the escalation is Basic a
 
 ---
 
+## Databricks
+
+Issue #31. The workspace, three cluster policies, the identity Unity Catalog
+reaches ADLS with, and one job that proves the path.
+
+| | |
+| --- | --- |
+| Workspace | `dbw-chip-chat`, **Premium**, East US 2 |
+| Managed resource group | `rg-chip-chat-databricks-managed` — created and owned by the Databricks RP |
+| Unity Catalog | Metastore `metastore_azure_eastus2` **auto-assigned** at creation; default catalog `dbw_chip_chat` |
+| Access connector | `dbac-chip-chat`, system-assigned identity, **Storage Blob Data Contributor** on the data account and nothing else |
+| External locations | `chip-chat-raw` → `abfss://raw@…`, `chip-chat-lakehouse` → `abfss://lakehouse@…` |
+| Jobs identity | Databricks service principal `chip-chat-jobs`. **No credential exists for it** — see below |
+| App identity | `id-chip-chat-app` registered as a Databricks service principal, so the app tier authenticates over Entra with no stored secret |
+
+**Premium is not a preference.** Standard tier retires 2026-10-01 and every new
+workspace becomes Unity-Catalog-only from 2026-09-30 — both inside this
+project's window. Unity Catalog needs Premium anyway, so Premium with an
+auto-assigned metastore costs nothing extra and sidesteps both dates. The
+`precondition` in `databricks.tf` makes "create it Standard and upgrade later"
+fail at plan time rather than in October.
+
+### What it costs when nothing is running
+
+> **Not zero.** An idle Databricks workspace in this estate bills **≈$36.50 a
+> month** before a single job is submitted.
+
+This is the one number worth reading twice, because it is a standing charge and
+because it is not in the Databricks bill — it is in the Azure bill, for
+networking inside the Databricks-managed resource group:
+
+| Resource | Meter | Rate | Monthly |
+| --- | --- | --- | --- |
+| `nat-gateway` | NAT Gateway, Standard Gateway | $0.045/hour | **$32.85** |
+| `nat-gw-public-ip` | Standard IPv4 Static Public IP | $0.005/hour | **$3.65** |
+| | | | **$36.50** |
+
+Rates from the Azure retail prices API, East US 2, 2026-08-26. Data processed
+through the NAT gateway is another $0.045/GB on top.
+
+Databricks provisions the NAT gateway because the workspace uses **secure
+cluster connectivity** — cluster VMs get no public IP and reach the internet
+through the gateway instead. It is created with the workspace, bills whether or
+not any cluster exists, and is deleted with the workspace. `var.databricks_sku`
+carries no standing charge of its own; Premium changes DBU rates, not a monthly
+fee.
+
+Against a $150/month budget this is 24%, and it roughly doubles the estate's
+expected idle floor — the rest of the stack idles near $0 by design (Container
+Apps at zero replicas, AI Search Free, F0 Cognitive Services). It is worth
+knowing before the budget's 50% alert arrives and looks like a runaway.
+
+**The lever, if that is too much:** turning secure cluster connectivity off
+(`no_public_ip = false`) removes the NAT gateway and gives cluster VMs their own
+public IPs, billed only while a cluster runs. That is a real security downgrade
+and it needs the workspace replaced, so it is not the default and it is not
+wired up. The honest position is that $36.50/month buys cluster nodes with no
+inbound-addressable public IP, and that is worth it here.
+
+Everything else about the workspace is genuinely zero at rest: **no cluster
+exists until a job is submitted, and nothing in this stack starts one on a
+schedule.** The smoke job below has no trigger and no schedule; the cluster
+policies forbid instance pools, which are the other way to keep VMs warm.
+
+### What a run costs
+
+Single-node job compute, `Standard_D4ds_v4`:
+
+| | |
+| --- | --- |
+| DBU rate | Premium **Jobs Compute, $0.30/DBU-hour** (all-purpose would be $0.55) |
+| VM | $0.226/hour, 4 vCPU / 16 GB |
+| Measured | see [Verified](#databricks-verified) below |
+
+### The cluster policies, and exactly how much they enforce
+
+Three policies, in `databricks_compute.tf`. Every constraint below is `fixed` —
+a value a user cannot raise — unless the table says otherwise.
+
+| | `chip-chat-job-single-node` | `chip-chat-interactive-single-node` | `chip-chat-pipeline-single-node` |
+| --- | --- | --- | --- |
+| `cluster_type` | `job` (fixed) | `all-purpose` (fixed) | `dlt` (fixed) |
+| `num_workers` | `0` (fixed) | `0` (fixed) | `0` (fixed) |
+| `autoscale.*` | forbidden | forbidden | forbidden |
+| `autotermination_minutes` | — *(rejected by the platform)* | **`10` (fixed)** | — *(rejected by the platform)* |
+| `node_type_id` | allowlist of five 4-vCPU types | same | same |
+| `instance_pool_id` | forbidden | forbidden | forbidden |
+| `max_clusters_per_user` | — | **1** | — |
+
+**Where the ten minutes actually applies, and why it is only one column.** Job
+compute and pipeline compute both *reject* `autotermination_minutes` outright —
+job creation fails with "Automated clusters do not support autotermination".
+This is not a limitation: both tear their cluster down when the run finishes, so
+termination there is structural rather than a timeout. There is no idle cluster
+to time out because there is no cluster once the work stops. The ten minutes
+belongs to the only kind of compute that *can* sit idle and bill — the
+interactive one — which is also the only place the design's cost trap can
+happen. `docs/service-inventory.md` records this trap for pipelines; it is true
+of jobs as well, found by hitting it on 2026-08-26.
+
+#### Is the policy attached by default, or only available to be selected?
+
+Databricks has no concept of a policy that is automatically applied to every
+cluster. So the literal answer is **selectable, not default-attached** — and
+that would be worth nothing on its own. What makes it binding is removing the
+alternative:
+
+1. The `users` group has **no `allow-cluster-create` entitlement** (and none for
+   instance pools), asserted by `databricks_entitlements.users`. Without that
+   entitlement, the only way a member can create compute at all is through a
+   policy they hold `CAN_USE` on.
+2. The five built-in policy families — Personal Compute, Power User Compute,
+   Shared Compute, Job Compute, Legacy Shared Compute — are granted to
+   **`admins` only** on this workspace, verified 2026-08-26. So they are not an
+   escape route for a non-admin.
+3. The only policy granted to a non-admin principal is the job policy, granted
+   to `chip-chat-jobs`.
+
+So for everyone who is not a workspace admin, policy-scoped creation is the only
+creation available. That is enforcement, not advice.
+
+> **A workspace admin bypasses all of it.** Admins can create unrestricted
+> compute and can edit or delete these policies. Databricks provides no way to
+> prevent that, and today the only human in this workspace *is* an admin. Read
+> the guardrail as: it removes every accidental path, and it does not constrain
+> a deliberate one.
+
+Two things worth knowing about the built-in Personal Compute policy, since it is
+the usual leak: its `autotermination_minutes` is **`unlimited`, defaulting to
+4320 minutes — three days** — and its default node type is `Standard_D4ds_v5`,
+which this subscription has zero quota for. Admin-only here, but that is what it
+would grant if it were ever opened up.
+
+#### What the policies do not reach
+
+- **SQL warehouses are not clusters, and no cluster policy binds them.** The
+  workspace ships with a `Serverless Starter Warehouse` (Small, PRO, serverless,
+  auto-stop 10 minutes) that nothing in this design uses — the
+  natural-language-to-SQL lane is Snowflake Cortex Analyst. Serverless SQL is
+  **$0.70/DBU-hour** and a Small warehouse draws about 12 DBU/hour, so a started
+  warehouse is roughly **$8/hour**: the most expensive way to spend money in
+  this workspace and the one the policies cannot govern. It is `STOPPED`, and
+  `databricks_entitlements.users` removes `databricks-sql-access` from the
+  `users` group so that starting it needs an admin. That is a narrowing — the
+  group had the entitlement — and today it changes nothing, because the only
+  member is an admin.
+- **Jobs and pipelines only obey a policy they reference.** A `policy_id` on the
+  cluster spec is what binds them; there is no ambient default. The smoke job
+  sets it. Issues #33 and #34 must set
+  `databricks_pipeline_policy_id` on their pipeline compute, which is why it is
+  an output.
+- **Serverless compute** is billed per DBU with no cluster to police. Nothing
+  here uses it.
+
+### Credentials: there are none, and that is the design
+
+Issue #31 asks for "a service principal for automated jobs; PAT stored in Key
+Vault". It gets the service principal. It does not get the PAT, for two reasons
+and in that order:
+
+1. **The jobs principal never needs one.** `run_as` is resolved inside
+   Databricks, so a job running as `chip-chat-jobs` authenticates without
+   anything being issued, stored or rotated. The credential in the original
+   scope was for the other direction — something outside Databricks calling in.
+2. **For that direction the app already has an identity.** `id-chip-chat-app`,
+   the user-assigned managed identity every other Azure service in this stack is
+   reached with, is registered here as a Databricks service principal. The app
+   tier presents an Entra token and is recognised. No PAT, no Key Vault secret,
+   nothing to expire.
+
+This is the same rule `storage.tf` applies with `shared_access_key_enabled =
+false`: the strongest version of "the key did not leak" is that there is no key.
+
+`databricks-host` is in Key Vault, so a consumer reads one place for the
+endpoint. It is not a secret; it is there so a teardown cannot leave a stale
+host in someone's config.
+
+**If something genuinely cannot do Entra**, `var.databricks_service_principal_token_enabled`
+mints an on-behalf-of PAT for `chip-chat-jobs` and writes it to the
+`databricks-token` secret with an expiry. It is off, and it currently cannot be
+turned on without a human: on-behalf-of token creation is disabled for new
+Databricks accounts, there is no workspace API for it, and an account admin has
+to enable it at **accounts.azuredatabricks.net → Settings → Feature enablement →
+"Personal access tokens for service principals"**. Verified against this account
+on 2026-08-26 — the API answers *"On-behalf-of token creation for service
+principals is not enabled for this workspace"*, and `enableTokensConfig` (which
+is already `true`) is a different setting.
+
+### Two things that need an account admin, not Terraform
+
+Both are one-time, and both are the reason this issue is labelled *human /
+portal work*:
+
+- **`var.databricks_account_id`** is the Databricks account GUID. Binding a
+  job's `run_as` to a service principal is an *account*-level permission
+  (`roles/servicePrincipal.user`) and is not implied by being an account admin —
+  without it, creating the job fails with a message about workspace ACLs that is
+  not about workspace ACLs. The account id is not derivable from the Azure
+  subscription; read it from accounts.azuredatabricks.net, or provoke it out of
+  the API, which names the account in its error.
+- **The on-behalf-of token toggle**, above, if a PAT is ever wanted.
+
+### The VM quota trap
+
+The subscription has **zero cores of `standardDDSv5Family` quota in East US 2**,
+and the whole-region ceiling is **10 cores**. `Standard_D4ds_v5` is Databricks'
+own default node type and comes from that family, so a cluster that asks for it
+fails several minutes into the run with `QuotaExceeded` — long after, and far
+from, the place the choice was made. Every entry in
+`var.databricks_node_type_allowlist` is a 4-vCPU type from a family this
+subscription actually has quota in, verified against `az vm list-usage -l
+eastus2`. Check before adding one.
+
+### Databricks, verified
+
+Against workspace `dbw-chip-chat`, 2026-08-26.
+
+| | |
+| --- | --- |
+| Workspace | Premium, East US 2. Unity Catalog metastore `metastore_azure_eastus2` **auto-assigned at creation** — no manual assignment was needed |
+| Idempotence | `terraform plan` after apply: **No changes.** |
+| Smoke job | Run `703497916585597`: **SUCCESS**. Wrote a three-row Delta table to `abfss://raw@…/_smoke/`, read it back, asserted the count, deleted it |
+| **Cluster terminated on its own** | Yes — `0826-065118-n104vpq8`, termination reason `JOB_FINISHED`, `num_workers` 0, node `Standard_F4ads_v7`, under the job policy. Non-terminated clusters in the workspace afterwards: **0** |
+| Timing | **320.0 s total: 292.0 s provisioning, 27.0 s of actual work.** Cluster start dominates a job this small by more than 10×, which is the number to remember when sizing anything later |
+| Credentials | Key Vault holds `databricks-host` and nothing else. There is no `databricks-token`, on purpose |
+
+#### The policies, probed
+
+Each of these is an actual API call made against the live workspace, not a
+reading of the policy JSON:
+
+| Attempt | Result |
+| --- | --- |
+| All-purpose cluster under the job policy | **Rejected** — "the value must be job (is all-purpose)" |
+| Two workers under the job policy | **Rejected** (same check — `/clusters/create` only makes all-purpose clusters) |
+| Autoscale 1→8 under the job policy | **Rejected** (same) |
+| 480-minute autotermination under the interactive policy | **Rejected** — "the value must be 10 (is 480)" |
+| `Standard_E64ds_v5` under the interactive policy | **Rejected** — node type and driver node type both outside the allowlist |
+| **Four workers under the interactive policy** | **Accepted, and silently clamped** to `num_workers: 0`, `autotermination_minutes: 10`, `cluster_profile: singleNode`, `ResourceClass: SingleNode` |
+
+The last row is worth reading carefully, because it is the one that looks like a
+failure and is not. Databricks `fixed` policy attributes have two behaviours and
+the platform picks: some reject a conflicting value, some overwrite it. Asking
+for four workers does not get you four workers — it gets you a single-node
+cluster with a ten-minute timeout. The outcome is the same either way, which is
+the property that matters; the probe cluster was deleted before it finished
+provisioning.
+
+#### DBU consumption: measured in part, and here is the missing half
+
+The run's billable cluster time is **320.0 seconds (0.0889 hours)**, and the
+rates are known:
+
+| | |
+| --- | --- |
+| VM, `Standard_F4ads_v7` | $0.343/hour → **$0.0305** for this run |
+| DBU rate, Premium Jobs Compute | $0.30/DBU-hour |
+| DBU **quantity** | **not measured** |
+
+The quantity is the gap and it is worth being exact about why, rather than
+substituting a plausible number. Databricks does not publish DBUs-per-node
+through any API reachable from the workspace: it is not in
+`clusters/list-node-types`, and the Azure pricing calculator's API carries
+warehouse sizes but no instance-to-DBU mapping. The authoritative source is
+`system.billing.usage`, and querying it fails with `TABLE_OR_VIEW_NOT_FOUND`
+because the `billing` system schema has to be enabled by a **Databricks account
+admin** — the same class of account-console action as the on-behalf-of token
+toggle, and the workspace admin is not automatically one. `az consumption usage
+list` will also carry the DBU meter once Azure's billing pipeline catches up,
+which is hours rather than minutes.
+
+So: the run cost about three cents of VM plus an unmeasured DBU component that,
+at $0.30/DBU-hour over 0.089 hours, cannot exceed a few cents. Read the exact
+figure once billing lands:
+
+```bash
+az consumption usage list --start-date 2026-08-26 --end-date 2026-08-27 \
+  --query "[?contains(meterCategory,'Databricks')].{meter:meterName,qty:usageQuantity,cost:pretaxCost}" -o table
+```
+
+Tracked as a bead so the number gets written down rather than remembered.
+
+---
+
 ## Identifiers
 
 Everything below is a resource id or a public endpoint. **No secrets are recorded
@@ -301,6 +594,10 @@ Vault. The root `.gitignore` excludes `.env`; keep it that way.
 | App managed identity | `id-chip-chat-app` — client and principal ids are `terraform output`, see below |
 | Budget | `chip-chat-monthly` (subscription scope) |
 | Cost action group | `ag-chip-chat-cost` |
+| Databricks workspace | `dbw-chip-chat` (Premium) — URL is a `terraform output`, and the Key Vault secret `databricks-host` |
+| Databricks managed group | `rg-chip-chat-databricks-managed` — owned by the Databricks RP, **holds the NAT gateway that bills whether or not anything runs** |
+| Databricks access connector | `dbac-chip-chat` |
+| Databricks account id | `43b2ef58-9ed2-4bb9-9962-8b20eb5cd8b4` — the Databricks account, not the Azure subscription |
 | Terraform state | `sttfstatec8b63a/tfstate` in `rg-chip-chat-tfstate` |
 
 Everything above is stable across a teardown because it is either fixed
@@ -339,8 +636,11 @@ comparison, including the one trade-off, is in
 
 ## Key Vault
 
-Every secret the app tier reads goes here: Snowflake credentials, the Databricks PAT,
-the Arize API key, Foundry keys, and the ops API function key. No secret in source, no
+Every secret the app tier reads goes here: Snowflake credentials, the Arize API key,
+Foundry keys, and the ops API function key. **Databricks is the exception, and
+deliberately so** — the app authenticates there with the `id-chip-chat-app` managed
+identity, so there is no Databricks secret to store. Only the non-secret
+`databricks-host` is written. See [Databricks](#credentials-there-are-none-and-that-is-the-design). No secret in source, no
 secret in a committed `.env`.
 
 The vault uses **RBAC authorization**, not the legacy access-policy model, so grants are
@@ -454,6 +754,13 @@ fresh subscription, register it before the first apply:
 az provider register -n Microsoft.Web
 ```
 
+Issue #31 added **`Microsoft.Databricks`**, which was also `NotRegistered`. Same
+rule — subscription-level, outlives any stack, so it is not in the Terraform:
+
+```bash
+az provider register -n Microsoft.Databricks
+```
+
 ```bash
 az provider show -n Microsoft.KeyVault --query registrationState -o tsv
 ```
@@ -555,6 +862,17 @@ limit for any environment name longer than two letters. Non-`demo` stacks now
 take the random suffix instead.
 
 ### Not verified
+
+- **DBU quantity for a pipeline run** — the run is measured and the rates are
+  known, but the DBUs-per-node figure needs the `billing` system schema, which a
+  Databricks *account* admin has to enable. See
+  [DBU consumption](#dbu-consumption-measured-in-part-and-here-is-the-missing-half).
+- **Databricks on-behalf-of tokens** — the feature is disabled for this account
+  and needs an account-console toggle. Nothing depends on it; the app tier uses
+  its managed identity.
+- **`no_public_ip = false`** — the lever that would remove the workspace's
+  $36.50/month NAT gateway. It needs the workspace replaced and it is a security
+  downgrade, so it has not been tried.
 
 - **Azure AI Search** — cannot be provisioned in East US 2 at all right now. See
   [Known issue](#known-issue-ai-search-will-not-provision) and bead `cc-3wo`.

@@ -319,3 +319,208 @@ variable "search_enabled" {
   type        = bool
   default     = true
 }
+
+# --- Databricks -------------------------------------------------------------
+
+variable "databricks_sku" {
+  description = <<-EOT
+    Workspace tier. Premium, and the precondition in databricks.tf enforces it.
+    Standard retires 2026-10-01 and Unity Catalog requires Premium, so a Standard
+    workspace created now cannot survive this project. "trial" is Premium for 14
+    days on up to $400 of credits and then bills normally — it changes the
+    invoice, not the feature set.
+  EOT
+  type        = string
+  default     = "premium"
+
+  validation {
+    condition     = contains(["premium", "trial"], var.databricks_sku)
+    error_message = "databricks_sku must be premium or trial. Standard tier retires 2026-10-01 and cannot run Unity Catalog."
+  }
+}
+
+variable "databricks_autotermination_minutes" {
+  description = <<-EOT
+    Minutes of idleness before compute shuts itself off, fixed by the job and
+    interactive cluster policies. This is the number in the design's cost
+    guardrail and it is fixed rather than a maximum, because a maximum still
+    lets someone type 4320. Not applied to the pipeline policy: pipeline compute
+    rejects the attribute outright.
+  EOT
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.databricks_autotermination_minutes >= 10 && var.databricks_autotermination_minutes <= 120
+    error_message = "Databricks will not accept an autotermination below 10 minutes, and above 120 this stops being a guardrail."
+  }
+}
+
+variable "databricks_node_type" {
+  description = <<-EOT
+    Default VM for single-node compute. Small on purpose: the whole dataset is a
+    restaurant menu. The VM is billed beside the DBUs, so this number is half the
+    cost of a run and the DBU rate is the other half. $0.343/hour in East US 2 as
+    of 2026-08-26, 4 vCPU and 16 GB.
+
+    It is not the cheapest 4-vCPU type that fits, and the reason is worth reading
+    before someone "optimises" it. East US 2 will not start most of them:
+
+      * `Standard_D4ds_v5` -- Databricks' OWN default node type -- has a quota of
+        **zero cores** on this subscription (`standardDDSv5Family`).
+      * `Standard_D4ds_v4`, `Standard_DS3_v2`, `Standard_F4s_v2`,
+        `Standard_D4s_v3` and `Standard_E4ds_v4` are **not offered in East US 2
+        at all**, however plausible they look in a pricing page.
+      * `Standard_D4ds_v4` additionally failed live with
+        `CLOUD_PROVIDER_RESOURCE_STOCKOUT` / "Capacity Restrictions" -- the same
+        regional-capacity shortage that is currently blocking AI Search.
+
+    `Standard_F4ads_v7` is the one 4-vCPU type with quota and **no restrictions
+    of any kind** on this subscription. `Standard_D4ads_v6` is $0.228/hour and
+    would do, at the cost of two of the three availability zones.
+
+    Two ways this fails, and neither is at plan time: a zero-quota family fails
+    minutes into the run with `QuotaExceeded`, and a capacity-restricted one
+    hangs on "Finding instances for new nodes" until the job's timeout. Verify
+    before changing:
+
+      az vm list-usage -l eastus2 -o table
+      az vm list-skus -l eastus2 --resource-type virtualMachines \
+        --query "[?name=='<sku>'].{n:name,f:family,r:restrictions}"
+
+    The whole-region ceiling is 10 cores, so one 4-vCPU single-node cluster fits
+    and two do not.
+  EOT
+  type        = string
+  default     = "Standard_F4ads_v7"
+}
+
+variable "databricks_node_type_allowlist" {
+  description = <<-EOT
+    VMs the cluster policies will accept. An allowlist rather than a fixed value
+    so that a genuinely larger job can be run deliberately — editing this list is
+    the moment someone decides to spend more, which is where that decision
+    belongs.
+  EOT
+  type        = list(string)
+  # Every entry is 4 vCPU, because the region's total quota is 10 cores; every
+  # entry is from a family this subscription has quota in; and every entry is
+  # actually offered in East US 2. All three were checked on 2026-08-26 against
+  # `az vm list-usage` and `az vm list-skus`, because each one fails differently
+  # and none of them fail at plan time. Prices are East US 2 Linux
+  # pay-as-you-go on the same date.
+  default = [
+    "Standard_F4ads_v7", # 16 GB, $0.343/hr - the default; no restrictions at all
+    "Standard_D4ads_v6", # 16 GB, $0.228/hr - cheapest, but only zones 1 and 3
+    "Standard_F4as_v7",  # 16 GB, $0.273/hr - zones 1 and 2
+    "Standard_E4ads_v6", # 32 GB, $0.290/hr - memory headroom, zones 1 and 3
+    "Standard_L4aos_v4", # 32 GB, $0.452/hr - unrestricted fallback
+  ]
+
+  validation {
+    condition     = length(var.databricks_node_type_allowlist) > 0
+    error_message = "The allowlist cannot be empty: a policy with no permitted node type cannot create any cluster at all."
+  }
+}
+
+variable "databricks_spark_version" {
+  description = <<-EOT
+    Databricks Runtime for the smoke job. Pinned to an LTS release rather than
+    resolved with a data source, so that a first apply against a workspace that
+    does not exist yet does not have to read from it. Check what the workspace
+    actually offers with:
+
+      databricks clusters spark-versions --profile <profile>
+  EOT
+  type        = string
+  default     = "17.3.x-scala2.13"
+}
+
+variable "databricks_restrict_cluster_create" {
+  description = <<-EOT
+    Whether to take cluster and instance-pool creation away from the `users`
+    group, so that everyone who is not a workspace admin must go through a
+    policy. True is the guardrail. Set false only if you are debugging an
+    entitlement problem and know you are widening the blast radius.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "databricks_unity_catalog_enabled" {
+  description = <<-EOT
+    Whether to create the storage credential and external locations. These are
+    metastore-level objects and need the workspace to have a metastore attached.
+    Workspaces created after 2023-11-09 get one assigned automatically, and from
+    2026-09-30 every new workspace is UC-only — so this is on by default. Set
+    false if the account has no auto-assign metastore in this region yet, apply
+    the rest, set an auto-assign metastore in the account console, and set it
+    back.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "databricks_account_id" {
+  description = <<-EOT
+    Databricks account id. Not a secret and not derivable from the Azure
+    subscription: an Azure Databricks account is created per Entra tenant by
+    Databricks, with its own GUID. Needed because binding a job's `run_as` to a
+    service principal is an account-level permission.
+
+    Read it from https://accounts.azuredatabricks.net (top right), or provoke it
+    out of the API, which names the account in its error:
+
+      databricks api get "/api/2.0/preview/accounts/access-control/rule-sets\
+        ?name=accounts/00000000-0000-0000-0000-000000000000/servicePrincipals/x/ruleSets/default&etag="
+  EOT
+  type        = string
+  default     = "43b2ef58-9ed2-4bb9-9962-8b20eb5cd8b4"
+
+  validation {
+    condition     = can(regex("^[0-9a-fA-F-]{36}$", var.databricks_account_id))
+    error_message = "databricks_account_id must be a GUID."
+  }
+}
+
+variable "databricks_service_principal_token_enabled" {
+  description = <<-EOT
+    Whether to mint a Databricks PAT for the jobs service principal and store it
+    in Key Vault. OFF, and the default is the recommendation rather than a
+    limitation: the app tier authenticates to Databricks with the
+    `id-chip-chat-app` managed identity over Entra, so the normal path has no
+    secret to store, rotate or leak.
+
+    It is also currently impossible without a human. On-behalf-of token creation
+    is disabled for new Databricks accounts and there is no workspace API for it;
+    an account admin must turn it on at
+    https://accounts.azuredatabricks.net -> Settings -> Feature enablement ->
+    "Personal access tokens for service principals". Verified against this
+    account on 2026-08-26. Turn that on first, then set this true.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "databricks_token_lifetime_days" {
+  description = <<-EOT
+    Lifetime of the service principal's PAT. Rotate before it lapses with
+
+      terraform apply -replace=databricks_obo_token.jobs
+
+    which reissues the token and rewrites the Key Vault secret in one step.
+  EOT
+  type        = number
+  default     = 90
+
+  validation {
+    condition     = var.databricks_token_lifetime_days > 0 && var.databricks_token_lifetime_days <= 365
+    error_message = "Token lifetime must be between 1 and 365 days. A token that never expires is not a credential, it is a liability."
+  }
+}
+
+variable "databricks_smoke_timeout_seconds" {
+  description = "Ceiling on the smoke job. A run that has not finished by now is not going to, and the useful thing is for it to stop billing."
+  type        = number
+  default     = 900
+}

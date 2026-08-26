@@ -78,6 +78,15 @@ resource "azurerm_storage_container" "uploads" {
   storage_account_id = azurerm_storage_account.data.id
 }
 
+# Managed storage for the Unity Catalog catalogs (#32). Separate from `raw`
+# because Unity Catalog refuses a managed location that overlaps an external
+# one, and because harvested source data and Unity-Catalog-owned tables should
+# not share a lifecycle. Deliberately outside the lifecycle policy below.
+resource "azurerm_storage_container" "lakehouse" {
+  name               = "lakehouse"
+  storage_account_id = azurerm_storage_account.data.id
+}
+
 resource "azurerm_storage_management_policy" "data" {
   storage_account_id = azurerm_storage_account.data.id
 
