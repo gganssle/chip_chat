@@ -67,6 +67,24 @@ class NutritionDocuments:
     allergen_page: CachedDocument
     menus: tuple[CachedDocument, ...]
 
+    def documents(self) -> tuple[CachedDocument, ...]:
+        """Return every raw document this set holds, in fetch order.
+
+        Issue #22 searches everything a harvest landed for links to PDFs, and
+        it should not have to know which field each set keeps which document
+        in.
+
+        Returns:
+            The documents.
+        """
+        return (
+            self.home,
+            self.nutrition,
+            self.allergen_chart,
+            self.allergen_page,
+            *self.menus,
+        )
+
 
 def harvest_nutrition(
     harvester: Harvester,

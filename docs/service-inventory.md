@@ -128,6 +128,8 @@ Source: [Export hosted agent telemetry by using OpenTelemetry](https://learn.mic
 | Tiers | **F0** (free) and **S0** (pay-as-you-go). Commitment tiers exist but are irrelevant at this volume. | — | same | 2026-08-25 |
 | S0 prices | **Read $1.50 per 1,000 pages** (drops to $0.60/1K at the higher volume band) · **Layout $10/1K** · **Prebuilt $10/1K** · **Custom $30/1K** · Add-on features $6/1K · Training $3/hour. | *(retail API)* | same | 2026-08-25 |
 | Relevance to Phase 1 | A handful of nutrition PDFs is a rounding error even on S0. F0 is fine and its rate limit is the only thing to watch. | — | — | 2026-08-25 |
+| API version in use | `2024-11-30`, model `prebuilt-layout`. Called over its REST API with an Entra ID token for `https://cognitiveservices.azure.com/.default`; no key is read anywhere in this repository. | — | verified against the live account `di-chip-chat-4cy39i` | 2026-08-26 |
+| **Correction to the plan** | The system design says *"Azure Document Intelligence handles any PDF nutrition sheets."* There are none. Chipotle published no PDF on any page this project harvests as of 2026-08-26, so issue #22's dataset is empty by correct operation rather than by failure. The reader was checked against the live account anyway. | — | [chipotle-pdf-spot-check.md](chipotle-pdf-spot-check.md) | 2026-08-26 |
 
 ### 2.6 Blob Storage / ADLS Gen2 — the 24-hour image expiry
 

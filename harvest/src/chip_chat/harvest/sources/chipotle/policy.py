@@ -118,6 +118,29 @@ class PolicyDocuments:
     stores: tuple[CachedDocument, ...]
     store_profiles: tuple[CachedDocument, ...]
 
+    def documents(self) -> tuple[CachedDocument, ...]:
+        """Return every raw document this set holds, in fetch order.
+
+        Issue #22 searches everything a harvest landed for links to PDFs, and
+        it should not have to know which field each set keeps which document
+        in.
+
+        Returns:
+            The documents.
+        """
+        return (
+            self.home,
+            self.rewards,
+            self.rewards_terms,
+            self.faq,
+            self.catering_home,
+            self.catering_bundle,
+            self.catering_menu,
+            *self.sitemaps,
+            *self.stores,
+            *self.store_profiles,
+        )
+
 
 def harvest_policy(
     harvester: Harvester,

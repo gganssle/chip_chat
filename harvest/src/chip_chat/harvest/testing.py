@@ -5,16 +5,20 @@ harvesters in later issues need them too, and because a source-specific
 harvester that had to hand-roll a fake transport would be tempted to test
 against the live site instead.
 
-Neither double touches a network or a real clock. That is the point: the one
-property this package exists to guarantee — that a warm cache costs a site
-nothing — can only be *proved* by a transport that records every call and is
-then asserted to have recorded none.
+None of them touches a network, a real clock, or a paid API. That is the
+point: the one property this package exists to guarantee — that a warm cache
+costs a site nothing, and a warm analysis cache costs Azure nothing — can only
+be *proved* by doubles that record every call and are then asserted to have
+recorded none.
 """
 
+import hashlib
 import threading
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
+from chip_chat.harvest.errors import DocumentAnalysisError
 from chip_chat.harvest.transport import HttpResponse
 
 EPOCH = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
@@ -163,3 +167,58 @@ def fake_response(
         content=body,
         headers={"content-type": content_type, **headers},
     )
+
+
+class FakeDocumentAnalyzer:
+    """Serves canned Document Intelligence results and records every call.
+
+    Scripted by the digest of the bytes handed to it rather than by a URL,
+    because that is what the analysis cache keys on: a test that scripts one
+    document and then asserts ``analyses == 1`` after two runs has proved the
+    cache, not merely described it.
+    """
+
+    def __init__(
+        self,
+        results: Mapping[str, object] | None = None,
+        *,
+        model_id: str = "prebuilt-layout",
+        api_version: str = "2024-11-30",
+    ) -> None:
+        """Initialise the analyzer.
+
+        Args:
+            results: Hex SHA-256 of the document bytes to either the
+                ``analyzeResult`` mapping to return, or an exception to raise.
+            model_id: The model this double claims to be.
+            api_version: The API version it claims to answer on.
+        """
+        self.results: dict[str, object] = dict(results or {})
+        self.analyses: list[str] = []
+        self.closed = False
+        self._model_id = model_id
+        self._api_version = api_version
+
+    @property
+    def model_id(self) -> str:
+        return self._model_id
+
+    @property
+    def api_version(self) -> str:
+        return self._api_version
+
+    def analyze(
+        self, content: bytes, *, content_type: str = "application/pdf"
+    ) -> Mapping[str, Any]:
+        """Record the call and return whatever was scripted for these bytes."""
+        digest = hashlib.sha256(content).hexdigest()
+        self.analyses.append(digest)
+        scripted = self.results.get(digest)
+        if isinstance(scripted, Exception):
+            raise scripted
+        if isinstance(scripted, Mapping):
+            return scripted
+        raise DocumentAnalysisError(digest[:12], "no result scripted for these bytes")
+
+    def close(self) -> None:
+        self.closed = True

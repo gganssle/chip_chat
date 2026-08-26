@@ -44,3 +44,18 @@ class PermanentFetchError(FetchError):
 
 class CacheCorruptError(HarvestError):
     """The cache holds a pointer whose content blob is missing or altered."""
+
+
+class DocumentAnalysisError(HarvestError):
+    """A document could not be analysed by Document Intelligence.
+
+    Distinct from :class:`FetchError` because nothing about it is the source
+    site's doing: the bytes are already in hand, and what failed was our own
+    call to Azure. Retrying it costs Azure money rather than costing a stranger
+    bandwidth, so the two are never handled by the same code.
+    """
+
+    def __init__(self, subject: str, reason: str) -> None:
+        super().__init__(f"{subject}: {reason}")
+        self.subject = subject
+        self.reason = reason

@@ -19,10 +19,11 @@ from chip_chat.harvest.ratelimit import PolitenessGate, RateLimiter
 from chip_chat.harvest.sources.chipotle import (
     harvest_menu,
     harvest_nutrition,
+    harvest_pdfs,
     harvest_policy,
 )
 from chip_chat.harvest.sources.chipotle.__main__ import main
-from chip_chat.harvest.testing import FakeClock
+from chip_chat.harvest.testing import FakeClock, fake_response
 
 
 @pytest.fixture
@@ -117,7 +118,7 @@ def test_asking_for_all_builds_every_dataset(
 
     assert status == 0
     manifests = json.loads(capsys.readouterr().out)
-    assert set(manifests) == {"menu", "nutrition", "policy"}
+    assert set(manifests) == {"menu", "nutrition", "policy", "pdf"}
     assert (landing / "parsed" / "chipotle" / "menu" / "menu_items.jsonl").is_file()
     assert (
         landing / "parsed" / "chipotle" / "nutrition" / "item_nutrition.jsonl"
@@ -147,3 +148,74 @@ def test_two_offline_nutrition_runs_print_the_same_manifest(
     second = capsys.readouterr().out
 
     assert first == second
+
+
+def test_the_pdf_dataset_is_built_when_asked_for(
+    landing: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Four empty tables and a manifest saying it looked, which is the result.
+
+    Chipotle published no PDF on 26 August 2026, so the honest outcome of this
+    run is an empty dataset that says so — not a missing one, and not a
+    failure. The day a sheet appears, ``discovered_urls`` stops being empty.
+    """
+    status = main(["--landing", str(landing), "--offline", "--dataset", "pdf"])
+
+    assert status == 0
+    manifest = json.loads(capsys.readouterr().out)["pdf"]
+    assert manifest["discovered_urls"] == []
+    assert manifest["coverage"]["pdfs"] == 0
+    parsed = landing / "parsed" / "chipotle" / "pdf"
+    assert (parsed / "pdf_table_cells.jsonl").read_bytes() == b""
+    assert (parsed / "manifest.json").is_file()
+
+
+def test_two_offline_pdf_runs_print_the_same_manifest(
+    landing: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    arguments = ["--landing", str(landing), "--offline", "--dataset", "pdf"]
+    assert main(arguments) == 0
+    first = capsys.readouterr().out
+    assert main(arguments) == 0
+    second = capsys.readouterr().out
+
+    assert first == second
+
+
+def test_a_found_pdf_with_nowhere_to_read_it_stops_the_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Better to fail loudly than to publish a dataset missing a sheet.
+
+    Issue #22's first criterion is that every harvested PDF has a structured
+    extraction. A run that found one, had no endpoint, and wrote an empty
+    table anyway would break that criterion in the one way nobody would
+    notice.
+    """
+    clock = FakeClock()
+    harvester = Harvester(
+        LocalBlobStore(tmp_path),
+        site.site(
+            extra={
+                site.ALLERGENS_PAGE_URL: site.allergens_page_linking_to(
+                    site.NUTRITION_SHEET_URL
+                ),
+                site.NUTRITION_SHEET_URL: fake_response(
+                    site.NUTRITION_SHEET_URL,
+                    site.nutrition_sheet(),
+                    content_type="application/pdf",
+                ),
+            }
+        ),
+        clock=clock,
+        contact="https://example.test/contact",
+        gate=PolitenessGate(RateLimiter(2.0, clock), 1),
+    )
+    harvest_menu(harvester, [site.REFERENCE])
+    documents = harvest_nutrition(harvester, [site.REFERENCE])
+    harvest_pdfs(harvester, documents.documents())
+
+    status = main(["--landing", str(tmp_path), "--offline", "--dataset", "pdf"])
+
+    assert status == 1
+    assert "no prebuilt-layout" in capsys.readouterr().err

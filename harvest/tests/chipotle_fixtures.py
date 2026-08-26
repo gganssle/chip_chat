@@ -31,6 +31,20 @@ reaches rather than one it merely declares.
 **The catering subscription key** is a placeholder too, for the same reason as
 the app key, and the bundle it sits in is one line rather than 260 kilobytes.
 
+**The nutrition sheet PDF is built, not recorded** — because there is nothing
+to record. Chipotle published no PDF at all on 26 August 2026, on any of the
+pages this project harvests (see ``docs/chipotle-pdf-spot-check.md``), so
+``nutrition-sheet.pdf`` is a one-page ruled table written for these tests. Its
+figures are the fixture's own real ones, taken from ``nutrition.json``, with a
+single deliberate exception: **Cheese is printed with 260 mg of sodium where the
+calculator publishes 190**, which is the disagreement the reconciliation test
+turns on. ``nutrition-sheet-layout.json`` beside it is *not* invented — it is
+what the live Azure Document Intelligence account really returned for those
+exact bytes on 26 August 2026, from ``prebuilt-layout`` at API version
+``2024-11-30``, with only the per-word and per-line boxes and the ``styles``
+array taken out. Nothing in this package reads those, and they were four fifths
+of the file.
+
 **The store locator is generated, not recorded.** Issue #21 needs at least
 thirty stores and the parser refuses to build a dataset with fewer, so a
 fixture of two recordings could not exercise it at all. :func:`locator_pages`
@@ -79,6 +93,7 @@ INGREDIENTS_URL = f"{SERVICES}/menu-metadata/v1/menu-metadata/ingredients"
 ALLERGEN_CHART_URL = f"{SERVICES}/menu-metadata/v1/menu-metadata/allergendiets"
 NUTRITION_URL = f"{SERVICES}{NUTRITION_PATH}?{NUTRITION_QUERY}"
 ALLERGENS_PAGE_URL = "https://www.chipotle.com/allergens"
+NUTRITION_SHEET_URL = "https://www.chipotle.com/content/dam/nutrition-sheet.pdf"
 
 REFERENCE = "0679"
 COMPARISON = "1200"
@@ -170,6 +185,49 @@ number and the menu fixtures are priced at it."""
 def read(name: str) -> bytes:
     """Return one fixture's bytes."""
     return (FIXTURES / name).read_bytes()
+
+
+def nutrition_sheet() -> bytes:
+    """Return the fixture nutrition sheet's PDF bytes."""
+    return read("nutrition-sheet.pdf")
+
+
+def nutrition_sheet_layout() -> dict[str, Any]:
+    """Return what Document Intelligence really returned for those bytes."""
+    payload: dict[str, Any] = json.loads(read("nutrition-sheet-layout.json"))
+    result: dict[str, Any] = payload["analyzeResult"]
+    return result
+
+
+def page_linking_to(url: str, *, page_url: str) -> HttpResponse:
+    """Return a minimal HTML page whose only content is a link to ``url``.
+
+    Synthetic, and obviously so. The recorded Chipotle pages are left exactly
+    as they were fetched — none of them links to a PDF, which is the finding —
+    so the discovery tests need a page that does, and it is built here rather
+    than smuggled into a recording.
+    """
+    body = (
+        f"<html><body><p>Download the "
+        f'<a href="{url}">nutrition sheet</a>.</p></body></html>'
+    ).encode()
+    return fake_response(page_url, body, content_type="text/html")
+
+
+def allergens_page_linking_to(url: str) -> HttpResponse:
+    """Return the recorded ``/allergens`` page with one extra link in it.
+
+    The recording itself is untouched — the link is appended at read time, and
+    only here. The page has to stay parseable because the nutrition dataset
+    quotes the caveats it publishes, so a stub page in its place would not do.
+    """
+    html = read("allergens.html").decode()
+    link = f'<p><a href="{url}">Nutrition sheet (PDF)</a></p>'
+    return fake_response(
+        ALLERGENS_PAGE_URL,
+        html.replace("</body>", f"{link}</body>").encode(),
+        content_type="text/html",
+    )
 
 
 def menu_url(restaurant_id: str) -> str:

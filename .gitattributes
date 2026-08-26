@@ -1,0 +1,5 @@
+# The nutrition-sheet fixture is a PDF, and the Document Intelligence response
+# checked in beside it is pinned to that file's exact SHA-256. Any end-of-line
+# translation would change those bytes and break the pinning, so it is marked
+# binary rather than left to git's own guess.
+*.pdf binary

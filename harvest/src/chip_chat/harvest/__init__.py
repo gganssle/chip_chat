@@ -18,11 +18,20 @@ Typical use::
 The second run of that program makes no network requests at all.
 """
 
+from chip_chat.harvest.analysis import (
+    AnalysisCache,
+    AzureDocumentIntelligence,
+    DocumentAnalysis,
+    DocumentAnalyzer,
+    analyze_once,
+    default_token_provider,
+)
 from chip_chat.harvest.blobs import BlobStore, InMemoryBlobStore, LocalBlobStore
 from chip_chat.harvest.cache import CachedDocument, DocumentCache, canonical_url
 from chip_chat.harvest.clock import Clock, SystemClock
 from chip_chat.harvest.errors import (
     CacheCorruptError,
+    DocumentAnalysisError,
     FetchError,
     HarvestError,
     PermanentFetchError,
@@ -30,6 +39,14 @@ from chip_chat.harvest.errors import (
     TransientFetchError,
 )
 from chip_chat.harvest.harvester import Harvester
+from chip_chat.harvest.layout import (
+    PDF_CONTENT_TYPE,
+    LayoutCell,
+    LayoutDocument,
+    LayoutTable,
+    is_pdf,
+    parse_layout,
+)
 from chip_chat.harvest.ratelimit import GLOBAL_GATE, PolitenessGate, RateLimiter
 from chip_chat.harvest.robots import RobotsPolicy
 from chip_chat.harvest.transport import (
@@ -43,11 +60,17 @@ from chip_chat.otel import service_name
 
 __all__ = [
     "GLOBAL_GATE",
+    "PDF_CONTENT_TYPE",
     "SERVICE_NAME",
+    "AnalysisCache",
+    "AzureDocumentIntelligence",
     "BlobStore",
     "CacheCorruptError",
     "CachedDocument",
     "Clock",
+    "DocumentAnalysis",
+    "DocumentAnalysisError",
+    "DocumentAnalyzer",
     "DocumentCache",
     "FetchError",
     "HarvestError",
@@ -55,6 +78,9 @@ __all__ = [
     "HttpResponse",
     "HttpxTransport",
     "InMemoryBlobStore",
+    "LayoutCell",
+    "LayoutDocument",
+    "LayoutTable",
     "LocalBlobStore",
     "PermanentFetchError",
     "PolitenessGate",
@@ -65,8 +91,12 @@ __all__ = [
     "TransientFetchError",
     "Transport",
     "__version__",
+    "analyze_once",
     "build_user_agent",
     "canonical_url",
+    "default_token_provider",
+    "is_pdf",
+    "parse_layout",
     "service_name",
 ]
 

@@ -14,6 +14,7 @@ contributor — human or agent — has them locally. Read them in this order.
 | [local-tracing.md](local-tracing.md) | The development loop with Phoenix: start the stack, send a turn, read the span tree |
 | [chipotle-nutrition-spot-check.md](chipotle-nutrition-spot-check.md) | What the harvested nutrition and allergen data was checked against by hand, and when |
 | [chipotle-policy-spot-check.md](chipotle-policy-spot-check.md) | The same, for the harvested rewards, FAQ, catering and store data |
+| [chipotle-pdf-spot-check.md](chipotle-pdf-spot-check.md) | The same, for the PDF path — including the finding that Chipotle publishes none, and the live Document Intelligence round trip that checks the reader anyway |
 | [decisions/](decisions/) | Decision records for questions the planning documents left open |
 
 The system design frames the problem, the PRD defines what to build, and the RFC
@@ -37,7 +38,7 @@ plans or checks. The setup guide records what to install, how to authenticate ea
 platform, and which steps are deliberately not done yet. The tracing guide records
 the loop you run every day once it is installed.
 
-The two spot checks are a sixth kind: *evidence*. The unit tests run against fixtures,
+The three spot checks are a sixth kind: *evidence*. The unit tests run against fixtures,
 so a green suite proves the harvester is self-consistent rather than that it still agrees
 with what Chipotle published this afternoon. Those files record hand comparisons against
 the live pages, and the dates on which they were true.

@@ -269,11 +269,88 @@ live pages by hand on 26 August 2026 — see
 [`docs/chipotle-policy-spot-check.md`](../docs/chipotle-policy-spot-check.md), which is
 also where the section boundary this dataset nearly lost is written down.
 
+### Chipotle's PDFs — `sources.chipotle`, `--dataset pdf`
+
+Issue #22. Any nutrition data published as a PDF, read through Azure Document
+Intelligence and checked against the figures the calculator publishes.
+
+```bash
+python -m chip_chat.harvest.sources.chipotle --landing landing --dataset pdf
+```
+
+**Today it lands four empty tables, and that is the finding.** Chipotle published
+no PDF at all on 26 August 2026 — not on the home page, the allergen page, the
+nutrition calculator, the ingredients page, the rewards pages or the catering
+site. The sweep is written down in
+[`docs/chipotle-pdf-spot-check.md`](../docs/chipotle-pdf-spot-check.md), along
+with the live round trip through the real Document Intelligence account that
+proves the reader works anyway.
+
+**The sheets are discovered, not listed.** Nothing here holds a nutrition-sheet
+URL. Every document the other three datasets landed is re-read for links whose
+path ends in `.pdf`; a sheet that appears next month is picked up by the next
+harvest without a code change, and a sheet that is withdrawn stops being
+harvested rather than becoming a 404 in a hardcoded list.
+
+**And a link ending in `.pdf` is not a PDF.** What lands is checked against
+`%PDF-` before anything is sent to Azure, because a stale link answered with an
+HTML error page would otherwise buy a structured extraction of the words "page
+not found" and file it as nutrition data. `rejected_urls` records that; the
+separate `unread_urls` records a link that could not be read at all, because
+"Chipotle changed that link" and "this landing zone predates the link" want
+different responses.
+
+**Four tables come out**, under `parsed/chipotle/pdf/`:
+
+| Table | What it is |
+| --- | --- |
+| `pdf_documents` | One row per harvested PDF, with the model and API version that read it. |
+| `pdf_tables` | One row per extracted table: its headings, and which column was matched to which nutrient. |
+| `pdf_table_cells` | One row per cell, at the row, column and span the service reported. |
+| `pdf_nutrition_findings` | One row per comparison against the calculator's figures. |
+
+**`pdf_table_cells` is the point of the dataset.** RFC-001 section 08 says a
+fixed window that cuts through a nutrition table produces exactly the confident
+wrong answers allergen questions cannot tolerate, so the extraction never becomes
+text here at all: a row is available whole, with its headings, or not at all. See
+[`docs/decisions/pdf-tables.md`](../docs/decisions/pdf-tables.md) for the failure
+that argument is about.
+
+**A mismatch is a finding, not a merge.** Where the sheet and the calculator both
+publish a figure and the figures differ, both numbers are recorded and nothing
+picks a winner. `UNIT_MISMATCH` is a worse finding than `DISAGREES` — 22 g and
+22 mg compare as equal and mean nothing alike — and `PORTION_MISMATCH` refuses to
+compare at all, because a figure for one ounce and a figure for four are not the
+same claim.
+
+**Which column is which is asked of the data.** The item column is the one whose
+*cells* are published item names; the serving column is the one whose cells parse
+as a published portion unit; a nutrient column is one whose heading matches a
+published nutrient name exactly, once a parenthesised unit is taken off it. A
+heading that matches nothing lands as `UNMATCHED_COLUMN` rather than being
+attached to the nearest plausible nutrient — a visible gap being much cheaper
+than an invisible mislabelling.
+
+**Document Intelligence responses are cached beside the raw PDFs**, keyed by the
+PDF's own SHA-256 together with the model and API version. A sheet republished
+unchanged costs nothing to re-parse; a sheet that changed lands a new analysis
+beside the old one, exactly as a changed page lands a new body beside the old.
+Iterating on the parser is therefore free.
+
+The endpoint comes from `--document-intelligence-endpoint` or
+`$CHIP_CHAT_DOCUMENT_INTELLIGENCE_ENDPOINT` — the `document_intelligence_endpoint`
+Terraform output, a hostname and not a secret. The credential comes from
+`DefaultAzureCredential`: `az login` locally, the container's user-assigned
+managed identity when deployed. **No key is read and none is stored.** A run that
+finds no PDF never asks for a token at all, so building the other three datasets
+needs no Azure subscription.
+
 ## Testing against it
 
-`chip_chat.harvest.testing` ships `FakeTransport` and `FakeClock`. Use them —
-a harvester test must never fetch from a real site, and a rate-limiter test
-must never actually sleep.
+`chip_chat.harvest.testing` ships `FakeTransport`, `FakeClock` and
+`FakeDocumentAnalyzer`. Use them — a harvester test must never fetch from a real
+site, a rate-limiter test must never actually sleep, and a PDF test must never
+spend money.
 
 ```python
 from chip_chat.harvest import Harvester, InMemoryBlobStore
@@ -284,4 +361,6 @@ harvester = Harvester(InMemoryBlobStore(), transport, clock=FakeClock())
 ```
 
 `transport.requests` records every call, which is how `test_harvester.py`
-proves that a warm cache makes zero of them.
+proves that a warm cache makes zero of them. `analyzer.analyses` does the same
+for Document Intelligence, which is how `test_analysis.py` proves that a document
+already read is never sent again.

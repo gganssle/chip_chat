@@ -1,0 +1,2726 @@
+{
+  "status": "succeeded",
+  "createdDateTime": "2026-08-26T05:35:12Z",
+  "lastUpdatedDateTime": "2026-08-26T05:35:15Z",
+  "analyzeResult": {
+    "apiVersion": "2024-11-30",
+    "modelId": "prebuilt-layout",
+    "stringIndexType": "textElements",
+    "content": "Nutrition Facts\nPublished figures per listed serving. Fixture sheet - not a Chipotle document.\nItem\nServing\nTotal Calories\nTotal Fat (g)\nSaturated Fat (g)\nSodium (mg)\nGuacamole\n4 oz\n230\n22\n3.5\n370\nChips\n4 oz\n540\n25\n3.5\n390\nChicken Bowl\n4 oz\n180\n7\n3\n310\nSteak Burrito\n4 oz\n150\n6\n2.5\n330\nWhite Rice\n4 oz\n210\n4\n0.5\n350\nBlack Beans\n4 oz\n130\n1.5\n0\n210\nCheese\n1 oz\n110\n8\n5\n260\nCross-contact occurs during preparation; this sheet does not reflect it.",
+    "pages": [
+      {
+        "pageNumber": 1,
+        "angle": 0.2655948996543884,
+        "width": 8.5,
+        "height": 11,
+        "unit": "inch",
+        "spans": [
+          {
+            "offset": 0,
+            "length": 443
+          }
+        ]
+      }
+    ],
+    "tables": [
+      {
+        "rowCount": 8,
+        "columnCount": 6,
+        "cells": [
+          {
+            "kind": "columnHeader",
+            "rowIndex": 0,
+            "columnIndex": 0,
+            "content": "Item",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  0.8283,
+                  2.1031,
+                  3.1875,
+                  2.1031,
+                  3.1875,
+                  2.4681,
+                  0.8283,
+                  2.4681
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 95,
+                "length": 4
+              }
+            ],
+            "elements": [
+              "/paragraphs/2"
+            ]
+          },
+          {
+            "kind": "columnHeader",
+            "rowIndex": 0,
+            "columnIndex": 1,
+            "content": "Serving",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  3.1875,
+                  2.1031,
+                  4.0256,
+                  2.1031,
+                  4.0256,
+                  2.4681,
+                  3.1875,
+                  2.4681
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 100,
+                "length": 7
+              }
+            ],
+            "elements": [
+              "/paragraphs/3"
+            ]
+          },
+          {
+            "kind": "columnHeader",
+            "rowIndex": 0,
+            "columnIndex": 2,
+            "content": "Total Calories",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  4.0256,
+                  2.1031,
+                  5.0267,
+                  2.1031,
+                  5.0267,
+                  2.4681,
+                  4.0256,
+                  2.4681
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 108,
+                "length": 14
+              }
+            ],
+            "elements": [
+              "/paragraphs/4"
+            ]
+          },
+          {
+            "kind": "columnHeader",
+            "rowIndex": 0,
+            "columnIndex": 3,
+            "content": "Total Fat (g)",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  5.0267,
+                  2.1031,
+                  5.9657,
+                  2.1031,
+                  5.9657,
+                  2.4681,
+                  5.0267,
+                  2.4681
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 123,
+                "length": 13
+              }
+            ],
+            "elements": [
+              "/paragraphs/5"
+            ]
+          },
+          {
+            "kind": "columnHeader",
+            "rowIndex": 0,
+            "columnIndex": 4,
+            "content": "Saturated Fat (g)",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  5.9657,
+                  2.1031,
+                  7.3004,
+                  2.1031,
+                  7.3004,
+                  2.4681,
+                  5.9657,
+                  2.4681
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 137,
+                "length": 17
+              }
+            ],
+            "elements": [
+              "/paragraphs/6"
+            ]
+          },
+          {
+            "kind": "columnHeader",
+            "rowIndex": 0,
+            "columnIndex": 5,
+            "content": "Sodium (mg)",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  7.3004,
+                  2.1031,
+                  8.3559,
+                  2.1031,
+                  8.3559,
+                  2.4681,
+                  7.3004,
+                  2.4681
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 155,
+                "length": 11
+              }
+            ],
+            "elements": [
+              "/paragraphs/7"
+            ]
+          },
+          {
+            "rowIndex": 1,
+            "columnIndex": 0,
+            "content": "Guacamole",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  0.8283,
+                  2.4681,
+                  3.1875,
+                  2.4681,
+                  3.1875,
+                  2.8331,
+                  0.8283,
+                  2.8331
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 167,
+                "length": 9
+              }
+            ],
+            "elements": [
+              "/paragraphs/8"
+            ]
+          },
+          {
+            "rowIndex": 1,
+            "columnIndex": 1,
+            "content": "4 oz",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  3.1875,
+                  2.4681,
+                  4.0256,
+                  2.4681,
+                  4.0256,
+                  2.8331,
+                  3.1875,
+                  2.8331
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 177,
+                "length": 4
+              }
+            ],
+            "elements": [
+              "/paragraphs/9"
+            ]
+          },
+          {
+            "rowIndex": 1,
+            "columnIndex": 2,
+            "content": "230",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  4.0256,
+                  2.4681,
+                  5.0267,
+                  2.4681,
+                  5.0267,
+                  2.8331,
+                  4.0256,
+                  2.8331
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 182,
+                "length": 3
+              }
+            ],
+            "elements": [
+              "/paragraphs/10"
+            ]
+          },
+          {
+            "rowIndex": 1,
+            "columnIndex": 3,
+            "content": "22",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  5.0267,
+                  2.4681,
+                  5.9657,
+                  2.4681,
+                  5.9657,
+                  2.8331,
+                  5.0267,
+                  2.8331
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 186,
+                "length": 2
+              }
+            ],
+            "elements": [
+              "/paragraphs/11"
+            ]
+          },
+          {
+            "rowIndex": 1,
+            "columnIndex": 4,
+            "content": "3.5",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  5.9657,
+                  2.4681,
+                  7.3004,
+                  2.4681,
+                  7.3004,
+                  2.8331,
+                  5.9657,
+                  2.8331
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 189,
+                "length": 3
+              }
+            ],
+            "elements": [
+              "/paragraphs/12"
+            ]
+          },
+          {
+            "rowIndex": 1,
+            "columnIndex": 5,
+            "content": "370",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  7.3004,
+                  2.4681,
+                  8.3559,
+                  2.4681,
+                  8.3559,
+                  2.8331,
+                  7.3004,
+                  2.8331
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 193,
+                "length": 3
+              }
+            ],
+            "elements": [
+              "/paragraphs/13"
+            ]
+          },
+          {
+            "rowIndex": 2,
+            "columnIndex": 0,
+            "content": "Chips",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  0.8283,
+                  2.8331,
+                  3.1875,
+                  2.8331,
+                  3.1875,
+                  3.1903,
+                  0.8283,
+                  3.1903
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 197,
+                "length": 5
+              }
+            ],
+            "elements": [
+              "/paragraphs/14"
+            ]
+          },
+          {
+            "rowIndex": 2,
+            "columnIndex": 1,
+            "content": "4 oz",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  3.1875,
+                  2.8331,
+                  4.0256,
+                  2.8331,
+                  4.0256,
+                  3.1903,
+                  3.1875,
+                  3.1903
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 203,
+                "length": 4
+              }
+            ],
+            "elements": [
+              "/paragraphs/15"
+            ]
+          },
+          {
+            "rowIndex": 2,
+            "columnIndex": 2,
+            "content": "540",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  4.0256,
+                  2.8331,
+                  5.0267,
+                  2.8331,
+                  5.0267,
+                  3.1903,
+                  4.0256,
+                  3.1903
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 208,
+                "length": 3
+              }
+            ],
+            "elements": [
+              "/paragraphs/16"
+            ]
+          },
+          {
+            "rowIndex": 2,
+            "columnIndex": 3,
+            "content": "25",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  5.0267,
+                  2.8331,
+                  5.9657,
+                  2.8331,
+                  5.9657,
+                  3.1903,
+                  5.0267,
+                  3.1903
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 212,
+                "length": 2
+              }
+            ],
+            "elements": [
+              "/paragraphs/17"
+            ]
+          },
+          {
+            "rowIndex": 2,
+            "columnIndex": 4,
+            "content": "3.5",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  5.9657,
+                  2.8331,
+                  7.3004,
+                  2.8331,
+                  7.3004,
+                  3.1903,
+                  5.9657,
+                  3.1903
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 215,
+                "length": 3
+              }
+            ],
+            "elements": [
+              "/paragraphs/18"
+            ]
+          },
+          {
+            "rowIndex": 2,
+            "columnIndex": 5,
+            "content": "390",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  7.3004,
+                  2.8331,
+                  8.3559,
+                  2.8331,
+                  8.3559,
+                  3.1903,
+                  7.3004,
+                  3.1903
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 219,
+                "length": 3
+              }
+            ],
+            "elements": [
+              "/paragraphs/19"
+            ]
+          },
+          {
+            "rowIndex": 3,
+            "columnIndex": 0,
+            "content": "Chicken Bowl",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  0.8283,
+                  3.1903,
+                  3.1875,
+                  3.1903,
+                  3.1875,
+                  3.5476,
+                  0.8205,
+                  3.5476
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 223,
+                "length": 12
+              }
+            ],
+            "elements": [
+              "/paragraphs/20"
+            ]
+          },
+          {
+            "rowIndex": 3,
+            "columnIndex": 1,
+            "content": "4 oz",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  3.1875,
+                  3.1903,
+                  4.0256,
+                  3.1903,
+                  4.0256,
+                  3.5476,
+                  3.1875,
+                  3.5476
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 236,
+                "length": 4
+              }
+            ],
+            "elements": [
+              "/paragraphs/21"
+            ]
+          },
+          {
+            "rowIndex": 3,
+            "columnIndex": 2,
+            "content": "180",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  4.0256,
+                  3.1903,
+                  5.0267,
+                  3.1903,
+                  5.0267,
+                  3.5476,
+                  4.0256,
+                  3.5476
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 241,
+                "length": 3
+              }
+            ],
+            "elements": [
+              "/paragraphs/22"
+            ]
+          },
+          {
+            "rowIndex": 3,
+            "columnIndex": 3,
+            "content": "7",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  5.0267,
+                  3.1903,
+                  5.9657,
+                  3.1903,
+                  5.9657,
+                  3.5476,
+                  5.0267,
+                  3.5476
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 245,
+                "length": 1
+              }
+            ],
+            "elements": [
+              "/paragraphs/23"
+            ]
+          },
+          {
+            "rowIndex": 3,
+            "columnIndex": 4,
+            "content": "3",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  5.9657,
+                  3.1903,
+                  7.3004,
+                  3.1903,
+                  7.3004,
+                  3.5476,
+                  5.9657,
+                  3.5476
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 247,
+                "length": 1
+              }
+            ],
+            "elements": [
+              "/paragraphs/24"
+            ]
+          },
+          {
+            "rowIndex": 3,
+            "columnIndex": 5,
+            "content": "310",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  7.3004,
+                  3.1903,
+                  8.3559,
+                  3.1903,
+                  8.3559,
+                  3.5476,
+                  7.3004,
+                  3.5476
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 249,
+                "length": 3
+              }
+            ],
+            "elements": [
+              "/paragraphs/25"
+            ]
+          },
+          {
+            "rowIndex": 4,
+            "columnIndex": 0,
+            "content": "Steak Burrito",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  0.8205,
+                  3.5476,
+                  3.1875,
+                  3.5476,
+                  3.1875,
+                  3.9126,
+                  0.8205,
+                  3.9126
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 253,
+                "length": 13
+              }
+            ],
+            "elements": [
+              "/paragraphs/26"
+            ]
+          },
+          {
+            "rowIndex": 4,
+            "columnIndex": 1,
+            "content": "4 oz",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  3.1875,
+                  3.5476,
+                  4.0256,
+                  3.5476,
+                  4.0256,
+                  3.9126,
+                  3.1875,
+                  3.9126
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 267,
+                "length": 4
+              }
+            ],
+            "elements": [
+              "/paragraphs/27"
+            ]
+          },
+          {
+            "rowIndex": 4,
+            "columnIndex": 2,
+            "content": "150",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  4.0256,
+                  3.5476,
+                  5.0267,
+                  3.5476,
+                  5.0267,
+                  3.9126,
+                  4.0256,
+                  3.9126
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 272,
+                "length": 3
+              }
+            ],
+            "elements": [
+              "/paragraphs/28"
+            ]
+          },
+          {
+            "rowIndex": 4,
+            "columnIndex": 3,
+            "content": "6",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  5.0267,
+                  3.5476,
+                  5.9657,
+                  3.5476,
+                  5.9657,
+                  3.9126,
+                  5.0267,
+                  3.9126
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 276,
+                "length": 1
+              }
+            ],
+            "elements": [
+              "/paragraphs/29"
+            ]
+          },
+          {
+            "rowIndex": 4,
+            "columnIndex": 4,
+            "content": "2.5",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  5.9657,
+                  3.5476,
+                  7.3004,
+                  3.5476,
+                  7.3004,
+                  3.9126,
+                  5.9657,
+                  3.9126
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 278,
+                "length": 3
+              }
+            ],
+            "elements": [
+              "/paragraphs/30"
+            ]
+          },
+          {
+            "rowIndex": 4,
+            "columnIndex": 5,
+            "content": "330",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  7.3004,
+                  3.5476,
+                  8.3559,
+                  3.5476,
+                  8.3481,
+                  3.9126,
+                  7.3004,
+                  3.9126
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 282,
+                "length": 3
+              }
+            ],
+            "elements": [
+              "/paragraphs/31"
+            ]
+          },
+          {
+            "rowIndex": 5,
+            "columnIndex": 0,
+            "content": "White Rice",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  0.8205,
+                  3.9126,
+                  3.1875,
+                  3.9126,
+                  3.1875,
+                  4.2698,
+                  0.8205,
+                  4.2698
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 286,
+                "length": 10
+              }
+            ],
+            "elements": [
+              "/paragraphs/32"
+            ]
+          },
+          {
+            "rowIndex": 5,
+            "columnIndex": 1,
+            "content": "4 oz",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  3.1875,
+                  3.9126,
+                  4.0256,
+                  3.9126,
+                  4.0256,
+                  4.2698,
+                  3.1875,
+                  4.2698
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 297,
+                "length": 4
+              }
+            ],
+            "elements": [
+              "/paragraphs/33"
+            ]
+          },
+          {
+            "rowIndex": 5,
+            "columnIndex": 2,
+            "content": "210",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  4.0256,
+                  3.9126,
+                  5.0267,
+                  3.9126,
+                  5.0267,
+                  4.2698,
+                  4.0256,
+                  4.2698
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 302,
+                "length": 3
+              }
+            ],
+            "elements": [
+              "/paragraphs/34"
+            ]
+          },
+          {
+            "rowIndex": 5,
+            "columnIndex": 3,
+            "content": "4",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  5.0267,
+                  3.9126,
+                  5.9657,
+                  3.9126,
+                  5.9657,
+                  4.2698,
+                  5.0267,
+                  4.2698
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 306,
+                "length": 1
+              }
+            ],
+            "elements": [
+              "/paragraphs/35"
+            ]
+          },
+          {
+            "rowIndex": 5,
+            "columnIndex": 4,
+            "content": "0.5",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  5.9657,
+                  3.9126,
+                  7.3004,
+                  3.9126,
+                  7.3004,
+                  4.2698,
+                  5.9657,
+                  4.2698
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 308,
+                "length": 3
+              }
+            ],
+            "elements": [
+              "/paragraphs/36"
+            ]
+          },
+          {
+            "rowIndex": 5,
+            "columnIndex": 5,
+            "content": "350",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  7.3004,
+                  3.9126,
+                  8.3481,
+                  3.9126,
+                  8.3481,
+                  4.2698,
+                  7.3004,
+                  4.2698
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 312,
+                "length": 3
+              }
+            ],
+            "elements": [
+              "/paragraphs/37"
+            ]
+          },
+          {
+            "rowIndex": 6,
+            "columnIndex": 0,
+            "content": "Black Beans",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  0.8205,
+                  4.2698,
+                  3.1875,
+                  4.2698,
+                  3.1875,
+                  4.6348,
+                  0.8205,
+                  4.6348
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 316,
+                "length": 11
+              }
+            ],
+            "elements": [
+              "/paragraphs/38"
+            ]
+          },
+          {
+            "rowIndex": 6,
+            "columnIndex": 1,
+            "content": "4 oz",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  3.1875,
+                  4.2698,
+                  4.0256,
+                  4.2698,
+                  4.0256,
+                  4.6348,
+                  3.1875,
+                  4.6348
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 328,
+                "length": 4
+              }
+            ],
+            "elements": [
+              "/paragraphs/39"
+            ]
+          },
+          {
+            "rowIndex": 6,
+            "columnIndex": 2,
+            "content": "130",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  4.0256,
+                  4.2698,
+                  5.0267,
+                  4.2698,
+                  5.0267,
+                  4.6348,
+                  4.0256,
+                  4.6348
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 333,
+                "length": 3
+              }
+            ],
+            "elements": [
+              "/paragraphs/40"
+            ]
+          },
+          {
+            "rowIndex": 6,
+            "columnIndex": 3,
+            "content": "1.5",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  5.0267,
+                  4.2698,
+                  5.9657,
+                  4.2698,
+                  5.9657,
+                  4.6348,
+                  5.0267,
+                  4.6348
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 337,
+                "length": 3
+              }
+            ],
+            "elements": [
+              "/paragraphs/41"
+            ]
+          },
+          {
+            "rowIndex": 6,
+            "columnIndex": 4,
+            "content": "0",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  5.9657,
+                  4.2698,
+                  7.3004,
+                  4.2698,
+                  7.3004,
+                  4.6348,
+                  5.9657,
+                  4.6348
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 341,
+                "length": 1
+              }
+            ],
+            "elements": [
+              "/paragraphs/42"
+            ]
+          },
+          {
+            "rowIndex": 6,
+            "columnIndex": 5,
+            "content": "210",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  7.3004,
+                  4.2698,
+                  8.3481,
+                  4.2698,
+                  8.3481,
+                  4.6348,
+                  7.3004,
+                  4.6348
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 343,
+                "length": 3
+              }
+            ],
+            "elements": [
+              "/paragraphs/43"
+            ]
+          },
+          {
+            "rowIndex": 7,
+            "columnIndex": 0,
+            "content": "Cheese",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  0.8205,
+                  4.6348,
+                  3.1875,
+                  4.6348,
+                  3.1875,
+                  4.9921,
+                  0.8205,
+                  4.9921
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 347,
+                "length": 6
+              }
+            ],
+            "elements": [
+              "/paragraphs/44"
+            ]
+          },
+          {
+            "rowIndex": 7,
+            "columnIndex": 1,
+            "content": "1 oz",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  3.1875,
+                  4.6348,
+                  4.0256,
+                  4.6348,
+                  4.0256,
+                  4.9921,
+                  3.1875,
+                  4.9921
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 354,
+                "length": 4
+              }
+            ],
+            "elements": [
+              "/paragraphs/45"
+            ]
+          },
+          {
+            "rowIndex": 7,
+            "columnIndex": 2,
+            "content": "110",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  4.0256,
+                  4.6348,
+                  5.0267,
+                  4.6348,
+                  5.0267,
+                  4.9921,
+                  4.0256,
+                  4.9921
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 359,
+                "length": 3
+              }
+            ],
+            "elements": [
+              "/paragraphs/46"
+            ]
+          },
+          {
+            "rowIndex": 7,
+            "columnIndex": 3,
+            "content": "8",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  5.0267,
+                  4.6348,
+                  5.9657,
+                  4.6348,
+                  5.9657,
+                  4.9921,
+                  5.0267,
+                  4.9921
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 363,
+                "length": 1
+              }
+            ],
+            "elements": [
+              "/paragraphs/47"
+            ]
+          },
+          {
+            "rowIndex": 7,
+            "columnIndex": 4,
+            "content": "5",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  5.9657,
+                  4.6348,
+                  7.3004,
+                  4.6348,
+                  7.3004,
+                  4.9921,
+                  5.9657,
+                  4.9921
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 365,
+                "length": 1
+              }
+            ],
+            "elements": [
+              "/paragraphs/48"
+            ]
+          },
+          {
+            "rowIndex": 7,
+            "columnIndex": 5,
+            "content": "260",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  7.3004,
+                  4.6348,
+                  8.3481,
+                  4.6348,
+                  8.3481,
+                  4.9921,
+                  7.3004,
+                  4.9921
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 367,
+                "length": 3
+              }
+            ],
+            "elements": [
+              "/paragraphs/49"
+            ]
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              0.8151,
+              2.0928,
+              8.3874,
+              2.0943,
+              8.3875,
+              5.0193,
+              0.8148,
+              5.0169
+            ]
+          }
+        ],
+        "spans": [
+          {
+            "offset": 95,
+            "length": 275
+          }
+        ],
+        "footnotes": [
+          {
+            "content": "Cross-contact occurs during preparation; this sheet does not reflect it.",
+            "boundingRegions": [
+              {
+                "pageNumber": 1,
+                "polygon": [
+                  0.8239,
+                  5.2964,
+                  4.6766,
+                  5.2957,
+                  4.6766,
+                  5.4507,
+                  0.8239,
+                  5.4514
+                ]
+              }
+            ],
+            "spans": [
+              {
+                "offset": 371,
+                "length": 72
+              }
+            ],
+            "elements": [
+              "/paragraphs/50"
+            ]
+          }
+        ]
+      }
+    ],
+    "paragraphs": [
+      {
+        "spans": [
+          {
+            "offset": 0,
+            "length": 15
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              0.8241,
+              0.7939,
+              2.5945,
+              0.7974,
+              2.594,
+              1.0334,
+              0.8236,
+              1.0299
+            ]
+          }
+        ],
+        "role": "title",
+        "content": "Nutrition Facts"
+      },
+      {
+        "spans": [
+          {
+            "offset": 16,
+            "length": 78
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              0.8226,
+              1.1503,
+              5.5316,
+              1.1499,
+              5.5317,
+              1.3174,
+              0.8226,
+              1.3177
+            ]
+          }
+        ],
+        "content": "Published figures per listed serving. Fixture sheet - not a Chipotle document."
+      },
+      {
+        "spans": [
+          {
+            "offset": 95,
+            "length": 4
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              0.8283,
+              2.1031,
+              3.1875,
+              2.1031,
+              3.1875,
+              2.4681,
+              0.8283,
+              2.4681
+            ]
+          }
+        ],
+        "content": "Item"
+      },
+      {
+        "spans": [
+          {
+            "offset": 100,
+            "length": 7
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              3.1875,
+              2.1031,
+              4.0256,
+              2.1031,
+              4.0256,
+              2.4681,
+              3.1875,
+              2.4681
+            ]
+          }
+        ],
+        "content": "Serving"
+      },
+      {
+        "spans": [
+          {
+            "offset": 108,
+            "length": 14
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              4.0256,
+              2.1031,
+              5.0267,
+              2.1031,
+              5.0267,
+              2.4681,
+              4.0256,
+              2.4681
+            ]
+          }
+        ],
+        "content": "Total Calories"
+      },
+      {
+        "spans": [
+          {
+            "offset": 123,
+            "length": 13
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              5.0267,
+              2.1031,
+              5.9657,
+              2.1031,
+              5.9657,
+              2.4681,
+              5.0267,
+              2.4681
+            ]
+          }
+        ],
+        "content": "Total Fat (g)"
+      },
+      {
+        "spans": [
+          {
+            "offset": 137,
+            "length": 17
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              5.9657,
+              2.1031,
+              7.3004,
+              2.1031,
+              7.3004,
+              2.4681,
+              5.9657,
+              2.4681
+            ]
+          }
+        ],
+        "content": "Saturated Fat (g)"
+      },
+      {
+        "spans": [
+          {
+            "offset": 155,
+            "length": 11
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              7.3004,
+              2.1031,
+              8.3559,
+              2.1031,
+              8.3559,
+              2.4681,
+              7.3004,
+              2.4681
+            ]
+          }
+        ],
+        "content": "Sodium (mg)"
+      },
+      {
+        "spans": [
+          {
+            "offset": 167,
+            "length": 9
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              0.8283,
+              2.4681,
+              3.1875,
+              2.4681,
+              3.1875,
+              2.8331,
+              0.8283,
+              2.8331
+            ]
+          }
+        ],
+        "content": "Guacamole"
+      },
+      {
+        "spans": [
+          {
+            "offset": 177,
+            "length": 4
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              3.1875,
+              2.4681,
+              4.0256,
+              2.4681,
+              4.0256,
+              2.8331,
+              3.1875,
+              2.8331
+            ]
+          }
+        ],
+        "content": "4 oz"
+      },
+      {
+        "spans": [
+          {
+            "offset": 182,
+            "length": 3
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              4.0256,
+              2.4681,
+              5.0267,
+              2.4681,
+              5.0267,
+              2.8331,
+              4.0256,
+              2.8331
+            ]
+          }
+        ],
+        "content": "230"
+      },
+      {
+        "spans": [
+          {
+            "offset": 186,
+            "length": 2
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              5.0267,
+              2.4681,
+              5.9657,
+              2.4681,
+              5.9657,
+              2.8331,
+              5.0267,
+              2.8331
+            ]
+          }
+        ],
+        "content": "22"
+      },
+      {
+        "spans": [
+          {
+            "offset": 189,
+            "length": 3
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              5.9657,
+              2.4681,
+              7.3004,
+              2.4681,
+              7.3004,
+              2.8331,
+              5.9657,
+              2.8331
+            ]
+          }
+        ],
+        "content": "3.5"
+      },
+      {
+        "spans": [
+          {
+            "offset": 193,
+            "length": 3
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              7.3004,
+              2.4681,
+              8.3559,
+              2.4681,
+              8.3559,
+              2.8331,
+              7.3004,
+              2.8331
+            ]
+          }
+        ],
+        "content": "370"
+      },
+      {
+        "spans": [
+          {
+            "offset": 197,
+            "length": 5
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              0.8283,
+              2.8331,
+              3.1875,
+              2.8331,
+              3.1875,
+              3.1903,
+              0.8283,
+              3.1903
+            ]
+          }
+        ],
+        "content": "Chips"
+      },
+      {
+        "spans": [
+          {
+            "offset": 203,
+            "length": 4
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              3.1875,
+              2.8331,
+              4.0256,
+              2.8331,
+              4.0256,
+              3.1903,
+              3.1875,
+              3.1903
+            ]
+          }
+        ],
+        "content": "4 oz"
+      },
+      {
+        "spans": [
+          {
+            "offset": 208,
+            "length": 3
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              4.0256,
+              2.8331,
+              5.0267,
+              2.8331,
+              5.0267,
+              3.1903,
+              4.0256,
+              3.1903
+            ]
+          }
+        ],
+        "content": "540"
+      },
+      {
+        "spans": [
+          {
+            "offset": 212,
+            "length": 2
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              5.0267,
+              2.8331,
+              5.9657,
+              2.8331,
+              5.9657,
+              3.1903,
+              5.0267,
+              3.1903
+            ]
+          }
+        ],
+        "content": "25"
+      },
+      {
+        "spans": [
+          {
+            "offset": 215,
+            "length": 3
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              5.9657,
+              2.8331,
+              7.3004,
+              2.8331,
+              7.3004,
+              3.1903,
+              5.9657,
+              3.1903
+            ]
+          }
+        ],
+        "content": "3.5"
+      },
+      {
+        "spans": [
+          {
+            "offset": 219,
+            "length": 3
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              7.3004,
+              2.8331,
+              8.3559,
+              2.8331,
+              8.3559,
+              3.1903,
+              7.3004,
+              3.1903
+            ]
+          }
+        ],
+        "content": "390"
+      },
+      {
+        "spans": [
+          {
+            "offset": 223,
+            "length": 12
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              0.8283,
+              3.1903,
+              3.1875,
+              3.1903,
+              3.1875,
+              3.5476,
+              0.8205,
+              3.5476
+            ]
+          }
+        ],
+        "content": "Chicken Bowl"
+      },
+      {
+        "spans": [
+          {
+            "offset": 236,
+            "length": 4
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              3.1875,
+              3.1903,
+              4.0256,
+              3.1903,
+              4.0256,
+              3.5476,
+              3.1875,
+              3.5476
+            ]
+          }
+        ],
+        "content": "4 oz"
+      },
+      {
+        "spans": [
+          {
+            "offset": 241,
+            "length": 3
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              4.0256,
+              3.1903,
+              5.0267,
+              3.1903,
+              5.0267,
+              3.5476,
+              4.0256,
+              3.5476
+            ]
+          }
+        ],
+        "content": "180"
+      },
+      {
+        "spans": [
+          {
+            "offset": 245,
+            "length": 1
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              5.0267,
+              3.1903,
+              5.9657,
+              3.1903,
+              5.9657,
+              3.5476,
+              5.0267,
+              3.5476
+            ]
+          }
+        ],
+        "content": "7"
+      },
+      {
+        "spans": [
+          {
+            "offset": 247,
+            "length": 1
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              5.9657,
+              3.1903,
+              7.3004,
+              3.1903,
+              7.3004,
+              3.5476,
+              5.9657,
+              3.5476
+            ]
+          }
+        ],
+        "content": "3"
+      },
+      {
+        "spans": [
+          {
+            "offset": 249,
+            "length": 3
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              7.3004,
+              3.1903,
+              8.3559,
+              3.1903,
+              8.3559,
+              3.5476,
+              7.3004,
+              3.5476
+            ]
+          }
+        ],
+        "content": "310"
+      },
+      {
+        "spans": [
+          {
+            "offset": 253,
+            "length": 13
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              0.8205,
+              3.5476,
+              3.1875,
+              3.5476,
+              3.1875,
+              3.9126,
+              0.8205,
+              3.9126
+            ]
+          }
+        ],
+        "content": "Steak Burrito"
+      },
+      {
+        "spans": [
+          {
+            "offset": 267,
+            "length": 4
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              3.1875,
+              3.5476,
+              4.0256,
+              3.5476,
+              4.0256,
+              3.9126,
+              3.1875,
+              3.9126
+            ]
+          }
+        ],
+        "content": "4 oz"
+      },
+      {
+        "spans": [
+          {
+            "offset": 272,
+            "length": 3
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              4.0256,
+              3.5476,
+              5.0267,
+              3.5476,
+              5.0267,
+              3.9126,
+              4.0256,
+              3.9126
+            ]
+          }
+        ],
+        "content": "150"
+      },
+      {
+        "spans": [
+          {
+            "offset": 276,
+            "length": 1
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              5.0267,
+              3.5476,
+              5.9657,
+              3.5476,
+              5.9657,
+              3.9126,
+              5.0267,
+              3.9126
+            ]
+          }
+        ],
+        "content": "6"
+      },
+      {
+        "spans": [
+          {
+            "offset": 278,
+            "length": 3
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              5.9657,
+              3.5476,
+              7.3004,
+              3.5476,
+              7.3004,
+              3.9126,
+              5.9657,
+              3.9126
+            ]
+          }
+        ],
+        "content": "2.5"
+      },
+      {
+        "spans": [
+          {
+            "offset": 282,
+            "length": 3
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              7.3004,
+              3.5476,
+              8.3559,
+              3.5476,
+              8.3481,
+              3.9126,
+              7.3004,
+              3.9126
+            ]
+          }
+        ],
+        "content": "330"
+      },
+      {
+        "spans": [
+          {
+            "offset": 286,
+            "length": 10
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              0.8205,
+              3.9126,
+              3.1875,
+              3.9126,
+              3.1875,
+              4.2698,
+              0.8205,
+              4.2698
+            ]
+          }
+        ],
+        "content": "White Rice"
+      },
+      {
+        "spans": [
+          {
+            "offset": 297,
+            "length": 4
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              3.1875,
+              3.9126,
+              4.0256,
+              3.9126,
+              4.0256,
+              4.2698,
+              3.1875,
+              4.2698
+            ]
+          }
+        ],
+        "content": "4 oz"
+      },
+      {
+        "spans": [
+          {
+            "offset": 302,
+            "length": 3
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              4.0256,
+              3.9126,
+              5.0267,
+              3.9126,
+              5.0267,
+              4.2698,
+              4.0256,
+              4.2698
+            ]
+          }
+        ],
+        "content": "210"
+      },
+      {
+        "spans": [
+          {
+            "offset": 306,
+            "length": 1
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              5.0267,
+              3.9126,
+              5.9657,
+              3.9126,
+              5.9657,
+              4.2698,
+              5.0267,
+              4.2698
+            ]
+          }
+        ],
+        "content": "4"
+      },
+      {
+        "spans": [
+          {
+            "offset": 308,
+            "length": 3
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              5.9657,
+              3.9126,
+              7.3004,
+              3.9126,
+              7.3004,
+              4.2698,
+              5.9657,
+              4.2698
+            ]
+          }
+        ],
+        "content": "0.5"
+      },
+      {
+        "spans": [
+          {
+            "offset": 312,
+            "length": 3
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              7.3004,
+              3.9126,
+              8.3481,
+              3.9126,
+              8.3481,
+              4.2698,
+              7.3004,
+              4.2698
+            ]
+          }
+        ],
+        "content": "350"
+      },
+      {
+        "spans": [
+          {
+            "offset": 316,
+            "length": 11
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              0.8205,
+              4.2698,
+              3.1875,
+              4.2698,
+              3.1875,
+              4.6348,
+              0.8205,
+              4.6348
+            ]
+          }
+        ],
+        "content": "Black Beans"
+      },
+      {
+        "spans": [
+          {
+            "offset": 328,
+            "length": 4
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              3.1875,
+              4.2698,
+              4.0256,
+              4.2698,
+              4.0256,
+              4.6348,
+              3.1875,
+              4.6348
+            ]
+          }
+        ],
+        "content": "4 oz"
+      },
+      {
+        "spans": [
+          {
+            "offset": 333,
+            "length": 3
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              4.0256,
+              4.2698,
+              5.0267,
+              4.2698,
+              5.0267,
+              4.6348,
+              4.0256,
+              4.6348
+            ]
+          }
+        ],
+        "content": "130"
+      },
+      {
+        "spans": [
+          {
+            "offset": 337,
+            "length": 3
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              5.0267,
+              4.2698,
+              5.9657,
+              4.2698,
+              5.9657,
+              4.6348,
+              5.0267,
+              4.6348
+            ]
+          }
+        ],
+        "content": "1.5"
+      },
+      {
+        "spans": [
+          {
+            "offset": 341,
+            "length": 1
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              5.9657,
+              4.2698,
+              7.3004,
+              4.2698,
+              7.3004,
+              4.6348,
+              5.9657,
+              4.6348
+            ]
+          }
+        ],
+        "content": "0"
+      },
+      {
+        "spans": [
+          {
+            "offset": 343,
+            "length": 3
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              7.3004,
+              4.2698,
+              8.3481,
+              4.2698,
+              8.3481,
+              4.6348,
+              7.3004,
+              4.6348
+            ]
+          }
+        ],
+        "content": "210"
+      },
+      {
+        "spans": [
+          {
+            "offset": 347,
+            "length": 6
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              0.8205,
+              4.6348,
+              3.1875,
+              4.6348,
+              3.1875,
+              4.9921,
+              0.8205,
+              4.9921
+            ]
+          }
+        ],
+        "content": "Cheese"
+      },
+      {
+        "spans": [
+          {
+            "offset": 354,
+            "length": 4
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              3.1875,
+              4.6348,
+              4.0256,
+              4.6348,
+              4.0256,
+              4.9921,
+              3.1875,
+              4.9921
+            ]
+          }
+        ],
+        "content": "1 oz"
+      },
+      {
+        "spans": [
+          {
+            "offset": 359,
+            "length": 3
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              4.0256,
+              4.6348,
+              5.0267,
+              4.6348,
+              5.0267,
+              4.9921,
+              4.0256,
+              4.9921
+            ]
+          }
+        ],
+        "content": "110"
+      },
+      {
+        "spans": [
+          {
+            "offset": 363,
+            "length": 1
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              5.0267,
+              4.6348,
+              5.9657,
+              4.6348,
+              5.9657,
+              4.9921,
+              5.0267,
+              4.9921
+            ]
+          }
+        ],
+        "content": "8"
+      },
+      {
+        "spans": [
+          {
+            "offset": 365,
+            "length": 1
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              5.9657,
+              4.6348,
+              7.3004,
+              4.6348,
+              7.3004,
+              4.9921,
+              5.9657,
+              4.9921
+            ]
+          }
+        ],
+        "content": "5"
+      },
+      {
+        "spans": [
+          {
+            "offset": 367,
+            "length": 3
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              7.3004,
+              4.6348,
+              8.3481,
+              4.6348,
+              8.3481,
+              4.9921,
+              7.3004,
+              4.9921
+            ]
+          }
+        ],
+        "content": "260"
+      },
+      {
+        "spans": [
+          {
+            "offset": 371,
+            "length": 72
+          }
+        ],
+        "boundingRegions": [
+          {
+            "pageNumber": 1,
+            "polygon": [
+              0.8239,
+              5.2964,
+              4.6766,
+              5.2957,
+              4.6766,
+              5.4507,
+              0.8239,
+              5.4514
+            ]
+          }
+        ],
+        "content": "Cross-contact occurs during preparation; this sheet does not reflect it."
+      }
+    ],
+    "contentFormat": "text",
+    "sections": [
+      {
+        "spans": [
+          {
+            "offset": 0,
+            "length": 443
+          }
+        ],
+        "elements": [
+          "/paragraphs/0",
+          "/paragraphs/1",
+          "/tables/0",
+          "/paragraphs/50"
+        ]
+      }
+    ]
+  }
+}

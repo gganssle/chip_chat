@@ -68,6 +68,23 @@ class MenuDocuments:
     menus: tuple[CachedDocument, ...]
     meals: tuple[CachedDocument, ...]
 
+    def documents(self) -> tuple[CachedDocument, ...]:
+        """Return every raw document this set holds, in fetch order.
+
+        Issue #22 searches everything a harvest landed for links to PDFs, and
+        it should not have to know which field each set keeps which document
+        in.
+
+        Returns:
+            The documents.
+        """
+        return (
+            self.home,
+            self.ingredients,
+            *self.menus,
+            *self.meals,
+        )
+
 
 def normalise_restaurant_ids(
     restaurant_ids: Sequence[str | int],

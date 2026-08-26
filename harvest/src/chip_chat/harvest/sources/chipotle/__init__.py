@@ -1,14 +1,16 @@
 """Chipotle's published menu, nutrition, allergen and policy data.
 
-Three datasets, one source, two steps each. Issue #19 pulls what Chipotle
+Four datasets, one source, two steps each. Issue #19 pulls what Chipotle
 publishes about its food — items, descriptions, the modifier taxonomy, and
 prices. Issue #20 pulls the safety-critical half: nutrition per item, the
 allergen chart, and the prose Chipotle publishes about what that chart does
 not cover. Issue #21 pulls the policy half: the rewards terms and the rewards
 themselves, the ordering, refund and catering answers, the catering menu, and
-enough real stores that a home store means something. All three land raw bytes
-through the harvest framework and parse them in a second step that never
-touches a network.
+enough real stores that a home store means something. Issue #22 pulls whatever
+of that is published as a PDF, reading it through Azure Document Intelligence
+and checking the tables it finds against the figures the calculator publishes.
+All four land raw bytes through the harvest framework and parse them in a
+second step that never touches a network.
 
 ::
 
@@ -32,9 +34,15 @@ touches a network.
 
 Run it a second time and it makes no requests. Run
 :func:`~chip_chat.harvest.sources.chipotle.menu.load_menu`,
-:func:`~chip_chat.harvest.sources.chipotle.nutrition.load_nutrition` and
-:func:`~chip_chat.harvest.sources.chipotle.policy.load_policy` instead of the
+:func:`~chip_chat.harvest.sources.chipotle.nutrition.load_nutrition`,
+:func:`~chip_chat.harvest.sources.chipotle.policy.load_policy` and
+:func:`~chip_chat.harvest.sources.chipotle.pdf.load_pdfs` instead of the
 harvest functions and it cannot.
+
+The PDF dataset is the one that is empty today, and deliberately so: it goes
+looking for PDF links in what the other three harvested, and on 26 August 2026
+Chipotle published none. It is built for the sheet that appears, not for one
+that is remembered.
 """
 
 from chip_chat.harvest.sources.chipotle.caveats import CaveatBlock, parse_caveats
@@ -98,6 +106,30 @@ from chip_chat.harvest.sources.chipotle.nutrition_records import (
     TagKind,
 )
 from chip_chat.harvest.sources.chipotle.parse import parse_menu
+from chip_chat.harvest.sources.chipotle.pdf import (
+    PdfDocuments,
+    analyze_pdfs,
+    cached_analyses,
+    discover_pdf_urls,
+    documents_of,
+    harvest_pdfs,
+    load_pdfs,
+)
+from chip_chat.harvest.sources.chipotle.pdf_parse import parse_pdfs, table_id_for
+from chip_chat.harvest.sources.chipotle.pdf_records import (
+    DEFAULT_PARSED_PREFIX as DEFAULT_PDF_PREFIX,
+)
+from chip_chat.harvest.sources.chipotle.pdf_records import (
+    TABLES as PDF_TABLES,
+)
+from chip_chat.harvest.sources.chipotle.pdf_records import (
+    Finding,
+    PdfDataset,
+    PdfDocument,
+    PdfNutritionFinding,
+    PdfTable,
+    PdfTableCell,
+)
 from chip_chat.harvest.sources.chipotle.policy import (
     CATERING_URL,
     FAQ_URL,
@@ -148,6 +180,7 @@ __all__ = [
     "CATERING_URL",
     "DEFAULT_NUTRITION_PREFIX",
     "DEFAULT_PARSED_PREFIX",
+    "DEFAULT_PDF_PREFIX",
     "DEFAULT_POLICY_PREFIX",
     "DEFAULT_RESTAURANT_IDS",
     "DEFAULT_STORE_COUNT",
@@ -159,6 +192,7 @@ __all__ = [
     "NUTRITION_TABLES",
     "ONLINE_MENU_PATH",
     "ONLINE_MENU_QUERY",
+    "PDF_TABLES",
     "POLICY_TABLES",
     "REFERENCE_RESTAURANT_ID",
     "REFERENCE_STORE_URL",
@@ -178,6 +212,7 @@ __all__ = [
     "Document",
     "FaqCategory",
     "FaqEntry",
+    "Finding",
     "Ingredient",
     "ItemAllergen",
     "ItemDiet",
@@ -195,6 +230,12 @@ __all__ = [
     "NutritionDataset",
     "NutritionDocuments",
     "OpeningHours",
+    "PdfDataset",
+    "PdfDocument",
+    "PdfDocuments",
+    "PdfNutritionFinding",
+    "PdfTable",
+    "PdfTableCell",
     "PolicyDataset",
     "PolicyDocument",
     "PolicyDocuments",
@@ -208,11 +249,17 @@ __all__ = [
     "StorePage",
     "StoreProfile",
     "TagKind",
+    "analyze_pdfs",
+    "cached_analyses",
+    "discover_pdf_urls",
+    "documents_of",
     "harvest_menu",
     "harvest_nutrition",
+    "harvest_pdfs",
     "harvest_policy",
     "load_menu",
     "load_nutrition",
+    "load_pdfs",
     "load_policy",
     "normalise_restaurant_ids",
     "parse_caveats",
@@ -220,10 +267,12 @@ __all__ = [
     "parse_menu",
     "parse_nutrition",
     "parse_opening_hours",
+    "parse_pdfs",
     "parse_policy",
     "parse_services_config",
     "parse_store_page",
     "select_store_urls",
     "store_page_urls",
+    "table_id_for",
     "to_jsonl",
 ]
