@@ -110,3 +110,22 @@ infra-output: ## Print stack outputs
 
 infra-check-uploads: ## Verify uploaded photos really do expire (read-only)
 	./infra/scripts/check-uploads-retention.sh
+
+# --- Model deployments ------------------------------------------------------
+#
+# These call Azure and spend tokens (a few hundredths of a cent each). They are
+# not part of `make ci` for that reason -- a gate that costs money and needs a
+# logged-in human is not a gate.
+#
+# They read CHIP_CHAT_FOUNDRY_* from the environment. `.env.example` has the
+# live values; export them or use `env $$(grep -v "^#" .env | xargs) make ...`.
+
+.PHONY: verify-models verify-chat verify-vision
+
+verify-models: verify-chat verify-vision ## Prove both model deployments answer
+
+verify-chat: ## Complete a chat call against the deployed chat model
+	$(UV) run python -m chip_chat.agent.verify chat
+
+verify-vision: ## Complete a vision call against an image in blob storage
+	$(UV) run python -m chip_chat.agent.verify vision

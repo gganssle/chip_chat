@@ -181,13 +181,35 @@ variable "web_target_port" {
 
 variable "model_deployments" {
   description = <<-EOT
-    Model deployments on the Foundry account, keyed by deployment name. Empty by
-    default: issue #5 builds the environment, issue #8 chooses the models and
-    confirms quota. Deployment names are configuration precisely so they can be
-    swapped for eval experiments later — see #8's acceptance criteria.
+    Model deployments on the Foundry account, keyed by deployment name.
+
+    The defaults are issue #8's choices. Two things constrained them, and both
+    are worth knowing before editing this map.
+
+    First, quota. Most model families report a limit of **zero** TPM in East US 2
+    on this subscription — gpt-5.4, gpt-5.1, gpt-5, gpt-4o and gpt-4.1 all do —
+    so "the newest model" was never on the menu. Read the real numbers with
+
+      az cognitiveservices usage list -l eastus2 -o table
+
+    and treat a family missing from that list, or present with a limit of 0, as
+    unavailable rather than as something to raise a support ticket about mid-demo.
+
+    Second, blast radius. The chat and vision lanes are deliberately on
+    *different* models so that they draw on different quota pools: a burst of
+    photo uploads cannot starve the agent's conversational TPM, and vice versa.
+    That is the main reason they are not one deployment used twice.
 
     Capacity is thousands of tokens per minute and is a spend control as much as
-    a performance setting. See terraform.tfvars.example for the intended shape.
+    a performance setting. Both GlobalStandard deployments are pay-per-token and
+    carry no standing hourly charge — only a provisioned SKU would. See
+    docs/phase-0-verification.md for the measured verification and the prices.
+
+    Deployment names are model names, and the *role* mapping lives in
+    configuration (CHIP_CHAT_FOUNDRY_CHAT_DEPLOYMENT and
+    ...VISION_DEPLOYMENT), not here. That is what makes an eval experiment a new
+    entry in this map plus an environment variable, rather than a rename that
+    breaks whatever was pointing at the old name.
   EOT
   type = map(object({
     model_name    = string
@@ -196,7 +218,36 @@ variable "model_deployments" {
     sku_name      = optional(string, "GlobalStandard")
     capacity      = optional(number, 10)
   }))
-  default = {}
+
+  default = {
+    # The agent's chat and tool-calling model. `agentsV2` capable, which is what
+    # the hosted agent runtime (docs/decisions/foundry-agent-shape.md) needs.
+    # Cheapest input token of anything with quota here, and input is where an
+    # agent loop spends: every tool result is replayed into the next request.
+    "gpt-5-mini" = {
+      model_name    = "gpt-5-mini"
+      model_version = "2025-08-07"
+      sku_name      = "GlobalStandard"
+      capacity      = 10
+    }
+
+    # The photo lane's model. Non-reasoning on purpose: describing a burrito bowl
+    # is a single-shot perception call, and a reasoning model would bill thinking
+    # tokens for it. Cheaper output than gpt-5-mini, and its own quota pool.
+    "gpt-4.1-mini" = {
+      model_name    = "gpt-4.1-mini"
+      model_version = "2025-04-14"
+      sku_name      = "GlobalStandard"
+      capacity      = 10
+    }
+  }
+
+  validation {
+    condition = alltrue([
+      for d in values(var.model_deployments) : !can(regex("Provisioned", d.sku_name))
+    ])
+    error_message = "Provisioned SKUs bill by the hour whether or not a token is spent. Nothing in this stack prevents that spend — see docs/phase-0-verification.md. Use a Standard SKU."
+  }
 }
 
 # --- Adoption of the Phase 0 role assignments -------------------------------

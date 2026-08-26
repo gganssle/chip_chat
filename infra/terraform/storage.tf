@@ -143,6 +143,16 @@ resource "azurerm_role_assignment" "app_data_blob_contributor" {
   principal_type       = "ServicePrincipal"
 }
 
+# The developer's own grant on the same account (issue #8). Shared keys are off,
+# so there is no connection string to fall back on: without this, `az login`
+# credentials cannot read the photo the vision verification uploads, and the
+# harvest cannot write to the raw landing zone from a laptop either.
+resource "azurerm_role_assignment" "developer_data_blob_contributor" {
+  scope                = azurerm_storage_account.data.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = data.azurerm_client_config.current.object_id
+}
+
 # The Functions runtime needs blob, queue and table on its own storage account
 # when it is running without a connection string. Owner rather than Contributor
 # on blob because the host manages leases and container ACLs for itself.
