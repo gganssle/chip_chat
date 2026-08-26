@@ -129,3 +129,53 @@ verify-chat: ## Complete a chat call against the deployed chat model
 
 verify-vision: ## Complete a vision call against an image in blob storage
 	$(UV) run python -m chip_chat.agent.verify vision
+
+# --- Deploying the chat app -------------------------------------------------
+#
+# Terraform owns the estate; a deploy owns the image. compute.tf deliberately
+# ignores changes to the container image, so `terraform apply` never drags a
+# deployed app back to the quickstart placeholder -- which means the image is
+# pushed and rolled here rather than there.
+#
+# docs/deployment.md is the write-up, including why `provisioningState:
+# Succeeded` is not the same as "deployed".
+
+IMAGE_NAME ?= chip-chat-web
+IMAGE_TAG  ?= latest
+# linux/amd64 explicitly: Container Apps runs amd64 and this repository is
+# developed on Apple silicon, where the default build would be arm64 and would
+# fail to start with an exec-format error nobody enjoys diagnosing.
+IMAGE_PLATFORM ?= linux/amd64
+
+REGISTRY = $(shell $(TF_RUN) output -raw container_registry_login_server)
+IMAGE    = $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
+APP      = $(shell $(TF_RUN) output -raw container_app_name)
+APP_URL  = $(shell $(TF_RUN) output -raw web_url)
+RG       = $(shell $(TF_RUN) output -raw resource_group_name)
+
+.PHONY: image image-push deploy deploy-check
+
+image: ## Build the chat app image for Container Apps
+	docker buildx build --platform $(IMAGE_PLATFORM) -t $(IMAGE) --load .
+
+image-push: ## Push it, authenticating with your own Entra token
+	az acr login --name $(shell $(TF_RUN) output -raw container_registry_name)
+	docker push $(IMAGE)
+
+deploy: ## Roll the Container App onto the pushed image
+	az containerapp update -n $(APP) -g $(RG) --image $(IMAGE) -o none
+	@$(MAKE) deploy-check
+
+deploy-check: ## Wait until the NEWEST revision is the one actually serving
+	@echo "Waiting for $(APP_URL)"
+	@echo "  provisioningState says Succeeded long before this is true."
+	@for i in $$(seq 1 40); do \
+		latest=$$(az containerapp show -n $(APP) -g $(RG) --query properties.latestRevisionName -o tsv); \
+		ready=$$(az containerapp show -n $(APP) -g $(RG) --query properties.latestReadyRevisionName -o tsv); \
+		if [ "$$latest" = "$$ready" ] && \
+		   [ "$$(curl -s -o /dev/null -w '%{http_code}' $(APP_URL)/healthz)" = "200" ]; then \
+			echo "  serving $$ready at $(APP_URL)"; exit 0; \
+		fi; \
+		sleep 10; \
+	done; \
+	echo "  not serving after 400s -- see docs/deployment.md section 3.3"; exit 1
