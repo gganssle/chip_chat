@@ -13,6 +13,7 @@ contributor — human or agent — has them locally. Read them in this order.
 | [local-setup.md](local-setup.md) | Getting a machine from clean to a passing `make ci` — CLIs, authentication, and how secrets reach a local process |
 | [local-tracing.md](local-tracing.md) | The development loop with Phoenix: start the stack, send a turn, read the span tree |
 | [lakehouse-catalog.md](lakehouse-catalog.md) | The Unity Catalog layout — six medallion schemas, who may write to them, and the two jobs that check both claims against the live workspace |
+| [bronze-ingestion.md](bronze-ingestion.md) | How both streams get out of ADLS and into bronze — the Auto Loader options, what a row carries, where a malformed document goes, and the run that checked all four claims |
 | [deployment.md](deployment.md) | Getting the chat app onto the public URL — the procedure, and the ten things that surprised the first person to do it |
 | [chipotle-nutrition-spot-check.md](chipotle-nutrition-spot-check.md) | What the harvested nutrition and allergen data was checked against by hand, and when |
 | [chipotle-policy-spot-check.md](chipotle-policy-spot-check.md) | The same, for the harvested rewards, FAQ, catering and store data |
@@ -44,7 +45,9 @@ deployment guide records how the app reaches the public URL — and, more useful
 what turned out not to work the way the documentation implies. The lakehouse
 catalogue guide does the same for Unity Catalog: the schema layout and the
 grants, and the two jobs that prove lineage resolves and the read-only principal
-really is refused.
+really is refused. The bronze-ingestion guide continues it one layer up: the
+pipeline that fills those schemas, the four Auto Loader properties issue #33
+asks for, and the job that asserts each of them against the live workspace.
 
 The texture report is evidence of a different kind again, and the only document here
 that is *generated*. Issue #28 asks that "the data is interesting" become visible rather

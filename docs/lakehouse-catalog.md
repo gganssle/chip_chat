@@ -71,7 +71,9 @@ share a namespace, which is the blur this layout exists to prevent.
 
 `databricks/src/chip_chat/databricks/catalog.py` carries the same layout for the
 pipelines in #33 and #34, and `databricks/tests/test_catalog_layout.py` fails
-`make ci` if the two ever disagree.
+`make ci` if the two ever disagree. It is also uploaded verbatim into the
+workspace and imported by the bronze pipeline, which is why it imports nothing
+but the standard library — see [bronze-ingestion.md](bronze-ingestion.md) §1.
 
 ## 2. Who may do what
 
@@ -223,8 +225,9 @@ that table-to-table lineage alone would not have shown.
 
 ## 5. What this does not do
 
-- **No tables.** #33 lands bronze from ADLS with Auto Loader; #34 builds silver
-  and gold. The `lineage_probe` tables are evidence, not data.
+- **No tables.** The `lineage_probe` tables are evidence, not data. #33 has
+  since landed bronze from ADLS with Auto Loader — see
+  [bronze-ingestion.md](bronze-ingestion.md) — and #34 builds silver and gold.
 - **No MLflow model registry.** The recommender registered in Unity Catalog is
   later in Phase 3.
 - **No Snowflake publish.** Gold is where this project's two halves meet, and

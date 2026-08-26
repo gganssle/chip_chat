@@ -231,6 +231,30 @@ resource "databricks_permissions" "job_policy_usage" {
   }
 }
 
+# The same grant on the pipeline policy, and it is a separate resource because a
+# cluster policy's ACL is authoritative for the policy it names -- one resource
+# covering both would be one resource replacing both.
+#
+# ⚠️ A POLICY IS NOT USABLE BY THE PRINCIPAL A PIPELINE RUNS AS UNTIL THIS
+# EXISTS, and the failure does not name the principal. Creating the pipeline
+# succeeds, `terraform apply` reports no drift, and the *update* fails two
+# seconds in with
+#
+#     Failed to create a pipeline cluster: PERMISSION_DENIED: You are not
+#     authorized to access this cluster policy.
+#
+# which reads like the policy is broken rather than like a grant is missing.
+# The jobs principal held CAN_USE on the job policy since gh-31 and nothing
+# implied it here. Found by hitting it on `dbw-chip-chat`, 2026-08-26 (gh-33).
+resource "databricks_permissions" "pipeline_policy_usage" {
+  cluster_policy_id = databricks_cluster_policy.pipeline_single_node.id
+
+  access_control {
+    service_principal_name = databricks_service_principal.jobs.application_id
+    permission_level       = "CAN_USE"
+  }
+}
+
 # --- How the app tier authenticates, and why there is no secret ---------------
 #
 # Issue #31 asks for "a service principal for automated jobs; PAT stored in Key

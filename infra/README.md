@@ -697,6 +697,80 @@ so a syntax mistake cannot make it pass.
 
 ---
 
+## Bronze ingestion
+
+Issue #33. One Lakeflow Spark Declarative Pipeline, `chip-chat-bronze-ingest`,
+carrying both streams out of the ADLS landing zone and into `bronze_harvested`
+and `bronze_synthetic` — ten streaming tables and a quarantine view per stream.
+
+`docs/bronze-ingestion.md` is the full write-up, including the five things that
+did not work the way the documentation implies. The short version:
+
+| | |
+| --- | --- |
+| Pipeline | `chip-chat-bronze-ingest`, triggered (`continuous = false`), `development = false`, no schedule, single-node under `chip-chat-pipeline-single-node` |
+| Source | `databricks/notebooks/bronze_ingest.py` — a loop over `chip_chat.databricks.bronze.SOURCES` |
+| Packaging | `bronze.py` and `catalog.py` are uploaded as **workspace files** beside the notebook and imported off `sys.path`; both are stdlib-only so that this works, and `make ci` asserts they agree with the harvest, the generator, the Terraform and the notebook |
+| Idempotence | Auto Loader's per-table file ledger under `abfss://lakehouse@…/_autoloader/<schema>/<table>`. `cloudFiles.allowOverwrites` is deliberately off |
+| Quarantine | `_rescued_data IS NOT NULL OR <every identity column> IS NULL`, surfaced as `_quarantined` and as a view per stream. Nothing is dropped |
+| Verification | `chip-chat-bronze-verify`, manual trigger, asserts its own result |
+
+### Bronze, verified
+
+Against `dbw-chip-chat`, 2026-08-26. The landing zone was seeded from the
+committed fixtures through the real writers — a live harvest would have made paid
+Document Intelligence calls #22 has already made once — and the population is the
+full 500-customer one.
+
+| | |
+| --- | --- |
+| Cold start | Pipeline update `ff4e1703` with `--full-refresh`: **COMPLETED** in 333 s, 289 s of it waiting for the VM |
+| Re-run | Update `11f2087d` over an unchanged landing zone: **COMPLETED**, no count changed |
+| Malformed input | Update `4792873c`, two deliberately malformed documents seeded: **COMPLETED** |
+| **Assertions** | `chip-chat-bronze-verify` run `416167014729058`: **SUCCESS** — 10 tables, both streams, `COUNT(*) = COUNT(DISTINCT identity)` everywhere, 2 rows quarantined |
+
+Row counts: 84 `raw_documents` (82 harvested plus the 2 malformed, which landed
+flagged rather than being dropped), 79 `raw_bodies`, 1 `document_analyses`, and
+on the synthetic side 500 / 18,898 / 48,767 / 32,234 / 28 / 7 / 1 — every one the
+generator's own number, to the row.
+
+### Three ways this failed first
+
+> ⚠️ **A pipeline's `run_as` principal needs `CAN_USE` on the pipeline policy.**
+> The jobs principal had it on the *job* policy from #31 and nothing implied it
+> here. `terraform apply` reports no drift; the update fails two seconds in with
+> `PERMISSION_DENIED: You are not authorized to access this cluster policy`,
+> which reads like the policy is broken.
+
+> ⚠️ **A `%md` cell that also holds code runs none of the code.** Databricks
+> renders everything below `# MAGIC %md` in the same cell. The pipeline failed
+> with `[NO_TABLES_IN_PIPELINE]`, which reads like the decorators are wrong.
+> `databricks/tests/test_bronze.py` now asserts no markdown cell holds code.
+
+> ⚠️ **`pathGlobFilter`, not `cloudFiles.pathGlobFilter`.** It is a generic
+> file-source option, and Auto Loader validates its own namespace: the prefixed
+> spelling is accepted at plan time and refused at stream start with
+> `CF_UNKNOWN_OPTION_KEYS_ERROR` naming the key lower-cased.
+
+`docs/bronze-ingestion.md` §3 has the other two, both about what the rescued data
+column does and does not catch.
+
+### Verifying it
+
+```bash
+cd infra/terraform
+databricks pipelines start-update $(terraform output -raw databricks_bronze_pipeline_id)
+databricks jobs run-now $(terraform output -raw databricks_bronze_verify_job_id)
+```
+
+In that order: the second reads what the first writes. The verify job reads and
+never writes, runs on the same single-node job compute as #31's and #32's, and
+raises rather than returns if any claim fails — so SUCCESS is the assertion
+passing. It returns its row counts as the run's notebook output, which is how the
+numbers above were quoted without opening the workspace.
+
+---
+
 ## Identifiers
 
 Everything below is a resource id or a public endpoint. **No secrets are recorded

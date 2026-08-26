@@ -278,3 +278,23 @@ output "databricks_readonly_job_id" {
   description = "Attempts five writes as the read-only principal and requires every one to be refused. Run the lineage job first — this one reads what it writes."
   value       = var.databricks_unity_catalog_enabled ? databricks_job.uc_readonly_denied[0].id : null
 }
+
+output "databricks_bronze_pipeline_id" {
+  description = "The bronze Auto Loader pipeline (gh-33). Start an update with: databricks pipelines start-update <id>. Null while var.databricks_unity_catalog_enabled is false."
+  value       = var.databricks_unity_catalog_enabled ? databricks_pipeline.bronze[0].id : null
+}
+
+output "databricks_bronze_checkpoint_uri" {
+  description = "Where Auto Loader keeps each bronze table's inferred schema and its record of which files it has consumed. Deleting a table's directory here is what makes that table re-ingest everything."
+  value       = local.bronze_checkpoint_uri
+}
+
+output "raw_landing_zone_uri" {
+  description = "The ADLS landing zone the harvest writes to and bronze reads from."
+  value       = local.uc_probe_raw_uri
+}
+
+output "databricks_bronze_verify_job_id" {
+  description = "Asserts gh-33's acceptance criteria against the bronze tables. Run it after the pipeline with: databricks jobs run-now <id>"
+  value       = var.databricks_unity_catalog_enabled ? databricks_job.bronze_verify[0].id : null
+}
