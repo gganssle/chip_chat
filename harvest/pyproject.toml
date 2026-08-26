@@ -3,7 +3,10 @@ name = "chip-chat-harvest"
 version = "0.0.0"
 description = "Public menu, nutrition, and policy ingestion."
 requires-python = ">=3.13"
-dependencies = ["chip-chat-otel"]
+dependencies = [
+    "chip-chat-otel",
+    "httpx>=0.28",
+]
 
 [build-system]
 requires = ["hatchling"]

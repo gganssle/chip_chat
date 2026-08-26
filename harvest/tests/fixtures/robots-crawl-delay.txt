@@ -1,0 +1,6 @@
+# The same site, asking politely for more room than our default gives it.
+
+User-agent: *
+Allow: /api/
+Disallow: /private/
+Crawl-delay: 5
