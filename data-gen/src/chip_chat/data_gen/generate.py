@@ -36,6 +36,7 @@ from chip_chat.catalog import MenuCatalog, Store
 from chip_chat.data_gen.baskets import Line, Palate, compose, mint_palate, repeatable
 from chip_chat.data_gen.catalogue import OrderableMenu
 from chip_chat.data_gen.config import GeneratorConfig, PersonaSpec
+from chip_chat.data_gen.fixtures import entree_ids, measure_customers, select_fixtures
 from chip_chat.data_gen.loyalty import ledger_for
 from chip_chat.data_gen.records import (
     DEMO_ID_FORMAT,
@@ -155,12 +156,21 @@ def generate_population(
         )
         visitors.append(_visitor(config, demo_id, spec, stores, mine, created_at, taken))
 
+    # Issue #26's fixtures are chosen last because they cannot be chosen
+    # earlier: which customer best demonstrates being a Regular is a fact
+    # about eighteen months of their history, and the history does not exist
+    # until it has been generated.
+    facts = measure_customers(
+        visitors, orders, items, ledger, entree_ids(menu), ends_at.astimezone(UTC)
+    )
+
     return SyntheticPopulation(
         seed=config.seed,
         catalog_content_version=menu.content_version,
         window_starts_at=starts_at.astimezone(UTC),
         window_ends_at=ends_at.astimezone(UTC),
         personas=personas,
+        persona_fixtures=select_fixtures(facts, config, catalog, stores),
         demo_visitors=tuple(visitors),
         orders=tuple(orders),
         order_items=tuple(items),

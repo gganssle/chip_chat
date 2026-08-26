@@ -42,11 +42,12 @@ population.write(blobs)
 `--config path` replaces the parameters wholesale, which is how the population is
 retuned.
 
-## Five tables come out
+## Six tables come out
 
 | Table | Rows | What it is |
 | --- | --- | --- |
 | `personas` | 7 | The archetypes, from the config. |
+| `persona_fixtures` | 28 | The customers worth showing a visitor. Four per archetype, each measured. |
 | `demo_visitors` | 500 | The synthetic customers. A public visitor is assigned one. |
 | `orders` | ~19k | One order, at one store, at one instant, for one published total. |
 | `order_items` | ~49k | Its lines: a real item, built from real modifiers. |
@@ -57,7 +58,7 @@ real catalogue has more food in it and the same number of customers.
 
 `docs/decisions/synthetic-population.md` argues the five columns these carry that
 RFC-001 §04 does not list, and why `personas` is a table of archetypes rather than
-of customers.
+of customers. `docs/decisions/persona-fixtures.md` argues the sixth table.
 
 ## The two properties everything else serves
 
@@ -101,6 +102,54 @@ Dirichlet draw over everything orderable, concentration in the config — so one
 guacamole one and another never orders a drink. Their *usual* falls out of the same
 draw, which is why the regular's usual is theirs and not their archetype's.
 
+## The fixtures
+
+`personas` says what kinds of customer exist. **`persona_fixtures` says which
+particular ones a visitor is assigned**, which is a different question and one the
+population cannot answer until it has been generated — whether a customer is a good
+Regular is a fact about eighteen months of their history.
+
+Four per archetype, ranked best first, each carrying a sentence written from their own
+data:
+
+```
+[regular #1]  demo-0033
+  a regular at ID Town 1 Mall, 773 points on the card, and 99% of 80 orders the same
+  Steak Burrito with guacamole, white rice, black beans and cheese.
+
+[lapsed #1]   demo-0486
+  a regular at NC Town 1 Mall until March 2026, and not seen since -- 1,871 points
+  still unredeemed from 44 orders.
+
+[explorer #1] demo-0497
+  49 orders across 15 stores and 45 different baskets among them; the nearest thing to
+  a usual is Steak Burrito with white rice, black beans and cheese, and that is only
+  4% of them.
+```
+
+Those three are PRD §02's personas, and each is selected on the measurement the PRD
+names for it — the Regular on having a usual dominant enough for a one-turn reorder,
+the Lapsed Customer on months of silence *and* unredeemed points, the Explorer on
+having no usual at all, which is the feature that exercises the honest "I am not sure
+what your usual is" path.
+
+**A customer becomes a fixture only by clearing every bound its archetype sets**, in
+`[personas.fixture]`. There is no score and no partial credit, because the ticket's
+rule is absolute: if a fixture cannot demonstrate its own metric, it is not finished.
+An archetype whose customers cannot supply four contributes the ones it has and the
+CLI says so — never a customer promoted past criteria it failed, which is how a demo
+ends up assigning someone "the Regular" who has no usual.
+
+Every number in a narrative is a column on the row beside it and every food in one is
+a published catalogue name, both asserted, so a sentence can be checked rather than
+trusted. No narrative carries a display name: that column is editable, and #67 joins
+the live name to the sentence at entry.
+
+Three things the table does not claim — that its `usual_share` is the `usual_order`
+mart's `confidence`, that its personas vary by *food* (issue #28), or that its points
+are reconciled rewards (issue #27). `docs/decisions/persona-fixtures.md` has the
+arguments.
+
 ## Retuning it
 
 Every number is in `src/chip_chat/data_gen/population.toml` and nowhere else, which
@@ -122,13 +171,20 @@ The knobs worth knowing about:
 - `[orders]`, `[loyalty]` — statuses and the rewards arithmetic. The loyalty numbers
   are provisional until issue #27 reconciles them against the published terms.
 - `[[personas]]` — the archetypes.
+- `[personas.fixture]` — what makes a customer of that archetype worth showing a
+  visitor: the narrative template, a ranking measure, and bounds under `at_least` and
+  `at_most`. Both may name any measure in `chip_chat.data_gen.config.MEASURES`; a name
+  outside it is refused rather than treated as a bound that never bites, because a
+  criterion misspelt into inertness would let an archetype ship fixtures that
+  demonstrate nothing.
 
 ## What this package does not do
 
 - **Prove the population is not thin.** That is issue #28, and it needs a real
   harvest: the committed fixture catalogue has two entrees in it, so variety of
   *food* is not assertable here. Variety of *behaviour* is, and `test_texture.py`
-  asserts it.
+  and `test_fixtures.py` assert it — the first across the archetypes, the second on
+  the individual customers a visitor is actually assigned.
 - **Reconcile the ledger against published rewards terms.** Issue #27.
 - **Write to ADLS.** `write()` takes a `BlobStore`, the same interface the harvest
   and the catalogue land through; an ADLS Gen2 implementation is `cc-b15`.

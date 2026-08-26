@@ -107,3 +107,39 @@ def test_the_prefixes_can_be_moved(landing: Path, small: Path) -> None:
     assert run(landing, small, "--prefix", "accounts/experiment") == 0
 
     assert (landing / "accounts" / "experiment" / "orders.jsonl").is_file()
+
+
+def test_it_says_how_many_fixtures_each_archetype_supplied(
+    landing: Path, small: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Issue #26's roster, reported where whoever retuned the file is looking."""
+    assert run(landing, small) == 0
+
+    reported = capsys.readouterr().err
+
+    assert "persona fixtures (4 wanted each)" in reported
+    for persona_id in ("regular", "lapsed", "explorer"):
+        assert persona_id in reported
+
+
+def test_it_warns_when_an_archetype_cannot_fill_its_roster(
+    landing: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A thin roster is the cold-start risk arriving quietly, so it is said out loud.
+
+    Forty customers cannot supply four exemplars of all seven archetypes, and
+    the right response is fewer fixtures plus a warning — never a customer
+    promoted past criteria it failed.
+    """
+    config = tmp_path / "thin.toml"
+    config.write_text(
+        PACKAGED.read_text(encoding="utf-8").replace("customers = 500", "customers = 40"),
+        encoding="utf-8",
+    )
+
+    assert main(["--landing", str(landing), "--config", str(config)]) == 0
+
+    reported = capsys.readouterr().err
+
+    assert "warning:" in reported
+    assert "clear its own criteria" in reported

@@ -20,19 +20,27 @@ unreachable rather than merely untested by
 :class:`~chip_chat.data_gen.catalogue.OrderableMenu`, which is the only source
 of an identifier in the package.
 
+Which customers a visitor is actually assigned is issue #26's question, and
+:mod:`chip_chat.data_gen.fixtures` answers it: ``persona_fixtures`` holds the
+exemplars of each archetype, each admitted only by clearing the bounds its
+archetype sets on its own defining behaviour, each carrying a narrative
+written from its real history.
+
 The numbers that shape the population are in ``population.toml`` and nowhere
-else; ``data-gen/README.md`` says which knob does what, and
-``docs/decisions/synthetic-population.md`` argues the four columns this
-package carries that RFC-001 section 04 does not list.
+else; ``data-gen/README.md`` says which knob does what, and the decision
+records under ``docs/decisions/`` argue the columns this package carries that
+RFC-001 section 04 does not list.
 """
 
 from chip_chat.data_gen.baskets import Line, Palate, compose, mint_palate
 from chip_chat.data_gen.catalogue import Buildable, OrderableMenu, SlotChoices
 from chip_chat.data_gen.config import (
+    MEASURES,
     PACKAGED_CONFIG,
     WEEKDAY_NAMES,
     CatalogueConfig,
     Distribution,
+    FixtureSpec,
     GeneratorConfig,
     LoyaltyConfig,
     NameConfig,
@@ -42,6 +50,12 @@ from chip_chat.data_gen.config import (
     load_config,
 )
 from chip_chat.data_gen.errors import ConfigError, GeneratorError, ThinCatalogError
+from chip_chat.data_gen.fixtures import (
+    CustomerFacts,
+    entree_ids,
+    measure_customers,
+    select_fixtures,
+)
 from chip_chat.data_gen.generate import generate_population
 from chip_chat.data_gen.records import (
     DEFAULT_PREFIX,
@@ -52,12 +66,14 @@ from chip_chat.data_gen.records import (
     Order,
     OrderItem,
     Persona,
+    PersonaFixture,
     SyntheticPopulation,
 )
 from chip_chat.otel import service_name
 
 __all__ = [
     "DEFAULT_PREFIX",
+    "MEASURES",
     "PACKAGED_CONFIG",
     "SERVICE_NAME",
     "TABLES",
@@ -66,8 +82,10 @@ __all__ = [
     "CatalogueConfig",
     "Channel",
     "ConfigError",
+    "CustomerFacts",
     "DemoVisitor",
     "Distribution",
+    "FixtureSpec",
     "GeneratorConfig",
     "GeneratorError",
     "Line",
@@ -80,6 +98,7 @@ __all__ = [
     "OrderableMenu",
     "Palate",
     "Persona",
+    "PersonaFixture",
     "PersonaSpec",
     "SlotChoices",
     "SyntheticPopulation",
@@ -87,9 +106,12 @@ __all__ = [
     "TimingConfig",
     "__version__",
     "compose",
+    "entree_ids",
     "generate_population",
     "load_config",
+    "measure_customers",
     "mint_palate",
+    "select_fixtures",
     "service_name",
 ]
 
