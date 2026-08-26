@@ -3,11 +3,8 @@
 Six stages, and RFC-001 section 07 is explicit that their ordering is the
 design. Moderation happens before inference so nothing unmoderated reaches a
 model; SKU resolution happens after inference so no model output is trusted as
-a product identifier. What lives here today is stages 1 to 4 -- the whole path
-from a hostile upload to a structured description nothing downstream has to
-trust as a product identifier:
-a product identifier. What lives here today is everything that happens
-before a model is involved at all:
+a product identifier. What lives here today is stages 0 to 5 -- the whole path
+from a hostile upload to a draft of real catalogue rows:
 
 =========== ================================================= ==================
 Stage       What it does                                      Where
@@ -17,18 +14,14 @@ Stage       What it does                                      Where
 2 Normalize Strip metadata, re-encode, downscale              ``normalize``
 3 Moderate  Content Safety, then the write                    ``moderation``
 4 Describe  Structured slots, no free text                    ``describe``
-5 Resolve   Deterministic catalogue match                     issue #54
+5 Resolve   Deterministic catalogue match                     ``matcher``
 6 Propose   Priced, confirmable draft                         issue #62
 =========== ================================================= ==================
 
-The first three decide whether a hostile upload ever reaches a model, so they
-are written to be the boring part: no inference, one entry point, and an order
-it cannot be run out of. The fourth is the one that involves a model, and it is
-arranged so that the model's answer cannot become a product name -- see
-:mod:`chip_chat.vision.describe`.
-Those first four are what decides whether a hostile upload ever reaches a model,
-so they are written to be the boring part: no inference, one entry point, and an
-order it cannot be run out of.
+The first four decide whether a hostile upload ever reaches a model, so they are
+written to be the boring part: no inference, one entry point, and an order it
+cannot be run out of. The fifth is the one that names a product, and it is the
+one with no model in it -- see :mod:`chip_chat.vision.matcher`.
 
 .. code-block:: python
 
@@ -87,7 +80,22 @@ field it may return is not on the object the matcher receives. See
     )
     description = describer.describe(photo.blob_ref)
     show(description.notes)          # display-only, and the only reader
-    resolve(description.meal)        # issue #54. There are no notes on it.
+
+**Nothing is named that the catalogue does not publish.** Stage 5 is ordinary
+deterministic code holding a :class:`~chip_chat.catalog.records.MenuCatalog`,
+and the only path from a described meal to a product identifier is a lookup in
+it. A required slot below its floor becomes a question rather than a guess. See
+:mod:`chip_chat.vision.matcher`.
+
+.. code-block:: python
+
+    matcher = MealMatcher(load_catalog(blobs), rules=SlotRules.from_env())
+    resolution = matcher.resolve(          # the meal. There are no notes on it.
+        description.meal, content_version=description.content_version
+    )
+    if resolution.resolved:
+        return card(resolution.items(), resolution.total())
+    return ask(resolution)                 # issue #55 writes the sentence
 """
 
 from chip_chat.otel import service_name
@@ -108,6 +116,19 @@ from chip_chat.vision.describe import (
 )
 from chip_chat.vision.intake import PhotoIntake, StoredPhoto
 from chip_chat.vision.limits import SUPPORTED_MEDIA_TYPES, UploadLimits
+from chip_chat.vision.matcher import (
+    REQUIRED_SLOTS,
+    CatalogueDriftError,
+    Clarification,
+    ClarificationReason,
+    DiscardedSlot,
+    MealMatcher,
+    Outcome,
+    Resolution,
+    ResolvedItem,
+    SlotRule,
+    SlotRules,
+)
 from chip_chat.vision.moderation import (
     SEVERITY_LEVELS,
     AzureImageAnalyzer,
@@ -150,6 +171,7 @@ from chip_chat.vision.vocabulary import SchemaViolationError, Vocabulary, Vocabu
 __all__ = [
     "DESCRIBE_UNAVAILABLE_MESSAGE",
     "NORMALIZED_MEDIA_TYPE",
+    "REQUIRED_SLOTS",
     "RETENTION_CEILING_HOURS",
     "RETENTION_NOTICE",
     "RETENTION_NOTICE_LONG",
@@ -165,23 +187,33 @@ __all__ = [
     "BlobRef",
     "BlobStore",
     "ByteStream",
+    "CatalogueDriftError",
+    "Clarification",
+    "ClarificationReason",
     "ConfidenceProfile",
     "DescribeError",
     "DescribeUnavailableError",
     "DescribedMeal",
     "Description",
     "DescriptionRejectedError",
+    "DiscardedSlot",
     "ImageAnalyzer",
     "ImageModerator",
     "MealDescriber",
+    "MealMatcher",
     "ModerationThresholds",
     "ModerationUnavailableError",
     "ModerationVerdict",
     "NormalizedImage",
+    "Outcome",
     "PhotoIntake",
     "RejectionReason",
+    "Resolution",
+    "ResolvedItem",
     "SafetyCategory",
     "SchemaViolationError",
+    "SlotRule",
+    "SlotRules",
     "SlotValue",
     "StoredPhoto",
     "UploadLimits",

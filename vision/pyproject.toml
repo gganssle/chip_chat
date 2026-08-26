@@ -5,6 +5,11 @@ description = "Photo pipeline: validate, moderate, describe, match."
 requires-python = ">=3.13"
 dependencies = [
     "chip-chat-otel",
+    # Stage 5 resolves described slots to catalogue rows, so it holds a
+    # `MenuCatalog`. Stage 4's vocabulary is still loaded by dotted name at
+    # runtime -- the generated module is not committed -- and nothing in this
+    # package but `matcher.py` imports the catalogue.
+    "chip-chat-catalog",
     "pillow>=11.1",
     "pillow-heif>=0.21",
     "azure-storage-blob>=12.24",
@@ -24,4 +29,5 @@ build-backend = "hatchling.build"
 packages = ["src/chip_chat"]
 
 [tool.uv.sources]
+chip-chat-catalog = { workspace = true }
 chip-chat-otel = { workspace = true }

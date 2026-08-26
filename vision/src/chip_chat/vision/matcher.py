@@ -110,8 +110,8 @@ __all__ = [
     "DiscardedSlot",
     "MealMatcher",
     "Outcome",
-    "ResolvedItem",
     "Resolution",
+    "ResolvedItem",
     "SlotRule",
     "SlotRules",
 ]
@@ -322,7 +322,9 @@ class SlotRules:
         try:
             return self.rules[slot]
         except KeyError:
-            raise KeyError(f"no threshold is configured for the {slot.value} slot") from None
+            raise KeyError(
+                f"no threshold is configured for the {slot.value} slot"
+            ) from None
 
     @property
     def required(self) -> tuple[Slot, ...]:
@@ -591,6 +593,7 @@ class MealMatcher:
         *,
         restaurant_id: int | None = None,
         content_version: str | None = None,
+        image_ref: str | None = None,
         step: int = 0,
     ) -> Resolution:
         """Resolve one meal, opening the spans above ``matcher.resolve`` as well.
@@ -605,6 +608,12 @@ class MealMatcher:
             meal: The stage-4 description.
             restaurant_id: Whose prices to quote.
             content_version: The build the description was constrained by.
+            image_ref: The photograph the tool was called on, for the tool
+                span's arguments -- the same ``str(blob_ref)`` stage 4 records
+                and, as there, a reference rather than bytes. Omitted when
+                there is no photograph behind the description, which is the
+                case for a matcher test and for a described meal typed by a
+                visitor.
             step: The ``agent.step`` index to record.
 
         Returns:
@@ -613,9 +622,10 @@ class MealMatcher:
         Raises:
             CatalogueDriftError: As :meth:`resolve`.
         """
+        arguments = {} if image_ref is None else {"image_ref": image_ref}
         with (
             agent_step(index=step),
-            tool_call(ToolName.MATCH_MEAL_FROM_PHOTO, arguments={}),
+            tool_call(ToolName.MATCH_MEAL_FROM_PHOTO, arguments=arguments),
         ):
             return self.resolve(
                 meal, restaurant_id=restaurant_id, content_version=content_version
@@ -623,9 +633,7 @@ class MealMatcher:
 
     # --- the resolution itself ---------------------------------------------
 
-    def _resolve(
-        self, meal: DescribedMeal, restaurant: int, version: str
-    ) -> Resolution:
+    def _resolve(self, meal: DescribedMeal, restaurant: int, version: str) -> Resolution:
         """Decide the outcome and, where there is one, build the draft."""
         declined = _declined(meal)
         if declined is not None:
@@ -682,28 +690,41 @@ class MealMatcher:
         """
         believed: dict[Slot, SlotValue] = {}
         for slot in (Slot.VESSEL, Slot.PROTEIN):
-            value: SlotValue | None = getattr(self, "_slot_value")(meal, slot)
+            value = _single(meal, slot)
             problem = self._believe(slot, value)
-            if problem is not None:
-                clarifications.append(problem)
+            if problem is not None or value is None:
+                clarifications.append(
+                    problem
+                    if problem is not None
+                    else Clarification(slot=slot, reason=ClarificationReason.MISSING)
+                )
                 continue
-            assert value is not None  # noqa: S101 - _believe returned no problem
             believed[slot] = value
-        if len(believed) != 2:
+        vessel = believed.get(Slot.VESSEL)
+        protein = believed.get(Slot.PROTEIN)
+        if vessel is None or protein is None:
             return None
 
-        vessel, protein = believed[Slot.VESSEL], believed[Slot.PROTEIN]
         item = self._entrees.get((vessel.value, protein.value))
         if item is None:
-            # The menu sells a Chicken Bowl and a Steak Burrito; a described
-            # steak bowl is two real terms and no real row. Refusing is the
-            # whole of D3 -- the nearest entree is a fabricated order.
+            # Two real terms and no real row: the menu sells a Chicken Bowl and
+            # a Steak Burrito and a described steak bowl is neither. Refusing is
+            # the whole of D3 -- the nearest entree is a fabricated order.
+            #
+            # It is the *pair* that failed, so which half to ask about is a
+            # choice. Ask about the one the model was less sure of: it is the
+            # likelier mistake, and asking about the confident half reads to a
+            # visitor as not having looked at the photograph.
+            asked = min(
+                ((Slot.VESSEL, vessel), (Slot.PROTEIN, protein)),
+                key=lambda pair: pair[1].confidence,
+            )
             clarifications.append(
                 Clarification(
-                    slot=Slot.PROTEIN,
+                    slot=asked[0],
                     reason=ClarificationReason.NO_CATALOGUE_ROW,
-                    term=protein.value,
-                    confidence=protein.confidence,
+                    term=asked[1].value,
+                    confidence=asked[1].confidence,
                 )
             )
             return None
@@ -792,11 +813,6 @@ class MealMatcher:
             )
         return None
 
-    def _slot_value(self, meal: DescribedMeal, slot: Slot) -> SlotValue | None:
-        """Read one single-valued slot off the description."""
-        value: SlotValue | None = getattr(meal, slot.value)
-        return value
-
     def _offered(self, item_id: str, slot: Slot, term: str) -> Modifier | None:
         """Return the modifier row this entree offers for ``term`` in ``slot``.
 
@@ -860,9 +876,7 @@ def _entree_index(catalog: MenuCatalog) -> Mapping[tuple[str, str], MenuItem]:
     return index
 
 
-def _terms(
-    vocabulary: Sequence[VocabularyTerm], slot: Slot
-) -> Mapping[str, str]:
+def _terms(vocabulary: Sequence[VocabularyTerm], slot: Slot) -> Mapping[str, str]:
     """Map one slot's terms to the published names they were derived from."""
     return {row.value: row.name for row in vocabulary if row.slot is slot}
 
@@ -872,8 +886,7 @@ def _modifier_index(
 ) -> Mapping[tuple[str, str], Modifier]:
     """Map ``(entree item id, modifier item id)`` to the row joining them."""
     return {
-        (modifier.item_id, modifier.modifier_item_id): modifier
-        for modifier in modifiers
+        (modifier.item_id, modifier.modifier_item_id): modifier for modifier in modifiers
     }
 
 
@@ -901,6 +914,12 @@ def _declined(meal: DescribedMeal) -> Outcome | None:
     if not meal.is_chipotle_style:
         return Outcome.NOT_ORDERABLE
     return None
+
+
+def _single(meal: DescribedMeal, slot: Slot) -> SlotValue | None:
+    """Read one single-valued slot off the description."""
+    value: SlotValue | None = getattr(meal, slot.value)
+    return value
 
 
 def _filled(meal: DescribedMeal) -> tuple[tuple[Slot, SlotValue], ...]:

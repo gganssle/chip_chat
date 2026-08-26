@@ -16,6 +16,13 @@ assertable against a ``BytesIO``: one has no cost and the other never lies about
 its length. These two count their reads and charge a clock, so a test can settle
 both without waiting for real seconds to pass.
 
+:func:`menu_catalog` builds a :class:`~chip_chat.catalog.records.MenuCatalog`
+out of the same fixture terms :func:`generated_vocabulary` renders a module
+from, so that a stage-4 answer and the stage-5 catalogue it resolves against
+always come from one build. Building it from the real record classes rather than
+mirroring them is possible here because ``chip-chat-vision`` depends on
+``chip-chat-catalog`` for the matcher -- there is nothing to keep in step.
+
 :func:`photo_with_location` is the interesting one. "EXIF is stripped" is only
 a meaningful assertion if the fixture actually had EXIF to lose, and only a
 *sufficient* assertion if the fixture also had the other places a camera writes
@@ -31,18 +38,31 @@ import zlib
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from decimal import Decimal
 from io import BytesIO
 from types import ModuleType
 from typing import Any
 
 from PIL import Image
 
+from chip_chat.catalog.records import (
+    AllergenDisclosure,
+    Derivation,
+    ItemPrice,
+    MenuCatalog,
+    MenuItem,
+    Modifier,
+    Slot,
+    VocabularyTerm,
+)
 from chip_chat.otel import ToolName, agent_step, tool_call
 from chip_chat.vision.moderation import ModerationUnavailableError, SafetyCategory
 from chip_chat.vision.store import BlobRef
 from chip_chat.vision.vocabulary import Vocabulary
 
 __all__ = [
+    "COMPARISON_RESTAURANT",
     "DEFAULT_TERMS",
     "DESCRIBED_MEAL",
     "ELF_BINARY",
@@ -50,6 +70,7 @@ __all__ = [
     "GZIP_ARCHIVE",
     "HTML_PAGE",
     "PDF_DOCUMENT",
+    "REFERENCE_RESTAURANT",
     "SHELL_SCRIPT",
     "SVG_WITH_SCRIPT",
     "XMP_LOCATION_MARKER",
@@ -65,9 +86,11 @@ __all__ = [
     "generated_vocabulary",
     "jpeg_signed_but_not_jpeg",
     "jpeg_with_appended_archive",
+    "menu_catalog",
     "photo_tool_call",
     "photo_with_location",
     "png_declaring",
+    "published",
     "safe_severities",
     "solid_image",
     "vocabulary_module",
@@ -821,3 +844,265 @@ class TricklingStream:
         self.reads += 1
         self._clock.advance(self._seconds)
         return self._chunk[:size]
+
+
+# --- stage 5: a catalogue to resolve against ---------------------------------
+#
+# The matcher needs a menu, and a menu that came from a different build than the
+# vocabulary is the drift `MealMatcher` raises on. So both are built here from
+# one set of terms: `generated_vocabulary(terms)` renders what the model may
+# say, and `menu_catalog(terms)` publishes rows for exactly those terms.
+
+REFERENCE_RESTAURANT = 679
+"""The fixture catalogue's reference restaurant."""
+
+COMPARISON_RESTAURANT = 1200
+"""A second restaurant, priced higher.
+
+Money is per restaurant because Chipotle's really is, so a fixture with one
+restaurant in it cannot tell a matcher that quotes the right prices from one
+that quotes the only prices it has.
+"""
+
+_HARVESTED_AT = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+_MENU_URL = "https://services.chipotle.test/menu"
+_COMPARISON_MARKUP = Decimal("1.20")
+"""What the second restaurant charges, as a multiple of the first."""
+
+_ENTREE_SLOTS = (Slot.VESSEL, Slot.PROTEIN)
+
+_DERIVATIONS: Mapping[Slot, Derivation] = {
+    Slot.VESSEL: Derivation.ITEM_TYPE,
+    Slot.PROTEIN: Derivation.PRIMARY_FILLING,
+    Slot.RICE: Derivation.MODIFIER_TYPE,
+    Slot.BEANS: Derivation.MODIFIER_TYPE,
+    Slot.SALSAS: Derivation.NAME_SUFFIX,
+    Slot.TOPPINGS: Derivation.MODIFIER_TYPE,
+}
+"""How each slot's terms are derived, spelled the way the real build spells it."""
+
+
+def published(term: str) -> str:
+    """Return the published name a fixture term stands for.
+
+    The inverse of ``chip_chat.catalog.vocabulary.slug`` for terms simple enough
+    to have one, which every fixture term is. It exists so that the vocabulary
+    row's ``name`` and the ``menu_items`` column the matcher joins it to are the
+    same string for the same reason they are in a real build -- one derivation,
+    not two spellings.
+
+    Args:
+        term: A vocabulary term, e.g. ``white_rice``.
+
+    Returns:
+        The published name, e.g. ``White Rice``.
+    """
+    return " ".join(part.capitalize() for part in term.split("_"))
+
+
+def menu_catalog(
+    terms: Mapping[str, Sequence[str]] | None = None,
+    *,
+    without: Sequence[tuple[str, str]] = (),
+    unpriced: Sequence[str] = (),
+) -> MenuCatalog:
+    """Build a catalogue publishing rows for exactly ``terms``.
+
+    Every vessel term crossed with every protein term is an entree, which is
+    what makes ``without`` useful: a real menu sells a Chicken Bowl and a Steak
+    Burrito and no Steak Bowl, and "two real terms, no real row" is the case the
+    matcher must refuse rather than round off.
+
+    Every modifier term is published under **one item identifier per vessel**,
+    the way Chipotle publishes guacamole under one identifier on a burrito and
+    another on a taco. The vocabulary row carries both as candidates and the
+    ``modifiers`` table decides which one a given entree means, so a matcher
+    that resolved a term without consulting the entree would land on the wrong
+    row and price it wrong.
+
+    Args:
+        terms: Slot name to the terms it publishes. Defaults to
+            :data:`DEFAULT_TERMS`, so ``menu_catalog()`` and
+            ``generated_vocabulary()`` describe one build.
+        without: ``(vessel term, protein term)`` pairs the menu does not sell.
+        unpriced: Terms and vessel terms whose items get no ``item_prices`` row
+            at all, for the case where a total cannot honestly be quoted.
+
+    Returns:
+        The catalogue.
+    """
+    published_terms = DEFAULT_TERMS if terms is None else terms
+    vessels = tuple(published_terms.get(Slot.VESSEL.value, ()))
+    proteins = tuple(published_terms.get(Slot.PROTEIN.value, ()))
+    excluded = set(without)
+
+    items: list[MenuItem] = []
+    modifiers: list[Modifier] = []
+    vocabulary: list[VocabularyTerm] = []
+    priced: dict[str, Decimal] = {}
+    unpriced_terms = set(unpriced)
+
+    for vessel in vessels:
+        vocabulary.append(_term(Slot.VESSEL, vessel, ()))
+    for protein in proteins:
+        vocabulary.append(_term(Slot.PROTEIN, protein, ()))
+
+    entrees: dict[str, str] = {}
+    for index, (vessel, protein) in enumerate(
+        (vessel, protein) for vessel in vessels for protein in proteins
+    ):
+        if (vessel, protein) in excluded:
+            continue
+        item_id = f"CMG-{100 + index}"
+        entrees[item_id] = vessel
+        items.append(
+            _menu_item(
+                item_id=item_id,
+                name=f"{published(protein)} {published(vessel)}",
+                category="Entree",
+                item_type=published(vessel),
+                primary_filling=published(protein),
+                composed=True,
+            )
+        )
+        if vessel not in unpriced_terms:
+            priced[item_id] = Decimal("9.00") + index
+
+    for slot in (Slot.RICE, Slot.BEANS, Slot.SALSAS, Slot.TOPPINGS):
+        for offset, term in enumerate(published_terms.get(slot.value, ())):
+            candidates: list[str] = []
+            for position, vessel in enumerate(vessels):
+                modifier_item_id = (
+                    f"CMG-{5000 + 100 * _SLOT_ORDER[slot] + 10 * offset + position}"
+                )
+                candidates.append(modifier_item_id)
+                items.append(
+                    _menu_item(
+                        item_id=modifier_item_id,
+                        name=published(term),
+                        category=None,
+                        item_type=published(slot.value),
+                        primary_filling=None,
+                        composed=False,
+                    )
+                )
+                if term not in unpriced_terms:
+                    priced[modifier_item_id] = Decimal("0.50") * position + offset
+                for entree_id, entree_vessel in entrees.items():
+                    if entree_vessel != vessel:
+                        continue
+                    modifiers.append(
+                        _modifier(entree_id, modifier_item_id, published(term), slot)
+                    )
+            vocabulary.append(_term(slot, term, tuple(sorted(candidates))))
+
+    prices = [
+        ItemPrice(
+            restaurant_id=restaurant,
+            item_id=item_id,
+            unit_price=amount * markup,
+            unit_delivery_price=amount * markup * Decimal("1.30"),
+            is_available=True,
+            eligible_for_delivery=True,
+            source_url=_MENU_URL,
+            harvested_at=_HARVESTED_AT,
+        )
+        for restaurant, markup in (
+            (REFERENCE_RESTAURANT, Decimal(1)),
+            (COMPARISON_RESTAURANT, _COMPARISON_MARKUP),
+        )
+        for item_id, amount in sorted(priced.items())
+    ]
+
+    return MenuCatalog(
+        reference_restaurant_id=REFERENCE_RESTAURANT,
+        restaurant_ids=(REFERENCE_RESTAURANT, COMPARISON_RESTAURANT),
+        menu_items=tuple(items),
+        item_prices=tuple(prices),
+        modifiers=tuple(modifiers),
+        stores=(),
+        item_allergens=(),
+        allergens=(),
+        caveats=(),
+        vocabulary=tuple(vocabulary),
+    )
+
+
+_SLOT_ORDER: Mapping[Slot, int] = {
+    Slot.RICE: 0,
+    Slot.BEANS: 1,
+    Slot.SALSAS: 2,
+    Slot.TOPPINGS: 3,
+}
+"""Keeps each slot's fixture identifiers in their own block, for legible failures."""
+
+
+def _menu_item(
+    *,
+    item_id: str,
+    name: str,
+    category: str | None,
+    item_type: str,
+    primary_filling: str | None,
+    composed: bool,
+) -> MenuItem:
+    """One ``menu_items`` row, with the provenance every real row carries."""
+    return MenuItem(
+        item_id=item_id,
+        name=name,
+        category=category,
+        item_type=item_type,
+        primary_filling=primary_filling,
+        description=None,
+        calories=None,
+        is_composed=composed,
+        allergens=(),
+        allergen_disclosure=AllergenDisclosure.NOT_PUBLISHED,
+        source_url=_MENU_URL,
+        harvested_at=_HARVESTED_AT,
+        nutrition_source_url=None,
+        nutrition_harvested_at=None,
+        allergen_source_url=None,
+        allergen_harvested_at=None,
+    )
+
+
+def _modifier(item_id: str, modifier_item_id: str, name: str, slot: Slot) -> Modifier:
+    """One ``modifiers`` row joining a modifier item to the entree offering it."""
+    return Modifier(
+        modifier_id=f"{item_id}:{modifier_item_id}",
+        item_id=item_id,
+        modifier_item_id=modifier_item_id,
+        name=name,
+        slot=slot,
+        derivation=_DERIVATIONS[slot],
+        group_name=None,
+        modifier_type=published(slot.value),
+        min_quantity=None,
+        max_quantity=None,
+        is_default=False,
+        delta_calories=None,
+        portion_options=(),
+        source_url=_MENU_URL,
+        harvested_at=_HARVESTED_AT,
+        nutrition_source_url=None,
+        nutrition_harvested_at=None,
+    )
+
+
+def _term(slot: Slot, value: str, item_ids: tuple[str, ...]) -> VocabularyTerm:
+    """One ``vocabulary`` row: what the model may say, and what it may mean.
+
+    ``item_ids`` is empty for a vessel and a protein, exactly as the real build
+    leaves it: each is half of an entree, and a matcher that could resolve
+    either half alone would name a SKU without knowing what was in it.
+    """
+    return VocabularyTerm(
+        slot=slot,
+        value=value,
+        name=published(value),
+        item_ids=item_ids,
+        derivation=_DERIVATIONS[slot],
+        source_url=_MENU_URL,
+        harvested_at=_HARVESTED_AT,
+    )

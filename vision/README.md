@@ -5,15 +5,10 @@ ordering is the design**: moderation happens before inference so nothing
 unmoderated reaches a model, and SKU resolution happens after inference so no
 model output is trusted as a product identifier.
 
-What is implemented here is stages 1 to 4. The first three happen before a model
-is involved at all and decide whether a hostile upload ever reaches something
-that will. The fourth is the model call, and it is arranged so that its answer
-cannot become a product name.
-What is implemented here is everything that happens before a model is involved
-at all — the three stages RFC-001 numbers, plus the bounded read in front of
-them that [#80](https://github.com/gganssle/chip_chat/issues/80) added. Nothing
-here decides what a photograph *is*. It decides whether a hostile upload ever
-reaches something that will.
+What is implemented here is stages 0 to 5 — the whole path from a hostile upload
+to a draft of real catalogue rows. The first four happen before anything names a
+product and decide whether a hostile upload ever reaches a model; the fifth is
+the step that names one, and it is the step with no model in it.
 
 | Stage | What it does | Where |
 | --- | --- | --- |
@@ -22,7 +17,7 @@ reaches something that will.
 | 2 Normalize | Strip metadata, re-encode, downscale | `normalize.py` |
 | 3 Moderate | Content Safety, then the write | `moderation.py`, `store.py` |
 | 4 Describe | Structured slots, no free text | `describe.py`, `vocabulary.py` |
-| 5 Resolve | Deterministic catalogue match | [#54](https://github.com/gganssle/chip_chat/issues/54) |
+| 5 Resolve | Deterministic catalogue match | `matcher.py` |
 | 6 Propose | Priced, confirmable draft | [#62](https://github.com/gganssle/chip_chat/issues/62) |
 
 ## Using it
@@ -98,6 +93,27 @@ resolve(description.meal)  # #54. There are no notes on it.
 the callers that are not the agent (a batch over the labeled photo set, a
 script), `describe_as_tool()` opens those two spans itself.
 
+Stage 5 takes the meal, and a catalogue:
+
+```python
+from chip_chat.catalog import load_catalog
+from chip_chat.vision import MealMatcher, Outcome, SlotRules
+
+matcher = MealMatcher(load_catalog(blobs), rules=SlotRules.from_env())
+
+resolution = matcher.resolve(
+    description.meal,                      # no notes on it to parse
+    restaurant_id=session.store_id,
+    content_version=description.content_version,
+)
+if resolution.resolved:
+    return card(resolution.items(), resolution.total())   # #62 renders it
+return ask(resolution)                                    # #55 writes it
+```
+
+`matcher.resolve` is the other child of `tool.<tool_name>`, so the same rule
+applies and `resolve_as_tool()` is the same escape hatch.
+
 **The vocabulary has to be generated before any of this runs.** It is not
 committed, on purpose:
 
@@ -108,8 +124,7 @@ python -m chip_chat.catalog --landing landing --offline \
 export CHIP_CHAT_VISION_VOCABULARY=chip_chat.vision_vocabulary
 ```
 
-## Five properties, each easy to undo by accident
-## Five properties, each easy to undo by accident
+## Six properties, each easy to undo by accident
 
 ### Nothing is read unbounded
 
