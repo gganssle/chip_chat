@@ -16,7 +16,14 @@ import textwrap
 import pytest
 from openinference.semconv.trace import SpanAttributes
 
-from chip_chat.agent.loop import Conversation, TurnResult, run_turn
+from chip_chat.agent.hardcoded import ACCOUNT, STORE
+from chip_chat.agent.loop import (
+    PROMPT_VERSION,
+    SYSTEM_PROMPT,
+    Conversation,
+    TurnResult,
+    run_turn,
+)
 from chip_chat.agent.model import ModelReply, ToolInvocation
 from chip_chat.agent.orders import OrderDesk
 from chip_chat.agent.testing import ScriptedModel, answer, calls_tool
@@ -61,9 +68,34 @@ def one_turn(
     return result
 
 
-def test_the_system_prompt_is_the_first_message(conversation: Conversation) -> None:
-    assert conversation.messages[0]["role"] == "system"
-    assert "three items" in conversation.messages[0]["content"]
+def test_the_prompt_comes_first_and_today_s_facts_come_second(
+    conversation: Conversation,
+) -> None:
+    """Two system messages, and the split is the point.
+
+    The first is versioned and invariant, so ``chip_chat.prompt.version``
+    identifies bytes rather than a visitor. The second carries what actually
+    varies -- the account, the menu, which tools are registered today -- and
+    never reaches the digest.
+    """
+    prompt, context = conversation.messages[0], conversation.messages[1]
+
+    assert prompt["role"] == context["role"] == "system"
+    assert prompt["content"] == SYSTEM_PROMPT
+    assert "three items" not in prompt["content"]
+    assert "BOWL-CHICKEN" in context["content"]
+    assert ACCOUNT.display_name in context["content"]
+
+
+def test_the_versioned_prompt_says_nothing_about_this_menu_or_this_visitor() -> None:
+    """Otherwise the version would move whenever a visitor did.
+
+    A digest that changed because somebody was called Sam identifies nothing,
+    and an Arize experiment grouping on it would be grouping on noise.
+    """
+    assert ACCOUNT.display_name not in SYSTEM_PROMPT
+    assert STORE.name not in SYSTEM_PROMPT
+    assert PROMPT_VERSION.startswith("v1+")
 
 
 def test_a_menu_question_is_one_search_and_two_round_trips(

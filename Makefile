@@ -172,7 +172,7 @@ infra-check-uploads: ## Verify uploaded photos really do expire (read-only)
 # They read CHIP_CHAT_FOUNDRY_* from the environment. `.env.example` has the
 # live values; export them or use `env $$(grep -v "^#" .env | xargs) make ...`.
 
-.PHONY: verify-models verify-chat verify-vision
+.PHONY: verify-models verify-chat verify-vision verify-tools verify-tools-bare
 
 verify-models: verify-chat verify-vision ## Prove both model deployments answer
 
@@ -181,6 +181,18 @@ verify-chat: ## Complete a chat call against the deployed chat model
 
 verify-vision: ## Complete a vision call against an image in blob storage
 	$(UV) run python -m chip_chat.agent.verify vision
+
+# Registers the eleven tools against the deployed model and reports which lane it
+# picked for each case. `verify-tools-bare` sends the same cases with no system
+# prompt: the gap between the two runs is how much of lane selection the prompt
+# is carrying, and issue #60 wants that gap small. Pass --deployment to compare
+# models, which is the variable the first runs found actually mattered.
+
+verify-tools: ## Measure tool selection across the five lanes
+	$(UV) run python -m chip_chat.agent.selection
+
+verify-tools-bare: ## The same cases, with no system prompt at all
+	$(UV) run python -m chip_chat.agent.selection --no-prompt
 
 # --- Deploying the chat app -------------------------------------------------
 #

@@ -582,6 +582,7 @@ def chat_turn(
     message: str | None = None,
     persona_id: str | None = None,
     demo_id: str | None = None,
+    prompt_version: str | None = None,
 ) -> Iterator[TurnRecorder]:
     """Open ``chat.turn``, the root of one visitor message.
 
@@ -592,6 +593,9 @@ def chat_turn(
         persona_id: The synthetic account being browsed as, if one is bound.
         demo_id: Opaque correlation value only -- never an identity input. See
             :attr:`~chip_chat.otel.attributes.ChipChatAttributes.DEMO_ID`.
+        prompt_version: Which system prompt the turn ran under, from
+            :attr:`chip_chat.agent.prompt.SystemPrompt.version`. Root span only:
+            an experiment groups on it to attribute a score change to a prompt.
 
     Yields:
         A :class:`TurnRecorder` for the root span.
@@ -605,6 +609,8 @@ def chat_turn(
     turn_token = _turn.set(identity)
     try:
         attributes: dict[str, AttributeValue] = {}
+        if prompt_version is not None:
+            attributes[ChipChatAttributes.PROMPT_VERSION] = prompt_version
         if message is not None:
             attributes[SpanAttributes.INPUT_VALUE] = message
             attributes[SpanAttributes.INPUT_MIME_TYPE] = (
