@@ -8,7 +8,7 @@ asks for exactly this and says why:
 > enough to debug. […] write down anything that surprised you, because that is
 > the deliverable that makes this issue worth doing early.
 
-Nine things surprised me. They are in section 3. Sections 1 and 2 are the
+Ten things surprised me. They are in section 3. Sections 1 and 2 are the
 procedure, so that the next deploy is not also an investigation.
 
 ---
@@ -161,7 +161,28 @@ unreadable path as not thrown, so it costs nothing and blocks nothing — but th
 honest statement is that there is one working kill switch, not three, and it is
 the one that restarts the container.
 
-### 3.9 The bug only the deployment could find
+### 3.9 Ingress sheds load before the app's rate limiter sees it
+
+Twenty-five simultaneous requests against the deployed app produced twenty
+`200`s and five `503`s — and the `503`s came from Container Apps ingress, not
+from the app. With `max_replicas = 1` and an HTTP scale rule of twenty
+concurrent requests, there is nowhere for the twenty-first to go.
+
+This is not harmful — a request the app never receives costs no tokens, so the
+platform is a cruder spend control sitting in front of the careful one. But two
+things follow, and neither is what the design assumed:
+
+- The **per-source rate limit was never observed firing in production.** It is
+  unit-tested and concurrency-tested (`api/tests/test_source_ratelimit.py`,
+  `test_concurrency.py`), and the burst that should have tripped it was shed
+  upstream instead. Sequential requests do not trip it either, because the model
+  takes two to three seconds and twenty of those do not fit in a sixty-second
+  window. It is real, and it is waiting for a caller fast enough to reach it.
+- **A burst does not produce the stop state.** It produces the platform's 503.
+  The designed "Cilantro's had a busy day" copy is what a visitor sees when a
+  *ceiling* refuses them, not when the front door is full.
+
+### 3.10 The bug only the deployment could find
 
 The first deployed run refused to place a confirmed order. Every unit test
 passed. The model was calling `place_order`, the desk was correctly refusing it,

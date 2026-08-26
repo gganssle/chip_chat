@@ -12,7 +12,7 @@ contributor — human or agent — has them locally. Read them in this order.
 | [service-inventory.md](service-inventory.md) | Verified service names, tiers, quotas and prices — and where the three documents above are now wrong |
 | [local-setup.md](local-setup.md) | Getting a machine from clean to a passing `make ci` — CLIs, authentication, and how secrets reach a local process |
 | [local-tracing.md](local-tracing.md) | The development loop with Phoenix: start the stack, send a turn, read the span tree |
-| [deployment.md](deployment.md) | Getting the chat app onto the public URL — the procedure, and the nine things that surprised the first person to do it |
+| [deployment.md](deployment.md) | Getting the chat app onto the public URL — the procedure, and the ten things that surprised the first person to do it |
 | [chipotle-nutrition-spot-check.md](chipotle-nutrition-spot-check.md) | What the harvested nutrition and allergen data was checked against by hand, and when |
 | [chipotle-policy-spot-check.md](chipotle-policy-spot-check.md) | The same, for the harvested rewards, FAQ, catering and store data |
 | [chipotle-pdf-spot-check.md](chipotle-pdf-spot-check.md) | The same, for the PDF path — including the finding that Chipotle publishes none, and the live Document Intelligence round trip that checks the reader anyway |

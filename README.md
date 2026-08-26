@@ -78,6 +78,7 @@ Key Vault URI, and the monthly budget guarding it — is recorded in
 make setup      # fresh clone -> working state (needs uv on PATH)
 make ci         # format check, lint, type check, import contracts, tests
 make dev        # start the local stack and send one instrumented turn through it
+make deploy     # roll the chat app onto the public URL (see docs/deployment.md)
 make help       # everything else
 ```
 
@@ -95,9 +96,18 @@ not installed yet.
 
 ## Status
 
-Planning complete; implementation not started. The build plan runs twelve phases over roughly five
-weeks of evenings and weekends. Phase 0 is Terraform scaffolding and verifying current service
-names and tiers across all four platforms.
+Phase 0 is done and the **week-one ugly slice is deployed**: one end-to-end path — a menu
+question, an account question, a simulated order — running on a literal three-item menu and one
+hardcoded account, behind the inline spend cap, on the Container Apps default FQDN. Every turn
+emits one `chat.turn` span tree.
+
+The URL is live and has deliberately **not been shared**; the roadmap is explicit that those are
+different things. [`docs/deployment.md`](docs/deployment.md) is the write-up — the procedure, what
+it costs, and the ten things about the deployment story that turned out not to work the way the
+documentation implies.
+
+The data behind that slice is a placeholder and is meant to be deleted rather than extended. The
+build plan runs twelve phases over roughly five weeks of evenings and weekends.
 
 The work is filed as GitHub issues, each carrying exactly one priority label that encodes
 implementation order. Label definitions live in [`.github/labels.yml`](.github/labels.yml).
