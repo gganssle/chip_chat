@@ -19,6 +19,12 @@ service is healthy and Phoenix (later Arize AX) answers whether the agent is
 behaving. Which product answers on the OTLP endpoint is a configuration value
 and nothing in :mod:`chip_chat.otel.exporters` knows either name.
 
+Two *processes*, one trace. Decision D8 put the agent in its own container, so
+the tree above is emitted either side of a boundary and under two different
+``service.name`` values. :mod:`chip_chat.otel.propagation` is what keeps it one
+trace, and :func:`chip_chat.otel.service.turn_service_names` is what keeps a
+dashboard from filtering half of it away.
+
 ``otel/README.md`` is the schema of record. Read it before adding a span.
 """
 
@@ -30,6 +36,11 @@ from chip_chat.otel.attributes import (
 )
 from chip_chat.otel.config import TelemetryConfig
 from chip_chat.otel.exporters import build_span_exporters
+from chip_chat.otel.propagation import (
+    TurnContextError,
+    continue_turn,
+    turn_context_headers,
+)
 from chip_chat.otel.schema import (
     OPS_SPAN_PREFIX,
     SPAN_NAMES,
@@ -43,7 +54,14 @@ from chip_chat.otel.schema import (
     span_kind,
     tool_span_name,
 )
-from chip_chat.otel.service import SERVICE_NAMESPACE, service_name
+from chip_chat.otel.service import (
+    AGENT_COMPONENT,
+    APP_COMPONENT,
+    SERVICE_NAMESPACE,
+    agent_service_name,
+    service_name,
+    turn_service_names,
+)
 from chip_chat.otel.spans import (
     Document,
     Message,
@@ -59,6 +77,7 @@ from chip_chat.otel.spans import (
     matcher_resolve,
     ops_write,
     render_response,
+    resume_turn,
     retriever_search,
     tool_call,
     vision_describe,
@@ -70,6 +89,8 @@ from chip_chat.otel.tracing import (
 )
 
 __all__ = [
+    "AGENT_COMPONENT",
+    "APP_COMPONENT",
     "OPS_SPAN_PREFIX",
     "SERVICE_NAMESPACE",
     "SPAN_NAMES",
@@ -86,8 +107,10 @@ __all__ = [
     "SpanSchemaError",
     "TelemetryConfig",
     "ToolName",
+    "TurnContextError",
     "TurnIdentity",
     "__version__",
+    "agent_service_name",
     "agent_step",
     "allowed_parents",
     "budget_check",
@@ -96,6 +119,7 @@ __all__ = [
     "chat_turn",
     "configure_tracing",
     "content_safety",
+    "continue_turn",
     "cortex_analyst_query",
     "current_turn",
     "llm_completion",
@@ -103,12 +127,15 @@ __all__ = [
     "ops_span_name",
     "ops_write",
     "render_response",
+    "resume_turn",
     "retriever_search",
     "service_name",
     "shutdown_tracing",
     "span_kind",
     "tool_call",
     "tool_span_name",
+    "turn_context_headers",
+    "turn_service_names",
     "vision_describe",
 ]
 

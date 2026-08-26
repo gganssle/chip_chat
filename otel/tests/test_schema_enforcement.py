@@ -27,6 +27,14 @@ from chip_chat.otel.testing import span_recorder
 
 Opener = Callable[[], AbstractContextManager[object]]
 
+NOT_SPAN_OPENERS = {"current_turn", "resume_turn"}
+"""Public helpers that manipulate the turn context without opening a span.
+
+``resume_turn`` is the agent container's side of the process boundary: it
+restores the turn a *different process* opened so that ``agent.step`` is legal
+there. It emits nothing itself, so it is not a thirteenth node of the schema.
+"""
+
 
 def test_the_package_exports_no_tracer() -> None:
     # A tracer is a free-form span-name factory. If one ever appears in the
@@ -41,7 +49,7 @@ def test_the_package_exports_no_tracer() -> None:
 
 def test_the_helpers_are_the_only_public_span_openers() -> None:
     openers = {
-        name for name in spans.__all__ if name.islower() and name not in {"current_turn"}
+        name for name in spans.__all__ if name.islower() and name not in NOT_SPAN_OPENERS
     }
     assert openers == {
         "agent_step",
@@ -62,7 +70,7 @@ def test_the_helpers_are_the_only_public_span_openers() -> None:
 def test_there_is_one_helper_per_schema_node() -> None:
     # A node without a helper is a span nobody can emit; a helper without a node
     # is a span nobody's dashboard is watching. Neither may exist.
-    helpers = {name for name in spans.__all__ if name.islower()} - {"current_turn"}
+    helpers = {name for name in spans.__all__ if name.islower()} - NOT_SPAN_OPENERS
     assert len(helpers) == len(SpanName)
 
 

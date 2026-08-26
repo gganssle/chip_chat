@@ -1,0 +1,49 @@
+# The build context is the whole repository, because the agent is a uv workspace
+# member and `uv sync --package` needs the workspace. Everything that is not an
+# input to that is excluded here -- which is most of it.
+
+.git
+.github
+.beads
+.dolt
+.agents
+.claude
+.codex
+.runtime
+.venv
+**/.venv
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Terraform state and providers: large, and none of it belongs in an image.
+infra/terraform/.terraform
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfvars
+
+# Harvested and generated data.
+harvest/cache
+harvest/output
+data-gen/output
+data/generated
+
+node_modules
+**/node_modules
+web/dist
+.next
+
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+.DS_Store
+.idea
+.vscode

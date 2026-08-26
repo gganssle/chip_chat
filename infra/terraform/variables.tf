@@ -177,6 +177,40 @@ variable "web_target_port" {
   default     = 80
 }
 
+# --- Container registry -----------------------------------------------------
+
+variable "container_registry_enabled" {
+  description = <<-EOT
+    Whether to create the container registry. True by default: decision D8 made
+    the agent a hosted agent, so an image and a registry are part of the estate
+    rather than an optional extra.
+
+    False is for a disposable stack that only needs the data and model tiers --
+    it saves the Basic tier's fixed daily charge, and nothing in Phases 0-6
+    depends on the registry.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "container_registry_sku" {
+  description = <<-EOT
+    Container registry tier. There is no free tier.
+
+    Basic is ~$0.167/day (~$5/month) and includes 10 GB of storage, which is two
+    orders of magnitude more than one 60 MB agent image needs. Standard (~$0.667/
+    day) buys 100 GB and more webhooks; Premium buys geo-replication, private
+    endpoints and content trust. Nothing in this design uses any of that.
+  EOT
+  type        = string
+  default     = "Basic"
+
+  validation {
+    condition     = contains(["Basic", "Standard", "Premium"], var.container_registry_sku)
+    error_message = "container_registry_sku must be one of: Basic, Standard, Premium."
+  }
+}
+
 # --- Model deployments ------------------------------------------------------
 
 variable "model_deployments" {

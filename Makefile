@@ -22,7 +22,7 @@ export PHOENIX_GRPC_PORT
 
 .DEFAULT_GOAL := help
 .PHONY: help setup fmt fmt-check lint typecheck imports test ci clean \
-        dev dev-down dev-logs trace
+        dev dev-down dev-logs trace trace-boundary
 
 help: ## Show available targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -69,9 +69,61 @@ trace: ## Send one demo session to OTEL_EXPORTER_OTLP_ENDPOINT
 	OTEL_EXPORTER_OTLP_ENDPOINT=$(OTEL_EXPORTER_OTLP_ENDPOINT) \
 		$(UV) run python -m chip_chat.otel.smoke
 
+trace-boundary: ## Send one turn ACROSS the app-agent boundary (two service names, one trace)
+	OTEL_EXPORTER_OTLP_ENDPOINT=$(OTEL_EXPORTER_OTLP_ENDPOINT) \
+	CHIP_CHAT_AGENT_COMMAND="$(AGENT_COMMAND)" \
+		$(UV) run python -m chip_chat.otel.boundary
+
 clean: ## Remove caches and build artefacts
 	rm -rf .mypy_cache .pytest_cache .ruff_cache
 	find . -name '__pycache__' -type d -prune -not -path './.beads/*' -exec rm -rf {} +
+
+# By default the agent half is emitted in this process under its own provider,
+# which proves the propagation but not the image. Set AGENT_COMMAND to run the
+# real container as the second process -- which is what issue #103 asks for, and
+# what `make agent-image-boundary` does for you.
+AGENT_COMMAND ?=
+
+# --- Agent image ------------------------------------------------------------
+#
+# Decision D8 made the agent a hosted agent: our container, run by Foundry. The
+# image is therefore a build artefact of this repository, and the registry is in
+# the Terraform below rather than made by hand.
+
+AGENT_IMAGE_NAME ?= chip-chat-agent
+AGENT_IMAGE_TAG  ?= dev
+AGENT_IMAGE      ?= $(AGENT_IMAGE_NAME):$(AGENT_IMAGE_TAG)
+
+# Empty means "local build only". `make infra-output` prints the login server as
+# container_registry_login_server; export it to push.
+ACR_LOGIN_SERVER ?=
+
+.PHONY: agent-image agent-image-check agent-image-push agent-image-boundary agent-version
+
+agent-image: ## Build the agent container image
+	docker build -f agent/Dockerfile -t $(AGENT_IMAGE) .
+
+agent-image-check: agent-image ## Build, then ask the image what it is and where its spans go
+	docker run --rm $(AGENT_IMAGE) check
+
+agent-image-push: ## Push the agent image to the registry (needs `az acr login`)
+	@test -n "$(ACR_LOGIN_SERVER)" || { \
+		echo "ACR_LOGIN_SERVER is empty. Read it with:"; \
+		echo "  make infra-output | grep container_registry_login_server"; \
+		echo "then: az acr login --name <registry> && make agent-image-push ACR_LOGIN_SERVER=..."; \
+		exit 1; }
+	docker tag $(AGENT_IMAGE) $(ACR_LOGIN_SERVER)/$(AGENT_IMAGE_NAME):$(AGENT_IMAGE_TAG)
+	docker push $(ACR_LOGIN_SERVER)/$(AGENT_IMAGE_NAME):$(AGENT_IMAGE_TAG)
+
+agent-image-boundary: agent-image ## One turn across a REAL process boundary: the app here, the agent in the container
+	@$(MAKE) trace-boundary AGENT_COMMAND="docker run --rm --network host \
+		-e TRACEPARENT -e TRACESTATE -e BAGGAGE \
+		-e OTEL_EXPORTER_OTLP_ENDPOINT=$(OTEL_EXPORTER_OTLP_ENDPOINT) \
+		$(AGENT_IMAGE) agent-half"
+
+agent-version: ## Print the hosted-agent version manifest for the current image
+	$(UV) run python -m chip_chat.agent.version render \
+		--image $(if $(ACR_LOGIN_SERVER),$(ACR_LOGIN_SERVER)/,)$(AGENT_IMAGE_NAME):$(AGENT_IMAGE_TAG)
 
 # --- Infrastructure ---------------------------------------------------------
 #

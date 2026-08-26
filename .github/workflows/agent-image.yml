@@ -1,0 +1,149 @@
+name: Agent image
+
+# Decision D8 made the agent a hosted agent -- our container, run by Foundry --
+# so the image is a build artefact of this repository and building it is a gate
+# like any other. Every pull request builds it; only a push to main publishes it.
+#
+# The publish half is *conditional on credentials existing*. A repository clone
+# with no Azure federation still gets the build gate, which is the part that
+# catches a broken Dockerfile, and skips the push with a line in the log saying
+# so rather than failing red for a reason nobody can fix.
+#
+# Authentication is OIDC federation, not a registry password: the registry's
+# admin account is disabled in infra/terraform/registry.tf and there is no
+# username and password to leak. Configure it with a federated credential on a
+# user-assigned identity holding AcrPush, and set:
+#
+#   AZURE_CLIENT_ID  AZURE_TENANT_ID  AZURE_SUBSCRIPTION_ID  ACR_NAME
+#
+# as repository secrets.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agent/**"
+      - "otel/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".dockerignore"
+      - ".github/workflows/agent-image.yml"
+  pull_request:
+    paths:
+      - "agent/**"
+      - "otel/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".dockerignore"
+      - ".github/workflows/agent-image.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: agent-image-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # For the OIDC token the Azure login exchanges. Harmless on a pull request,
+  # where the publish step does not run.
+  id-token: write
+
+env:
+  IMAGE_NAME: chip-chat-agent
+  # Secrets are not available to `if:` conditions, so they are lifted into the
+  # environment here and the steps below branch on that.
+  ACR_NAME: ${{ secrets.ACR_NAME }}
+  AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+jobs:
+  image:
+    name: build, prove, publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Built once, loaded into the local daemon, and used by every step below.
+      # A publish that rebuilt would be publishing something other than what was
+      # proved, which is the whole reason this is one job and not two.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: agent/Dockerfile
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: The image says what it is
+        run: docker run --rm ${{ env.IMAGE_NAME }}:ci check
+
+      # The acceptance criterion of issue #103, run against the real image: one
+      # turn, two processes, two service names, ONE trace. The assertion lives in
+      # otel/tests; this is the version where the agent half is a container.
+      - name: One turn across a real process boundary
+        run: |
+          docker run --rm \
+            -e TRACEPARENT=00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01 \
+            -e BAGGAGE=session.id=ci,chip_chat.turn.index=0 \
+            -e CHIP_CHAT_OTEL_CONSOLE=1 \
+            ${{ env.IMAGE_NAME }}:ci agent-half | tee spans.json
+          grep -q '4bf92f3577b34da6a3ce929d0e0e4736' spans.json \
+            || { echo "the agent half did not join the trace it was given"; exit 1; }
+          grep -q 'chip-chat-agent' spans.json \
+            || { echo "the agent half did not report the forced service.name"; exit 1; }
+
+      - name: Publish is configured
+        id: publish
+        run: |
+          if [ -n "$ACR_NAME" ] && [ -n "$AZURE_CLIENT_ID" ] \
+             && [ "${{ github.event_name }}" = "push" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Not publishing: this is not a push to main, or ACR_NAME and"
+            echo "AZURE_CLIENT_ID are unset. The build gate above still ran."
+          fi
+
+      - name: Azure login
+        if: steps.publish.outputs.enabled == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Registry login
+        if: steps.publish.outputs.enabled == 'true'
+        run: az acr login --name "$ACR_NAME"
+
+      - name: Push
+        if: steps.publish.outputs.enabled == 'true'
+        run: |
+          registry="${ACR_NAME}.azurecr.io"
+          docker tag "${IMAGE_NAME}:ci" "${registry}/${IMAGE_NAME}:${GITHUB_SHA}"
+          docker tag "${IMAGE_NAME}:ci" "${registry}/${IMAGE_NAME}:main"
+          docker push "${registry}/${IMAGE_NAME}:${GITHUB_SHA}"
+          docker push "${registry}/${IMAGE_NAME}:main"
+
+      # An agent version pins a digest, never a tag, so the digest is the thing
+      # worth printing. `main` is a convenience for humans and is not what gets
+      # registered.
+      - name: The reference an agent version pins
+        if: steps.publish.outputs.enabled == 'true'
+        run: |
+          registry="${ACR_NAME}.azurecr.io"
+          digest=$(az acr repository show \
+            --name "$ACR_NAME" \
+            --image "${IMAGE_NAME}:${GITHUB_SHA}" \
+            --query digest -o tsv)
+          echo "### Agent image published" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${registry}/${IMAGE_NAME}@${digest}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "Register it with: make agent-version ACR_LOGIN_SERVER=${registry}" \
+            >> "$GITHUB_STEP_SUMMARY"

@@ -55,7 +55,7 @@ harvest/      Public menu, nutrition, and policy ingestion
 data-gen/     Seeded synthetic account generator
 databricks/   Unity Catalog medallion pipelines, MLflow recommender
 snowflake/    Schema, RBAC, row access policies, semantic view, stored procs
-agent/        Foundry agent definition and tool implementations
+agent/        Hosted agent: the container image, its version manifest, the tools
 vision/       Photo pipeline: validate, moderate, describe, match
 api/          FastAPI service, sessions, budget enforcement, ops API
 web/          Chat widget and entry flow
@@ -87,6 +87,12 @@ is there to read the first time you open <http://localhost:6006>. Tracing is not
 late deliverable here: it is how you find out why something does not work.
 [`docs/local-tracing.md`](docs/local-tracing.md) explains the loop and how to read
 what you see.
+
+The agent runs in a container of its own, so one turn's trace crosses a process
+boundary and carries two `service.name` values. `make agent-image-boundary` builds
+that image and sends one turn through it — the app half here, the agent half in
+the container — and it should arrive as **one** trace.
+[`agent/README.md`](agent/README.md) is that story end to end.
 
 [`docs/local-setup.md`](docs/local-setup.md) takes it from a clean machine: the `az`,
 `terraform` and `databricks` CLIs, how each one authenticates, and the single rule for

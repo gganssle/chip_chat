@@ -113,6 +113,35 @@ output "foundry_inference_endpoint" {
   value       = azurerm_cognitive_account.foundry.endpoint
 }
 
+# The registry the agent image is published to. Null when
+# var.container_registry_enabled is false.
+output "container_registry_name" {
+  description = "Registry name — what `az acr login --name` wants."
+  value       = one(azurerm_container_registry.main[*].name)
+}
+
+output "container_registry_login_server" {
+  description = "Registry host — what an image reference is prefixed with, and what `make agent-image-push ACR_LOGIN_SERVER=...` takes."
+  value       = one(azurerm_container_registry.main[*].login_server)
+}
+
+output "container_registry_id" {
+  description = "Resource id, for the federated credential CI pushes with."
+  value       = one(azurerm_container_registry.main[*].id)
+}
+
+output "agent_image_repository" {
+  description = <<-EOT
+    Where the agent image lives, without a tag. An agent version pins a digest
+    off this repository rather than a tag — see chip_chat.agent.version.
+  EOT
+  value = (
+    one(azurerm_container_registry.main[*].login_server) == null
+    ? null
+    : "${one(azurerm_container_registry.main[*].login_server)}/chip-chat-agent"
+  )
+}
+
 output "content_safety_endpoint" {
   value = azurerm_cognitive_account.content_safety.endpoint
 }

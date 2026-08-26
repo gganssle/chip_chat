@@ -88,6 +88,7 @@ __all__ = [
     "matcher_resolve",
     "ops_write",
     "render_response",
+    "resume_turn",
     "retriever_search",
     "tool_call",
     "vision_describe",
@@ -126,6 +127,51 @@ _node: ContextVar[SpanName | None] = ContextVar("chip_chat_otel_node", default=N
 def current_turn() -> TurnIdentity | None:
     """Return the identity of the turn in progress, if a turn is in progress."""
     return _turn.get()
+
+
+@contextmanager
+def resume_turn(
+    identity: TurnIdentity | None,
+    *,
+    node: SpanName = SpanName.CHAT_TURN,
+) -> Iterator[None]:
+    """Adopt a turn that was opened in a *different process*.
+
+    The nesting check and the identity stamp both hang off context variables, and
+    a context variable does not cross a process boundary. So the agent container
+    -- which never opens ``chat.turn``, because the app did -- starts every turn
+    believing it is at the trace root, and :func:`agent_step` refuses to open
+    there. Correctly: an ``agent.step`` at the root of a trace is the split trace
+    that decision D8 warns about, and it should be an error rather than a shape
+    a dashboard has to be taught to tolerate.
+
+    This is how the agent side says "the turn is already open, over there".
+    Nothing here opens a span; it restores the two facts a span helper needs and
+    the caller supplies the parent link separately, by attaching the trace
+    context that came off the wire.
+
+    **Prefer** :func:`chip_chat.otel.propagation.continue_turn`, which does both
+    from one carrier. Reach for this directly only where the trace context is
+    already attached by other means.
+
+    Args:
+        identity: The turn's identity, as it was on the other side. ``None``
+            leaves the agent's spans unstamped, which is a legible trace and a
+            poor one -- every span is supposed to carry the session id.
+        node: The schema node the *caller* has open. ``chat.turn`` in every case
+            the RFC describes; the argument exists so the assumption is written
+            down at the call site rather than assumed here.
+
+    Yields:
+        Nothing. The effect is on the context, for the duration of the block.
+    """
+    turn_token = _turn.set(identity)
+    node_token = _node.set(node)
+    try:
+        yield
+    finally:
+        _node.reset(node_token)
+        _turn.reset(turn_token)
 
 
 def _check_parent(name: SpanName) -> None:

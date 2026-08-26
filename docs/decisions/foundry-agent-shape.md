@@ -202,7 +202,10 @@ stays open until that thread has been fetched after a real gap.
   registered against it, and identity arriving as request context rather than as a tool
   argument. Unblocked.
 - **#64** — propagate W3C trace context across the app→agent boundary, and expect two
-  `service.name` values in one trace. Unblocked.
+  `service.name` values in one trace. Unblocked, and both halves of that now exist:
+  [#103](https://github.com/gganssle/chip_chat/issues/103) built the image and the
+  registry and shipped `chip_chat.otel.propagation`, so #64 instruments a boundary
+  that is already joined rather than discovering it. See the update below.
 - **#78** — the "prove it was a config change" criterion is rewritten for agent-version
   immutability. The claim worth proving is now: *no instrumentation code changes, and
   the switch is expressed entirely as a new agent version whose only diff is the
@@ -212,6 +215,26 @@ stays open until that thread has been fetched after a real gap.
 - **#11** — state ownership settled above; stays open for the thread-retention number
   from #8.
 - **RFC-001** — §01, §09, §12 (new D8) and §13 Q2 updated to match.
+
+**Update, 26 August 2026 (#103 / `cc-vhv`).** The container half of this decision
+is paid. The image is `agent/Dockerfile`, built from the workspace root against
+the committed lockfile; the registry is `infra/terraform/registry.tf` with its
+admin account disabled and pull/push as role assignments; CI builds the image on
+every pull request and publishes it to ACR from `main`. The agent version manifest
+is `chip_chat.agent.version`, and it refuses three things structurally — a literal
+value for `OTEL_EXPORTER_OTLP_HEADERS` (only a CustomKeys connection reference),
+a moving image tag, and an empty exporter endpoint — because all three are
+mistakes that cost a whole agent version to correct.
+
+The trace-splitting risk this record flagged as *"a genuinely unpleasant one to
+discover in Phase 9"* is closed rather than merely documented.
+`chip_chat.otel.propagation` carries W3C trace context and the turn's identity
+across the boundary, and **both ends raise rather than emit half a turn**: the app
+refuses to inject with no span open, and the agent refuses to continue a turn with
+no `traceparent`. `turn_service_names()` enumerates the two `service.name` values
+so nothing has to remember them. Verified the same day, with the agent half
+running in the real container: Phoenix returned one trace of ten spans carrying
+both `chip-chat-api` and `chip-chat-agent`, nested as RFC-001 §09 describes.
 
 ## Revisit
 

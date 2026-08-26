@@ -98,6 +98,51 @@ and the turns they really run arrive in [#16](https://github.com/gganssle/chip_c
 and [#64](https://github.com/gganssle/chip_chat/issues/64), and none of them
 import it.
 
+## One turn, two processes, one trace
+
+Decision D8 made the agent a hosted agent — our container, run by Foundry — so
+the tree above is emitted either side of a process boundary and under **two**
+`service.name` values. The app emits `chat.turn`, the guards and
+`render.response`; the agent container emits everything between.
+
+```bash
+make trace-boundary          # two tracer providers in this process
+make agent-image-boundary    # the agent half in the REAL container
+```
+
+Both send one turn, and both should produce **one** trace in Phoenix:
+
+```
+chat.turn                          chip-chat-api
+├─ guard.budget_check              chip-chat-api
+├─ guard.content_safety            chip-chat-api
+├─ agent.step                      chip-chat-agent
+│  ├─ llm.completion               chip-chat-agent
+│  └─ tool.search_menu_knowledge   chip-chat-agent
+│     └─ retriever.search          chip-chat-agent
+├─ agent.step                      chip-chat-agent
+│  └─ llm.completion               chip-chat-agent
+└─ render.response                 chip-chat-api
+```
+
+**If you see two traces** — a `chat.turn` with three children, and an orphaned
+`agent.step` beside it — the W3C trace context did not cross. That is the failure
+this exists to catch, and it is worth catching here rather than in Phase 9: a
+split trace is not a degraded trace, it destroys the parent/child structure every
+trajectory and tool-selection evaluation attaches to. The command prints the
+headers that were on the wire, which is the first thing to look at.
+
+`make agent-image-boundary` is the stronger of the two. It builds the image and
+runs the agent half as `docker run … chip-chat-agent:dev agent-half`, handing the
+carrier over in `TRACEPARENT` / `TRACESTATE` / `BAGGAGE`. Two operating-system
+processes, and still one trace — or the boundary does not work.
+
+While you are in Phoenix, notice that **`service.name` changes in the middle of
+the trace and changes back**. Anything you later filter or group on that
+attribute has to expect both values; `chip_chat.otel.service.turn_service_names()`
+returns the pair so nothing has to remember them. `otel/README.md` has the
+mechanism and `agent/README.md` has the container.
+
 ## Tracing your own code
 
 Configure once at start-up and then use the span helpers. The configuration call
@@ -180,6 +225,8 @@ If you want a clean slate mid-session, `make dev-down && make dev` is it.
 | "No exporter is configured" | `OTEL_EXPORTER_OTLP_ENDPOINT` is empty. `make trace` sets it; a bare `python -m chip_chat.otel.smoke` does not. |
 | `make trace` succeeds, Phoenix stays empty | Check the project selector — everything lands in `default` — and then that the endpoint is the one the stack is on. The exporter logs a connection failure to stderr; it does not fail the process. |
 | The tree is not the one above | `otel/` is wrong, or your call sites are. Run `make test`; `otel/tests/test_smoke.py` is the same assertion without a container in the way. |
+| `make trace-boundary` produces **two** traces | The trace context did not cross. The command prints the headers it sent; if `traceparent` is missing, nothing opened a span before injection. `otel/tests/test_propagation.py` is the same assertion without a backend in the way. |
+| `make agent-image-boundary` fails with "the agent command exited …" | The container did not run. `docker run --rm chip-chat-agent:dev check` on its own says what the image thinks it is. |
 
 ## Verified
 
@@ -187,3 +234,7 @@ If you want a clean slate mid-session, `make dev-down && make dev` is it.
 `arizephoenix/phoenix:version-20.3.0`. `make dev` brought the container to healthy
 and sent three turns; all thirty-six spans arrived, and the three trees read back
 out of Phoenix's API match RFC-001 section 09 node for node.
+
+The boundary, the same day and on the same stack: the app half in a shell and the
+agent half in the built `chip-chat-agent` image. Phoenix returned **one** trace of
+ten spans carrying both `chip-chat-api` and `chip-chat-agent`, nested as above.

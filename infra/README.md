@@ -75,8 +75,36 @@ is served by variables and workspaces instead. Files are split by concern.
 | `ai.tf` | Foundry account and project, model deployments, Content Safety, Document Intelligence, four role assignments |
 | `observability.tf` | Log Analytics workspace, Application Insights |
 | `compute.tf` | Container Apps environment and app, Flex Consumption plan and Function App |
+| `registry.tf` | Container registry for the agent image, plus its pull and push grants |
 | `imports.tf` | Adoption of the Phase 0 estate |
 | `backend.tf` | Remote state |
+
+### The registry is here rather than made by hand
+
+Decision D8 made the agent a hosted agent, so this repository produces a
+container image and the image needs a registry.
+[Issue #103](https://github.com/gganssle/chip_chat/issues/103) is explicit that it
+belongs in Terraform: this estate has already had to adopt one imperatively-created
+foundation (see *Adopting Phase 0* below) and should not acquire a second.
+
+Its **admin account is disabled**, for the same reason both storage accounts have
+shared keys off — an admin account is a username and password with push rights,
+stored in the registry. Access is two role assignments instead:
+
+| Grant | Who | Why |
+| --- | --- | --- |
+| `AcrPull` | the app managed identity | The runtime may fetch an image and may not replace one. This is what the Container App and the hosted agent pull with. |
+| `AcrPush` | you | The documented local build path, `make agent-image-push`. Subscription Owner does *not* imply it: registry push is a data action and Owner carries none, so without this `az acr login` succeeds and the push after it does not. |
+
+CI pushes over OIDC federation rather than either of those — see
+`.github/workflows/agent-image.yml`, which skips the publish (and says so) when the
+federation secrets are absent, so a clone with no Azure account still gets the
+build gate.
+
+Basic does not support a retention policy for untagged manifests, and the estate
+does not pretend to have one. That is the right way round here anyway: an agent
+version pins an image by **digest**, so an untagged manifest is still a live
+reference and deleting it on a timer would break the version pointing at it.
 
 ### Nothing runs on a connection string
 
@@ -209,6 +237,7 @@ decision.
 | Log Analytics **1 GB/day cap** | `var.log_daily_quota_gb` | Ingestion is billed per GB and a crash-looping container makes a lot of it overnight. Applied twice: on the workspace and on the App Insights component. |
 | Model deployment capacity **10K TPM**, and none by default | `var.model_deployments` | Tokens-per-minute quota is a spend control as much as a performance setting. |
 | Container Apps **max replicas 2** | `var.web_max_replicas` | Scale-out is spend. |
+| Container registry **Basic** tier | `var.container_registry_sku` | There is no free tier. Basic is ~$0.167/day (~$5/month) and includes 10 GB — two orders of magnitude more than one 60 MB agent image. Standard and Premium buy storage, geo-replication and private endpoints that nothing here uses. Set `var.container_registry_enabled = false` on a disposable stack that does not need the agent. |
 
 ### What none of this prevents
 

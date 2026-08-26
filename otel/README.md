@@ -173,6 +173,84 @@ asserts it, including a test that fails if a product name ever appears in
 Every slot is optional. A configuration with no exporters is valid and useful:
 spans are still built and still schema-checked, they simply go nowhere.
 
+## Across the app-to-agent boundary
+
+Decision D8 put the agent in its own container, so the tree above is emitted by
+**two processes**, under **two `service.name` values**:
+
+```
+chip-chat-api      chat.turn, guard.budget_check, guard.content_safety, render.response
+chip-chat-agent    agent.step, llm.completion, tool.*, and every child of a tool
+```
+
+Nothing joins those halves by itself — a second process that simply starts
+tracing starts a *second trace*. `chip_chat.otel.propagation` is what joins them,
+and both ends of it raise rather than emit half a turn, because a split trace is
+not a degraded trace: the parent/child structure is what Phase 9's trajectory and
+tool-selection evaluations read, and two unrelated traces do not score badly,
+they score nothing.
+
+```python
+from chip_chat.otel import continue_turn, turn_context_headers
+
+# In the app, inside the open chat.turn:
+headers = turn_context_headers()
+response = http.post(agent_url, json=payload, headers=dict(headers))
+
+# In the agent container, on the way in:
+with continue_turn(request.headers):
+    with agent_step(index=0):
+        ...
+```
+
+Two things travel and they are different. **W3C trace context** (`traceparent`,
+`tracestate`) makes the agent's spans children of the app's `chat.turn`.
+**Baggage** carries the turn's identity — `session.id`, `chip_chat.turn.index`,
+`chip_chat.persona.id`, `chip_chat.demo.id` — under the same keys those values
+are stamped on spans, so the promise above ("every span in a turn carries the
+session id, not only the root") survives a process boundary.
+
+The propagator is built explicitly rather than taken from
+`opentelemetry.propagate`: the global one is assembled from `OTEL_PROPAGATORS`,
+and an environment variable set for an unrelated reason should not be able to
+drop half a turn.
+
+`resume_turn` is the lower half of `continue_turn` — it restores the turn context
+without touching the carrier — and it exists because the nesting check is a
+context variable, and a context variable does not cross a process boundary. It is
+not a thirteenth node of the schema and it opens no span.
+
+### Both service names, in one place
+
+Anything filtering or grouping on `service.name` must expect **both** values, or
+it shows half a turn and looks healthy doing it. So the pair is enumerated rather
+than remembered:
+
+```python
+from chip_chat.otel import turn_service_names
+
+app, agent = turn_service_names()  # ("chip-chat-api", "chip-chat-agent")
+```
+
+The agent's name is read from `CHIP_CHAT_AGENT_NAME` rather than derived, because
+it is not ours to derive: Foundry forces `service.name` to the agent *resource's*
+name and ignores `OTEL_SERVICE_NAME`. The default is what the resource should be
+called precisely so that the constraint costs nothing — but a dashboard built on
+"should be" is the failure this variable exists to prevent.
+
+### Seeing it
+
+`chip_chat.otel.boundary` emits one turn the way the deployed system will:
+
+```bash
+make trace-boundary          # two providers in one process
+make agent-image-boundary    # the agent half in the real container
+```
+
+Expect **one** trace of ten spans, with the service name changing in the middle
+and changing back. `otel/tests/test_propagation.py` and
+`otel/tests/test_boundary.py` are the same claim without a backend in the way.
+
 ### This package does not ride on Foundry's built-in tracing
 
 Worth stating, because it is the first thing a reader wonders. The spans above
@@ -245,6 +323,11 @@ new endpoint is the observation that says so.
 ## Not in scope
 
 No agent, no tools, no product logic. This is the instrumentation library only --
-`smoke.py` is a fixture of the schema and not an exception to that, and nothing
-imports it. Its real consumers arrive in #16 and #64; #15 put Phoenix in the dev
-loop around it.
+`smoke.py` and `boundary.py` are fixtures of the schema and not exceptions to
+that. Its real consumers arrive in #16 and #64; #15 put Phoenix in the dev loop
+around it, and #103 added the second process the schema now spans.
+
+`boundary.py` is the one file here that will shell out, and only when
+`--agent-command` asks it to: that is how the demo runs the *real* agent
+container as the second process instead of pretending with a second provider. It
+is a CLI fixture, like `smoke.py`, not something a call site imports.
