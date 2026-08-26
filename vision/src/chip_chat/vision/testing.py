@@ -16,19 +16,28 @@ location: XMP, and a JPEG comment. This builder attaches all three, so a test
 that finds none of them afterwards has proven something.
 """
 
+import json
 import struct
+import textwrap
 import threading
 import zlib
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from io import BytesIO
+from types import ModuleType
+from typing import Any
 
 from PIL import Image
 
+from chip_chat.otel import ToolName, agent_step, tool_call
 from chip_chat.vision.moderation import ModerationUnavailableError, SafetyCategory
 from chip_chat.vision.store import BlobRef
+from chip_chat.vision.vocabulary import Vocabulary
 
 __all__ = [
+    "DEFAULT_TERMS",
+    "DESCRIBED_MEAL",
     "ELF_BINARY",
     "GPS_LATITUDE_DEGREES",
     "GZIP_ARCHIVE",
@@ -41,10 +50,15 @@ __all__ = [
     "InMemoryBlobStore",
     "StoredBlob",
     "StubImageAnalyzer",
+    "StubVisionModel",
+    "generated_vocabulary",
+    "photo_tool_call",
     "photo_with_location",
     "png_declaring",
     "safe_severities",
     "solid_image",
+    "vocabulary_module",
+    "vocabulary_module_source",
 ]
 
 GPS_LATITUDE_DEGREES = 41
@@ -96,6 +110,28 @@ class InMemoryBlobStore:
             self._blobs[name] = StoredBlob(
                 name=name, data=data, content_type=content_type
             )
+
+    def read(self, ref: BlobRef) -> bytes:
+        """Return one blob's bytes, as a
+        :class:`~chip_chat.vision.store.BlobReader` does.
+
+        Args:
+            ref: The reference stage 3 produced.
+
+        Returns:
+            The stored bytes.
+
+        Raises:
+            KeyError: If nothing was written under that name.
+            ValueError: If the ref names a different container -- the same
+                refusal the Azure reader makes, so a test that relies on it is
+                testing the real behaviour.
+        """
+        if ref.container != self._container:
+            raise ValueError(
+                f"{ref} is not in this store's container ({self._container})"
+            )
+        return self.get(ref).data
 
     def get(self, ref: BlobRef | str) -> StoredBlob:
         """Read one blob back.
@@ -310,3 +346,275 @@ def png_declaring(width: int, height: int) -> bytes:
     chunk = bytes(raw[ihdr_data - 4 : ihdr_data + 13])
     raw[ihdr_data + 13 : ihdr_data + 17] = struct.pack(">I", zlib.crc32(chunk))
     return bytes(raw)
+
+
+# --- stage 4: the vocabulary, the model, and the span it must sit under -------
+#
+# The describe stage has no vocabulary of its own -- it loads one the catalogue
+# build wrote -- so a test of it needs a generated module to load. These build
+# one without a catalogue, a landing zone or a network.
+
+DEFAULT_TERMS: Mapping[str, tuple[str, ...]] = {
+    "vessel": ("bowl", "burrito"),
+    "protein": ("chicken", "steak"),
+    "rice": ("white_rice",),
+    "beans": ("black_beans",),
+    "salsas": ("fresh_tomato_salsa",),
+    "toppings": ("cheese", "guacamole"),
+}
+"""A small vocabulary in the shape a real catalogue produces.
+
+These are fixture terms, not a vocabulary anything ships with: the point of
+:func:`generated_vocabulary` is that a test can hand the describer *any*
+vocabulary and watch what it accepts change. ``tests/test_describe.py`` uses a
+second, deliberately different one to prove exactly that.
+"""
+
+
+def vocabulary_module_source(
+    terms: Mapping[str, Sequence[str]] | None = None,
+    *,
+    content_version: str = "0" * 64,
+) -> str:
+    """Render a module in the shape ``chip_chat.catalog.vocabulary`` writes.
+
+    Mirrors ``render_module`` there: the same docstring header carrying the
+    catalogue content version, one :class:`~enum.StrEnum` per slot, ``SLOT_ITEMS``
+    and ``DESCRIBE_SCHEMA``. It is a mirror rather than a call because
+    ``chip-chat-vision`` does not depend on ``chip-chat-catalog`` -- the
+    generated module is loaded by name at runtime, not imported -- and a test
+    fixture that reached for the generator would reintroduce the dependency the
+    design removes. ``tests/fixtures/generated-vocabulary.py.txt`` is a copy of
+    the real generator's output, and ``tests/test_vocabulary.py`` loads it, so
+    the mirror is checked against the thing it mirrors.
+
+    Args:
+        terms: Slot name to the terms it publishes. Defaults to
+            :data:`DEFAULT_TERMS`. A slot mapped to no terms renders an empty
+            enum, which is what a catalogue with no salsa rows produces.
+        content_version: The catalogue build to record in the docstring.
+
+    Returns:
+        Python source for a generated vocabulary module.
+    """
+    published = DEFAULT_TERMS if terms is None else terms
+    lines = [
+        '"""The vision model\'s slot vocabulary, generated from the catalogue.',
+        "",
+        "DO NOT EDIT. This module is written by ``chip_chat.catalog.vocabulary``.",
+        "",
+        "Catalogue content version:",
+        f"    {content_version}",
+        '"""',
+        "",
+        "from enum import StrEnum",
+        "",
+    ]
+    for slot, values in published.items():
+        lines.append(f"\n\nclass {_fixture_class(slot)}(StrEnum):")
+        lines.append(f'    """Published {slot} the model may return."""')
+        lines.append("")
+        if not values:
+            lines.append("    # The catalogue published no term for this slot.")
+            lines.append("    pass")
+            continue
+        for value in values:
+            lines.append(f"    {value.upper()} = {json.dumps(value)}")
+
+    lines.append("\n\nSLOT_ITEMS: dict[str, dict[str, tuple[str, ...]]] = {")
+    for slot, values in published.items():
+        lines.append(f"    {json.dumps(slot)}: {{")
+        for index, value in enumerate(values):
+            resolves = "()" if slot in ("vessel", "protein") else f'("CMG-{index}",)'
+            lines.append(f"        {json.dumps(value)}: {resolves},")
+        lines.append("    },")
+    lines.append("}")
+
+    lines.append(
+        textwrap.dedent(
+            '''
+
+            def _slot(values: list[str]) -> dict[str, object]:
+                """One slot: a value from the catalogue, and how sure the model is."""
+                return {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["value", "confidence"],
+                    "properties": {
+                        "value": {"type": "string", "enum": values},
+                        "confidence": {
+                            "type": "number", "minimum": 0, "maximum": 1
+                        },
+                    },
+                }
+
+
+            DESCRIBE_SCHEMA: dict[str, object] = {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["is_chipotle_style", "meals_visible"],
+                "properties": {
+                    "is_chipotle_style": {"type": "boolean"},'''
+        )
+    )
+    for slot in ("vessel", "protein", "rice", "beans"):
+        values = list(published.get(slot, ()))
+        lines.append(f"        {json.dumps(slot)}: _slot({json.dumps(values)}),")
+    for slot in ("salsas", "toppings"):
+        values = list(published.get(slot, ()))
+        lines.append(
+            f"        {json.dumps(slot)}: "
+            f'{{"type": "array", "items": _slot({json.dumps(values)})}},'
+        )
+    lines.append('        "meals_visible": {"type": "integer", "minimum": 0},')
+    lines.append('        "notes": {"type": "string"},')
+    lines.append("    },")
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+def _fixture_class(slot: str) -> str:
+    """Class name for a slot, the way the generator spells it."""
+    stem = slot[:-1] if slot.endswith("s") else slot
+    return "".join(part.capitalize() for part in stem.split("_"))
+
+
+def vocabulary_module(
+    source: str, name: str = "chip_chat_vision_vocabulary"
+) -> ModuleType:
+    """Execute generated source as a module, without writing a file.
+
+    Args:
+        source: Module source, from :func:`vocabulary_module_source` or read
+            from a file the real generator wrote.
+        name: The module's ``__name__``, which appears in
+            :class:`~chip_chat.vision.vocabulary.VocabularyError` messages.
+
+    Returns:
+        The module, ready for
+        :meth:`~chip_chat.vision.vocabulary.Vocabulary.from_module`.
+    """
+    module = ModuleType(name)
+    exec(compile(source, f"<{name}>", "exec"), module.__dict__)
+    return module
+
+
+def generated_vocabulary(
+    terms: Mapping[str, Sequence[str]] | None = None,
+    *,
+    content_version: str = "0" * 64,
+) -> Vocabulary:
+    """Build a :class:`~chip_chat.vision.vocabulary.Vocabulary` from fixture terms.
+
+    Args:
+        terms: Slot name to the terms it publishes. Defaults to
+            :data:`DEFAULT_TERMS`.
+        content_version: The catalogue build to record.
+
+    Returns:
+        The vocabulary, exactly as loading a generated module would produce it.
+    """
+    return Vocabulary.from_module(
+        vocabulary_module(
+            vocabulary_module_source(terms, content_version=content_version)
+        )
+    )
+
+
+DESCRIBED_MEAL: Mapping[str, Any] = {
+    "is_chipotle_style": True,
+    "vessel": {"value": "bowl", "confidence": 0.94},
+    "protein": {"value": "chicken", "confidence": 0.71},
+    "rice": {"value": "white_rice", "confidence": 0.55},
+    "beans": {"value": "black_beans", "confidence": 0.38},
+    "salsas": [{"value": "fresh_tomato_salsa", "confidence": 0.62}],
+    "toppings": [
+        {"value": "cheese", "confidence": 0.83},
+        {"value": "guacamole", "confidence": 0.29},
+    ],
+    "meals_visible": 1,
+    "notes": "Looks like a generous scoop of everything.",
+}
+"""A well-formed stage-4 response over :data:`DEFAULT_TERMS`.
+
+The confidences are deliberately all different. A fixture that answered 1.0 nine
+times would make the calibration check in ``tests/test_describe.py`` pass for the
+wrong reason, and would be the very shape issue #53's fourth acceptance criterion
+is written to catch.
+"""
+
+
+@dataclass
+class StubVisionModel:
+    """A :class:`~chip_chat.vision.describe.VisionModel` that answers from a script.
+
+    Records every call, so a test can assert what the describer actually sent --
+    that the response format reached the API rather than the prompt, that the
+    image bytes were the stored ones, that the prompt named no catalogue term.
+    """
+
+    response: str | None = None
+    """The raw text to return. ``None`` means :data:`DESCRIBED_MEAL` as JSON.
+
+    An empty *string* is a different thing and is passed through: a deployment
+    that answers with nothing is a case stage 4 has to handle, and a stub that
+    quietly substituted a good answer for it would hide that.
+    """
+
+    deployment: str = "gpt-4.1-mini-test"
+    error: Exception | None = None
+    """Raise this instead of answering -- the outage stage 4 must decline on."""
+
+    calls: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.response is None:
+            self.response = json.dumps(DESCRIBED_MEAL)
+
+    def describe(
+        self,
+        *,
+        image: bytes,
+        media_type: str,
+        response_format: Mapping[str, Any],
+        system_prompt: str,
+        user_prompt: str,
+    ) -> str:
+        self.calls.append(
+            {
+                "image": image,
+                "media_type": media_type,
+                "response_format": response_format,
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+            }
+        )
+        if self.error is not None:
+            raise self.error
+        return self.response or ""
+
+
+@contextmanager
+def photo_tool_call(ref: BlobRef | str, *, step: int = 0) -> Iterator[None]:
+    """Open the spans RFC-001 section 09 puts above ``vision.describe``.
+
+    ``vision.describe`` is a child of ``tool.<tool_name>``, which is a child of
+    ``agent.step``, and :mod:`chip_chat.otel` enforces that rather than
+    documenting it -- so a test that calls
+    :meth:`~chip_chat.vision.describe.MealDescriber.describe` outside one gets a
+    :class:`~chip_chat.otel.spans.SpanSchemaError`. That is the schema working.
+    This is what stops every such test from having to say so.
+
+    Args:
+        ref: The photograph the tool was called on. Recorded as the tool's
+            argument, which is the *only* thing that crosses that boundary.
+        step: The ``agent.step`` index.
+
+    Yields:
+        Nothing; the spans are the point.
+    """
+    with (
+        agent_step(index=step),
+        tool_call(ToolName.MATCH_MEAL_FROM_PHOTO, arguments={"image_ref": str(ref)}),
+    ):
+        yield

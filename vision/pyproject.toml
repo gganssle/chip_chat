@@ -10,6 +10,10 @@ dependencies = [
     "azure-storage-blob>=12.24",
     "azure-identity>=1.19",
     "azure-ai-contentsafety>=1.0",
+    # Stage 4 calls the Foundry vision deployment, whose model endpoint is
+    # OpenAI-shaped, so the OpenAI SDK's Azure client is the supported path
+    # rather than a convenience.
+    "openai>=1.60",
 ]
 
 [build-system]

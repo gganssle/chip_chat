@@ -5,16 +5,17 @@ ordering is the design**: moderation happens before inference so nothing
 unmoderated reaches a model, and SKU resolution happens after inference so no
 model output is trusted as a product identifier.
 
-What is implemented here is stages 1 to 3 — everything that happens before a
-model is involved at all. Nothing here decides what a photograph *is*. It
-decides whether a hostile upload ever reaches something that will.
+What is implemented here is stages 1 to 4. The first three happen before a model
+is involved at all and decide whether a hostile upload ever reaches something
+that will. The fourth is the model call, and it is arranged so that its answer
+cannot become a product name.
 
 | Stage | What it does | Where |
 | --- | --- | --- |
 | 1 Validate | Size, magic bytes, allowlist, pixel ceiling | `validate.py` |
 | 2 Normalize | Strip metadata, re-encode, downscale | `normalize.py` |
 | 3 Moderate | Content Safety, then the write | `moderation.py`, `store.py` |
-| 4 Describe | Structured slots, no free text | [#53](https://github.com/gganssle/chip_chat/issues/53) |
+| 4 Describe | Structured slots, no free text | `describe.py`, `vocabulary.py` |
 | 5 Resolve | Deterministic catalogue match | [#54](https://github.com/gganssle/chip_chat/issues/54) |
 | 6 Propose | Priced, confirmable draft | [#62](https://github.com/gganssle/chip_chat/issues/62) |
 
@@ -54,7 +55,42 @@ with chat_turn(session_id=sid, turn_index=n, message=text):
 rather than merely documenting it. The guard belongs to the turn it protects,
 next to the spend cap and in front of `agent.step`.
 
-## Four properties, each easy to undo by accident
+Stage 4 takes the ref that came back, and nothing else:
+
+```python
+from chip_chat.vision import AzureVisionModel, MealDescriber, Vocabulary
+
+describer = MealDescriber(
+    AzureVisionModel.from_env(),
+    images=AzureBlobStore.from_env(),
+    vocabulary=Vocabulary.from_env(),  # CHIP_CHAT_VISION_VOCABULARY
+)
+
+with agent_step(index=0), tool_call(ToolName.MATCH_MEAL_FROM_PHOTO, ...):
+    try:
+        description = describer.describe(photo.blob_ref)
+    except DescribeError as declined:
+        return say(declined.message)  # the lane failed; the turn did not
+show(description.notes)  # display-only, and the only reader
+resolve(description.meal)  # #54. There are no notes on it.
+```
+
+`vision.describe` is a child of `tool.<tool_name>` in RFC-001 §09's tree, so
+`describe()` is called inside one — the same enforcement, one level down. For
+the callers that are not the agent (a batch over the labeled photo set, a
+script), `describe_as_tool()` opens those two spans itself.
+
+**The vocabulary has to be generated before any of this runs.** It is not
+committed, on purpose:
+
+```bash
+python -m chip_chat.harvest.sources.chipotle --landing landing --dataset all
+python -m chip_chat.catalog --landing landing --offline \
+    --vocabulary "$SITE_PACKAGES/chip_chat/vision_vocabulary.py"
+export CHIP_CHAT_VISION_VOCABULARY=chip_chat.vision_vocabulary
+```
+
+## Five properties, each easy to undo by accident
 
 ### The declared content type is never trusted
 
@@ -113,10 +149,134 @@ Re-encoding is also what neutralises a class of malformed-file payload. A
 polyglot with an archive glued to its tail does not survive, because only the
 pixels are copied forward and pixels cannot encode a parser bug.
 
+### The model describes; it never names a SKU
+
+That sentence is D3, and stage 4 is where it is either true or merely
+aspirational. Three things make it true, and the prompt is not one of them.
+
+**The vocabulary is generated, so there is no food name in this package.** The
+enums come from a module the catalogue build wrote — `python -m
+chip_chat.catalog --vocabulary <path>` — which `vocabulary.py` loads by dotted
+name from `CHIP_CHAT_VISION_VOCABULARY`. There is deliberately no default and no
+fallback: a built-in one would be the hand-maintained list the generation exists
+to replace, and it would be reached on exactly the deployment where somebody
+forgot the build step.
+
+`tests/test_vocabulary.py` settles the claim the only way it can be settled —
+by changing the catalogue and watching the accepted vocabulary change with it.
+The same response is accepted under one build and refused under the next, with
+no edit to this package in between.
+
+**The schema is enforced by the API rather than by parsing.** The response format
+is strict structured output, so the decoder cannot emit a token outside the enum.
+The answer is validated anyway, because "the vendor promised" is not a
+foundation D3 should rest on — and a violation is **rejected, not repaired**.
+Every repair available here (clamp the confidence, drop the unexpected key, pick
+the nearest term) is a guess about a photograph made by something that never saw
+it, and the nearest-term guess in particular is a fabricated SKU with a
+plausible spelling.
+
+There are two schemas and the difference is the vendor's fault. The catalogue's
+is RFC-001 §07 exactly: nine properties, two required, because a photograph
+showing no beans should come back with no `beans`. `strict_schema()` makes two
+edits to it and neither changes what it means:
+
+- **Every property becomes required.** Strict mode has no notion of an optional
+  key, so the optional ones become required-and-nullable and the validator maps
+  the nulls back to absent on the way in.
+- **Numeric bounds are dropped.** `minimum` and `maximum` are on strict mode's
+  unsupported list, and a schema carrying one is *refused outright* — so leaving
+  them in would break every call rather than loosen one check. They stay in the
+  catalogue's schema, which is what the validator reads, so the bound moves to
+  our side of the wire rather than disappearing. That is why a confidence of 1.4
+  is a case with a test rather than a case that cannot arise.
+
+The catalogue's schema stays the definition; the strict form is an adapter to
+one vendor's enforcement mechanism, and keeping them apart is what stops the
+vendor's constraints leaking into the design.
+
+**`notes` cannot reach the matcher, because it is not on the object the matcher
+is given.** `DescribedMeal` has no `notes` field. `notes` lives on `Description`
+beside it:
+
+```python
+description = describer.describe(photo.blob_ref)
+show(description.notes)  # display-only, and the only reader there is
+resolve(description.meal)  # #54. There are no notes on it to parse.
+```
+
+That is the difference between a rule and an arrangement. "Do not parse `notes`"
+is obeyed until somebody is in a hurry. A matcher handed an object with no notes
+on it cannot parse them at all — and the test asserting so does not check the
+field list, it walks the entire object graph reachable from `meal` and asserts
+the sentence is not in it at any depth, under any name.
+
+### Counting meals, and the two things the prompt is actually for
+
+`meals_visible` counts **orderable meal-sized compositions**, and
+`docs/decisions/multi-meal-photos.md` puts that definition on this issue rather
+than leaving it to the model: a bowl next to a bag of chips is one meal. V0
+gates the whole pipeline on this integer reaching two, so a loose reading fires
+the decline on the most ordinary photograph anyone sends.
+
+The same decision forbids asking the model to rank prominence or pick a primary
+meal — an unverifiable visual judgement from the component whose output D3
+refuses to trust. The schema returns one slot set plus a count, and the count is
+spent on knowing when to stop rather than on knowing what to build.
+
+Those two, and calibration, are the whole of what the prompt buys. Everything
+else is enforced. A model that ignores every line of `SYSTEM_PROMPT` still
+cannot name a food the catalogue does not publish.
+
+**No catalogue term appears in the prompt**, and a test asserts it. RFC-001 §07
+illustrates the vessel slot as `bowl|burrito|tacos|salad|quesadilla`; copying
+that in would be a hand-maintained vocabulary in the one file nobody would think
+to regenerate.
+
+### When the vision model is down
+
+RFC-001 §10 allows a lane to fail and forbids the conversation failing with it,
+so every way stage 4 can go wrong raises, and every raise carries the line to
+show the visitor. `DescribeUnavailableError` is the deployment being unreachable
+or answering with nothing; `DescriptionRejectedError` is it answering something
+the schema does not permit. The visitor sees one sentence for both. A trace sees
+two types — an outage is operational and a violation is either a model
+regression or a vocabulary that has drifted from the deployment, and those want
+different people looking at them.
+
+The sentence is deliberately *not* stage 3's neutral line. That one is neutral
+because naming what moderation detected hands an uploader something to iterate
+against. Nothing about the vision deployment being down is worth concealing, and
+"I can't use that photo" would be a small lie about a photo that is fine.
+
+### Confidences have to mean something
+
+D3 moves the failure "into a slot confidence we can threshold on", which is only
+true if the confidences carry information. `confidence_profile()` measures a run
+— what share of slots came back at exactly 1.0, how many distinct values
+appeared, how they spread — and `is_meaningfully_distributed()` puts bounds on
+it. Half the slots at 1.0 is plausible on clear photographs; nearly all of them
+is a model reporting that it answered rather than how sure it was.
+
+The labeled photo set is [#56](https://github.com/gganssle/chip_chat/issues/56)
+and does not exist yet. What ships here is the check plus a test proving it
+catches the shape it is looking for; #56 feeds it real photographs and scores
+the number.
+
 ### The image never crosses a tool boundary
 
 The upload returns a `blob_ref` and that is all it returns. `BlobRef` carries a
-container and a name and has no method that yields image bytes. This is not a
+container and a name and has no method that yields image bytes. Reading a photo
+back is a separate capability with a separate name — `BlobReader` — and stage 4
+is handed one explicitly. A ref that could fetch its own bytes would put an
+image one attribute access away from every place a ref is legitimately passed,
+which is every span and every tool argument in this lane.
+
+Stage 4 does send the pixels to the vision deployment, as a data URI: the
+uploads account has shared keys disabled and its blobs are readable only by the
+app's identity, so there is no URL the model could fetch. That is a model call,
+not a tool argument. `vision.describe` records the ref and the structured
+output, and a test asserts the encoded image appears in no span attribute. This is not a
 size optimisation: it is what keeps a photograph out of the model's context, out
 of a tool call's recorded arguments, and out of every span and log line those
 produce.

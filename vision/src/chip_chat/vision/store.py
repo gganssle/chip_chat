@@ -7,8 +7,11 @@ keeps a photograph out of the model's context, out of a tool call's recorded
 arguments, and out of every span, log line and trace those produce.
 
 :class:`BlobRef` is therefore deliberately dull: a container, a name, and no
-method that returns image bytes. Reading the image back is the moderation and
-describe stages' business (issues #52 and #53), through their own clients.
+method that returns image bytes. Reading the image back is a separate capability
+with a separate name -- :class:`BlobReader` -- and stage 4 is given one of those
+explicitly. A ref that could fetch its own bytes would put an image one attribute
+access away from every place a ref is legitimately passed, which is every span
+and every tool argument in the photo lane.
 
 Naming is ``<uuid4>.jpg`` under a date prefix::
 
@@ -40,6 +43,7 @@ __all__ = [
     "ACCOUNT_VARIABLE",
     "CONTAINER_VARIABLE",
     "AzureBlobStore",
+    "BlobReader",
     "BlobRef",
     "BlobStore",
     "blob_name",
@@ -132,8 +136,42 @@ class BlobStore(Protocol):
         ...
 
 
+class BlobReader(Protocol):
+    """The one read the describe stage performs.
+
+    Deliberately a different protocol from :class:`BlobStore` rather than two
+    more methods on it. Stage 4 needs to read and must never write; the upload
+    path needs to write and has no business reading anything back. Splitting
+    them means each stage is handed the capability it uses and not the other
+    one -- and it means a test double for stage 4 is a dict with a ``read``, not
+    a whole store.
+    """
+
+    def read(self, ref: BlobRef) -> bytes:
+        """Return the bytes stored under ``ref``.
+
+        Args:
+            ref: A reference the upload path produced. Its container is checked
+                against the reader's own, because a ref is the one part of the
+                photo lane that can arrive from outside this process.
+
+        Returns:
+            The stored image bytes, exactly as they were written -- normalized,
+            re-encoded and already screened by stage 3.
+
+        Raises:
+            KeyError: If nothing is stored under that name.
+            ValueError: If the ref names a different container.
+            OSError: If the read failed for any other reason. Stage 4 declines
+                on all three -- a photograph it cannot read is a photograph it
+                cannot describe -- so an implementation must raise one of these
+                rather than return empty bytes.
+        """
+        ...
+
+
 class AzureBlobStore:
-    """Writes to the real uploads container with the app's managed identity.
+    """Reads and writes the real uploads container with the app's managed identity.
 
     Constructed from the environment the Container App is given. The account has
     shared keys disabled, so there is no code path here that could authenticate
@@ -197,6 +235,23 @@ class AzureBlobStore:
     @property
     def container(self) -> str:
         return self._client.container_name
+
+    def read(self, ref: BlobRef) -> bytes:
+        from azure.core.exceptions import AzureError, ResourceNotFoundError
+
+        if ref.container != self.container:
+            raise ValueError(f"{ref} is not in this store's container ({self.container})")
+        try:
+            return bytes(self._client.download_blob(ref.name).readall())
+        except ResourceNotFoundError as error:
+            raise KeyError(ref.name) from error
+        except AzureError as error:
+            # Translated at the vendor boundary, the way
+            # :class:`~chip_chat.vision.moderation.AzureImageAnalyzer` turns one
+            # into a moderation failure. A stage that had to catch ``AzureError``
+            # to decline gracefully would be a stage that imports the Azure SDK
+            # in order to describe a photograph.
+            raise OSError(f"could not read {ref}: {error}") from error
 
     def put(self, name: str, data: bytes, *, content_type: str) -> None:
         from azure.core.exceptions import ResourceExistsError
