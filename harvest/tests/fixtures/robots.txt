@@ -1,0 +1,10 @@
+# A fixture standing in for a real site's robots.txt.
+# Tests run against this file, never against anybody's live server.
+
+User-agent: *
+Allow: /api/
+Disallow: /private/
+Disallow: /order/checkout
+
+User-agent: GreedyBot
+Disallow: /
