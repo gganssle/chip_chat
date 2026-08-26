@@ -45,7 +45,9 @@ from chip_chat.data_gen.catalogue import Buildable, OrderableMenu, SlotChoices
 from chip_chat.data_gen.config import (
     MEASURES,
     PACKAGED_CONFIG,
+    PUBLISHED_BOUNDS,
     WEEKDAY_NAMES,
+    Bound,
     CatalogueConfig,
     Distribution,
     FixtureSpec,
@@ -64,9 +66,11 @@ from chip_chat.data_gen.errors import (
     ThinCatalogError,
 )
 from chip_chat.data_gen.fixtures import (
+    PUBLISHED_READERS,
     CustomerFacts,
     entree_ids,
     measure_customers,
+    resolve,
     select_fixtures,
 )
 from chip_chat.data_gen.generate import generate_population
@@ -94,9 +98,12 @@ __all__ = [
     "DEFAULT_PREFIX",
     "MEASURES",
     "PACKAGED_CONFIG",
+    "PUBLISHED_BOUNDS",
+    "PUBLISHED_READERS",
     "SERVICE_NAME",
     "TABLES",
     "WEEKDAY_NAMES",
+    "Bound",
     "Buildable",
     "CatalogueConfig",
     "Channel",
@@ -134,6 +141,7 @@ __all__ = [
     "load_rewards_terms",
     "measure_customers",
     "mint_palate",
+    "resolve",
     "rewards_by_name",
     "select_fixtures",
     "service_name",

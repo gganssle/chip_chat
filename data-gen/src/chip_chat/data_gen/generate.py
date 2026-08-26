@@ -183,7 +183,7 @@ def generate_population(
         window_starts_at=starts_at.astimezone(UTC),
         window_ends_at=ends_at.astimezone(UTC),
         personas=personas,
-        persona_fixtures=select_fixtures(facts, config, catalog, stores),
+        persona_fixtures=select_fixtures(facts, config, catalog, stores, terms),
         demo_visitors=tuple(visitors),
         orders=tuple(orders),
         order_items=tuple(items),

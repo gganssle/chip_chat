@@ -47,14 +47,14 @@ Explorer below fifteen, so any sane definition of confidence puts them on the
 same sides of the line.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, fields
 from datetime import datetime
 from decimal import Decimal
 
 from chip_chat.catalog import MenuCatalog, Store
 from chip_chat.data_gen.catalogue import OrderableMenu
-from chip_chat.data_gen.config import GeneratorConfig, PersonaSpec
+from chip_chat.data_gen.config import Bound, GeneratorConfig, PersonaSpec
 from chip_chat.data_gen.errors import ConfigError
 from chip_chat.data_gen.records import (
     Channel,
@@ -64,6 +64,51 @@ from chip_chat.data_gen.records import (
     OrderItem,
     PersonaFixture,
 )
+from chip_chat.data_gen.rewards import RewardsTerms
+
+PUBLISHED_READERS: Mapping[str, Callable[[RewardsTerms], float]] = {
+    "cheapest_reward": lambda terms: float(terms.cheapest.point_cost),
+    "costliest_reward": lambda terms: float(terms.costliest.point_cost),
+}
+"""How to read each name in :data:`~chip_chat.data_gen.config.PUBLISHED_BOUNDS`.
+
+Two, and both about the Rewards Exchange, because both answers to "how much
+stored value is worth mentioning" are published there. ``cheapest_reward`` is
+the least a balance can be and still buy *something* — it is the redemption
+threshold, and :mod:`chip_chat.data_gen.loyalty` uses it as one. It is a weak
+bar for a fixture: eighty-five points is a side tortilla.
+
+``costliest_reward`` is the bar the Lapsed Customer is held to, and issue #27
+had already named it —
+:attr:`~chip_chat.data_gen.rewards.RewardsTerms.costliest` says in its own
+docstring that it is "the number a balance worth surfacing unprompted is
+measured against". A customer who clears it has a free entree waiting that
+they have not claimed, which is what PRD requirement P3 surfaces. Issue #26
+first shipped this bar as the literal ``1250``, copied from a config key
+issue #27 deleted; the copy is what re-dispatched this ticket.
+
+``test_fixtures.py`` asserts these keys are exactly the config's vocabulary.
+"""
+
+
+def resolve(bound: Bound, terms: RewardsTerms) -> float:
+    """Return what a fixture bound compares against.
+
+    Args:
+        bound: A number the config chose, or a name from
+            :data:`~chip_chat.data_gen.config.PUBLISHED_BOUNDS`.
+        terms: The published rewards programme.
+
+    Returns:
+        The number the measured fact is held to.
+
+    Raises:
+        KeyError: If ``bound`` is a name with no reader. The config reader
+            refuses those at load, so reaching this is a bug rather than a bad
+            config.
+    """
+    return PUBLISHED_READERS[bound](terms) if isinstance(bound, str) else bound
+
 
 MONTH_NAMES = (
     "January",
@@ -167,12 +212,14 @@ class CustomerFacts:
         """
         return float(getattr(self, name))
 
-    def satisfies(self, spec: PersonaSpec) -> bool:
+    def satisfies(self, spec: PersonaSpec, terms: RewardsTerms) -> bool:
         """Return whether this customer clears every bound its archetype sets.
 
         Args:
             spec: The archetype, whose :attr:`~...config.PersonaSpec.fixture`
                 carries the bounds.
+            terms: The published rewards programme, for whichever bounds are
+                read from it rather than chosen in the config.
 
         Returns:
             ``True`` only if every bound holds. Every one, not most: a
@@ -181,8 +228,12 @@ class CustomerFacts:
         """
         criteria = spec.fixture
         return all(
-            self.measure(name) >= floor for name, floor in criteria.at_least
-        ) and all(self.measure(name) <= ceiling for name, ceiling in criteria.at_most)
+            self.measure(name) >= resolve(floor, terms)
+            for name, floor in criteria.at_least
+        ) and all(
+            self.measure(name) <= resolve(ceiling, terms)
+            for name, ceiling in criteria.at_most
+        )
 
 
 def measure_customers(
@@ -327,6 +378,7 @@ def select_fixtures(
     config: GeneratorConfig,
     catalog: MenuCatalog,
     stores: Sequence[Store],
+    terms: RewardsTerms,
 ) -> tuple[PersonaFixture, ...]:
     """Choose each archetype's exemplars and write their narratives.
 
@@ -337,6 +389,9 @@ def select_fixtures(
             Only names are read from it; every identifier already came from it
             by way of the generator.
         stores: The stores the population orders from.
+        terms: Chipotle's published rewards programme. A criterion about
+            stored value is read from here rather than chosen in the config —
+            see :data:`PUBLISHED_READERS`.
 
     Returns:
         The fixtures, archetype by archetype in config order and best first
@@ -360,7 +415,7 @@ def select_fixtures(
             row
             for row in facts
             if row.persona_id == spec.persona_id
-            if row.satisfies(spec)
+            if row.satisfies(spec, terms)
         ]
         direction = 1.0 if spec.fixture.ascending else -1.0
         chosen = sorted(

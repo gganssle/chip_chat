@@ -43,6 +43,7 @@ from population_fixtures import (
     PACKAGED,
     fixture_catalog,
     fixture_population,
+    fixture_terms,
     shipped_config,
     small_config,
     small_population,
@@ -51,6 +52,9 @@ from population_fixtures import (
 from chip_chat.catalog import Store
 from chip_chat.data_gen import (
     MEASURES,
+    PUBLISHED_BOUNDS,
+    PUBLISHED_READERS,
+    Bound,
     ConfigError,
     CustomerFacts,
     OrderableMenu,
@@ -59,6 +63,7 @@ from chip_chat.data_gen import (
     entree_ids,
     load_config,
     measure_customers,
+    resolve,
     select_fixtures,
 )
 
@@ -228,16 +233,16 @@ def test_the_lapsed_customer_has_stored_value_to_surface() -> None:
     in last week, and silence without the points is a customer with nothing to
     be reminded of — neither demonstrates P3.
     """
-    threshold = shipped_config().loyalty.redemption_threshold
+    threshold = fixture_terms().costliest.point_cost
     for row in fixtures_for("lapsed"):
         assert row.days_since_order >= 90, (
             f"{row.demo_id} is offered as the Lapsed Customer but ordered "
             f"{row.days_since_order} days before the window closed"
         )
         assert row.points_balance >= threshold, (
-            f"{row.demo_id} has {row.points_balance} points, below the "
-            f"{threshold} this population redeems at; that is stored value but "
-            "not the kind worth interrupting someone about"
+            f"{row.demo_id} has {row.points_balance} points, short of the "
+            f"{threshold} the costliest published reward costs; that is stored "
+            "value but not the kind worth interrupting someone about"
         )
 
 
@@ -526,6 +531,7 @@ def test_no_editable_column_can_change_who_the_fixtures_are() -> None:
         shipped_config(),
         fixture_catalog(),
         stores(),
+        fixture_terms(),
     )
 
     assert again == population.persona_fixtures
@@ -535,33 +541,49 @@ def test_selection_is_a_pure_function_of_the_population() -> None:
     """Same population, same fixtures. The population's digest depends on it."""
     rows = tuple(facts().values())
 
-    first = select_fixtures(rows, shipped_config(), fixture_catalog(), stores())
-    second = select_fixtures(rows, shipped_config(), fixture_catalog(), stores())
+    first = select_fixtures(
+        rows, shipped_config(), fixture_catalog(), stores(), fixture_terms()
+    )
+    second = select_fixtures(
+        rows, shipped_config(), fixture_catalog(), stores(), fixture_terms()
+    )
 
     assert first == second == fixture_population().persona_fixtures
 
 
-def test_a_smaller_population_supplies_fewer_fixtures_rather_than_worse_ones() -> None:
+def test_a_smaller_population_supplies_qualifying_fixtures_or_none() -> None:
     """Selection never pads to make a count come out right.
 
-    Sixty customers honestly demonstrate less than five hundred do. The failure
-    this guards is the one that matters: a demo assigning a visitor "the
-    Regular" who turns out to have no usual, because a quota had to be filled.
+    Checked against the criteria rather than against a count. A count is the
+    obvious assertion and the wrong one: whether sixty customers happen to
+    yield fewer exemplars than five hundred depends on where the bars sit, and
+    it moved when issue #27 changed the earn rate. What must never move is
+    that everybody on the roster earned their place — the failure this guards
+    is a demo assigning a visitor "the Regular" who turns out to have no usual,
+    because a quota had to be filled.
+
+    The exclusion is asserted too. A bound nobody fails is a bound that proves
+    nothing, so this also insists that the thin population really did contain
+    customers the criteria turned away.
     """
     small = small_population()
     config = small_config()
     rows = measured(small)
+    terms = fixture_terms()
 
-    assert len(small.persona_fixtures) < len(fixture_population().persona_fixtures)
     counts = Counter(row.persona_id for row in small.persona_fixtures)
     for spec in config.personas:
         assert counts[spec.persona_id] <= config.fixtures_per_persona
     for row in small.persona_fixtures:
-        spec = config.persona(row.persona_id)
-        for name, floor in spec.fixture.at_least:
-            assert rows[row.demo_id].measure(name) >= floor
-        for name, ceiling in spec.fixture.at_most:
-            assert rows[row.demo_id].measure(name) <= ceiling
+        assert rows[row.demo_id].satisfies(config.persona(row.persona_id), terms)
+
+    chosen = {row.demo_id for row in small.persona_fixtures}
+    assert [
+        row
+        for row in rows.values()
+        if row.demo_id not in chosen
+        and not row.satisfies(config.persona(row.persona_id), terms)
+    ]
 
 
 def test_a_customer_who_fails_one_bound_is_not_a_fixture() -> None:
@@ -584,7 +606,7 @@ def test_a_customer_who_fails_one_bound_is_not_a_fixture() -> None:
     )
 
     chosen = select_fixtures(
-        tuple(facts().values()), tightened, fixture_catalog(), stores()
+        tuple(facts().values()), tightened, fixture_catalog(), stores(), fixture_terms()
     )
 
     assert spec.fixture.at_least
@@ -609,7 +631,11 @@ def test_a_customer_with_no_orders_is_not_measured() -> None:
 
     rows = measured(silent)
     chosen = select_fixtures(
-        tuple(rows.values()), shipped_config(), fixture_catalog(), stores()
+        tuple(rows.values()),
+        shipped_config(),
+        fixture_catalog(),
+        stores(),
+        fixture_terms(),
     )
 
     assert "demo-0001" in facts()
@@ -698,7 +724,13 @@ def test_a_narrative_naming_a_field_that_does_not_exist_is_refused() -> None:
     )
 
     with pytest.raises(ConfigError, match="does not render"):
-        select_fixtures(tuple(facts().values()), broken, fixture_catalog(), stores())
+        select_fixtures(
+            tuple(facts().values()),
+            broken,
+            fixture_catalog(),
+            stores(),
+            fixture_terms(),
+        )
 
 
 def test_the_shipped_criteria_are_the_ones_the_assertions_check() -> None:
@@ -708,13 +740,22 @@ def test_the_shipped_criteria_are_the_ones_the_assertions_check() -> None:
     file's bar is what the PRD was promised. If someone loosens the config to
     fill a roster, this is what notices.
     """
-    config = shipped_config()
+    config, terms = shipped_config(), fixture_terms()
 
-    assert dict(config.persona("regular").fixture.at_least)["usual_share"] >= 0.85
-    assert dict(config.persona("explorer").fixture.at_most)["usual_share"] <= 0.15
-    lapsed = dict(config.persona("lapsed").fixture.at_least)
-    assert lapsed["days_since_order"] >= 90
-    assert lapsed["points_balance"] >= config.loyalty.redemption_threshold
+    def bar(bounds: tuple[tuple[str, Bound], ...], name: str) -> float:
+        return resolve(dict(bounds)[name], terms)
+
+    assert bar(config.persona("regular").fixture.at_least, "usual_share") >= 0.85
+    assert bar(config.persona("explorer").fixture.at_most, "usual_share") <= 0.15
+    lapsed = config.persona("lapsed").fixture.at_least
+    assert bar(lapsed, "days_since_order") >= 90
+    # An identity, not an inequality, and the strongest of the three. The
+    # Lapsed Customer's bar is not a number this file and the config are asked
+    # to keep in step -- it is a name, read off the published terms at
+    # selection time. That is the whole repair: this criterion first shipped as
+    # the literal 1250, a copy of a config key issue #27 then deleted, and the
+    # copy survived the thing it copied.
+    assert dict(lapsed)["points_balance"] == "costliest_reward"
     for persona_id in PRD_PERSONAS:
         assert config.persona(persona_id).fixture.narrative
 
@@ -734,4 +775,77 @@ def test_an_archetype_with_no_criteria_is_refused(tmp_path: Path) -> None:
     path.write_text(text[:last], encoding="utf-8")
 
     with pytest.raises(ConfigError, match="needs fixture criteria"):
+        load_config(path)
+
+
+# --------------------------------------------------------------------------
+# A bound that is a published fact rather than a chosen number
+# --------------------------------------------------------------------------
+
+
+def test_every_published_bound_has_a_reader() -> None:
+    """The config's vocabulary and this module's resolvers are one list.
+
+    The same correspondence :data:`MEASURES` has with ``CustomerFacts``, for
+    the same reason: a name the config accepts and nothing can resolve is a
+    criterion that raises at generation time, and a resolver for a name the
+    config refuses is dead code that reads as coverage.
+    """
+    assert set(PUBLISHED_READERS) == set(PUBLISHED_BOUNDS)
+
+
+def test_a_published_bound_is_read_and_not_stored() -> None:
+    """The bar moves when Chipotle's does, which is what 1250 could not do.
+
+    The defect this replaces was not a wrong number, it was a *copied* one: the
+    Lapsed Customer's bar was written as the literal value of a config key, so
+    when issue #27 deleted the key the criterion went on comparing against a
+    number nothing published any more. Here the published Rewards Exchange is
+    repriced out of every lapsed customer's reach, and the roster has to empty.
+    A bar stored anywhere in this package would leave it standing.
+
+    Every other archetype is bounded on facts about orders, so the same change
+    must leave those rosters identical — which is what says the emptying is the
+    criterion biting rather than the terms perturbing the whole selection.
+    """
+    terms = fixture_terms()
+    richest = max(row.points_balance for row in facts().values())
+    unreachable = dataclasses.replace(
+        terms,
+        rewards=tuple(
+            dataclasses.replace(reward, point_cost=reward.point_cost + richest)
+            for reward in terms.rewards
+        ),
+    )
+    rows = tuple(facts().values())
+
+    shipped = select_fixtures(rows, shipped_config(), fixture_catalog(), stores(), terms)
+    repriced = select_fixtures(
+        rows, shipped_config(), fixture_catalog(), stores(), unreachable
+    )
+
+    assert [row for row in shipped if row.persona_id == "lapsed"]
+    assert not [row for row in repriced if row.persona_id == "lapsed"]
+    assert [row for row in shipped if row.persona_id != "lapsed"] == [
+        row for row in repriced if row.persona_id != "lapsed"
+    ]
+
+
+def test_a_bound_that_names_nothing_published_is_refused(tmp_path: Path) -> None:
+    """A string bound is a name or it is a mistake; there is no third reading.
+
+    Refused at load rather than at selection, for the reason the measure
+    vocabulary is: a criterion nothing can resolve would otherwise surface as a
+    crash halfway through generating five hundred customers, or -- worse, if
+    anyone ever made it lenient -- as an archetype that quietly admits
+    everybody.
+    """
+    path = tmp_path / "prose-bound.toml"
+    text = PACKAGED.read_text(encoding="utf-8")
+    path.write_text(
+        text.replace('points_balance = "costliest_reward"', 'points_balance = "lots"'),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="neither a number nor a published"):
         load_config(path)

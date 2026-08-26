@@ -36,7 +36,11 @@ changes without a row is a balance nothing can audit.
 
 **A redemption costs what the Rewards Exchange charges.** The customer spends
 on a real published reward they can afford, and the entry names it. There is
-no threshold constant: the cheapest published reward *is* the threshold.
+no threshold constant: the cheapest published reward *is* the threshold. And
+there is no cap on how many a visit may hold, because none is published —
+:attr:`~chip_chat.data_gen.config.PersonaSpec.redemption_probability` is asked
+again after each one, so the customer stops when they stop wanting to or when
+the balance no longer covers anything.
 """
 
 from collections.abc import Iterator, Sequence
@@ -133,17 +137,22 @@ def ledger_for(
             if earned > 0:
                 write(earned, loyalty.earn_reason, order.placed_at, order.order_id, None)
 
-        affordable = terms.affordable(balance)
-        if not affordable or rng.random() >= redemption_probability:
-            continue
-        reward = _chosen(rng, affordable, loyalty.splurge_share)
-        write(
-            -reward.point_cost,
-            loyalty.redeem_reason,
-            order.placed_at,
-            order.order_id,
-            reward.name,
-        )
+        # Not `if`. Nothing Chipotle publishes limits a visit to one
+        # redemption, and the cap that used to be here is what let a
+        # high-spend balance grow without bound: a customer earning more in a
+        # visit than the costliest reward costs could never drain it however
+        # much they wanted to. See ``docs/decisions/persona-fixtures.md``.
+        while (affordable := terms.affordable(balance)) and (
+            rng.random() < redemption_probability
+        ):
+            reward = _chosen(rng, affordable, loyalty.splurge_share)
+            write(
+                -reward.point_cost,
+                loyalty.redeem_reason,
+                order.placed_at,
+                order.order_id,
+                reward.name,
+            )
 
     return tuple(entries)
 

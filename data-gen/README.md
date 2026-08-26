@@ -147,12 +147,12 @@ data:
 
 ```
 [regular #1]  demo-0033
-  a regular at ID Town 1 Mall, 773 points on the card, and 99% of 80 orders the same
+  a regular at ID Town 1 Mall, 433 points on the card, and 99% of 80 orders the same
   Steak Burrito with guacamole, white rice, black beans and cheese.
 
-[lapsed #1]   demo-0486
-  a regular at NC Town 1 Mall until March 2026, and not seen since -- 1,871 points
-  still unredeemed from 44 orders.
+[lapsed #1]   demo-0113
+  a regular at FL Town 1 Mall until March 2026, and not seen since -- 16,503 points
+  still unredeemed from 45 orders.
 
 [explorer #1] demo-0497
   49 orders across 15 stores and 45 different baskets among them; the nearest thing to
@@ -178,10 +178,19 @@ a published catalogue name, both asserted, so a sentence can be checked rather t
 trusted. No narrative carries a display name: that column is editable, and #67 joins
 the live name to the sentence at entry.
 
-Three things the table does not claim — that its `usual_share` is the `usual_order`
-mart's `confidence`, that its personas vary by *food* (issue #28), or that its points
-are reconciled rewards (issue #27). `docs/decisions/persona-fixtures.md` has the
-arguments.
+**A bound is a number chosen here or a fact read off Chipotle's published terms.** "At
+least twenty orders" is a product decision. "Enough stored value to be worth
+interrupting someone about" is not: the Lapsed Customer's bar is written
+`points_balance = "costliest_reward"` and resolves against the Rewards Exchange at
+selection time, so it moves when Chipotle's prices move and cannot be retuned here at
+all. `config.PUBLISHED_BOUNDS` is the vocabulary and `fixtures.PUBLISHED_READERS`
+reads it. This bar first shipped as the literal `1250`, copied from a `[loyalty]` key
+that issue #27 then deleted, and the copy outlived it —
+`docs/decisions/persona-fixtures.md` has that story.
+
+Two things the table does not claim — that its `usual_share` is the `usual_order`
+mart's `confidence`, or that its personas vary by *food* (issue #28).
+`docs/decisions/persona-fixtures.md` has the arguments.
 
 ## Retuning it
 
@@ -209,13 +218,19 @@ The knobs worth knowing about:
   `points_per_dollar` or `redemption_threshold` is refused rather than ignored.
 - `[[personas]]` — the archetypes, including `redemption_probability`: how readily a
   customer of this kind spends. Per archetype, because the Lapsed Regular's
-  accumulated balance is the point of them.
+  accumulated balance is the point of them — and it is the one thing about the ledger
+  this project still chooses, so it is the one that has to be re-checked when the
+  published terms change. It was: at ten published points per dollar the Office
+  Manager's 0.18 described someone earning a free entrée every lunch run and shrugging.
 - `[personas.fixture]` — what makes a customer of that archetype worth showing a
   visitor: the narrative template, a ranking measure, and bounds under `at_least` and
   `at_most`. Both may name any measure in `chip_chat.data_gen.config.MEASURES`; a name
   outside it is refused rather than treated as a bound that never bites, because a
   criterion misspelt into inertness would let an archetype ship fixtures that
-  demonstrate nothing.
+  demonstrate nothing. A bound's *value* is a number or a name from
+  `PUBLISHED_BOUNDS` — `"costliest_reward"`, `"cheapest_reward"` — read off the
+  published terms, for a criterion that is a fact about Chipotle's programme rather
+  than a decision of ours. A string that is neither is refused too.
 
 ## What this package does not do
 

@@ -22,7 +22,7 @@ means without changing a line of code.
 """
 
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC
 from itertools import pairwise
 
@@ -344,3 +344,61 @@ def test_some_customers_have_spent_points_and_can_be_asked_about_it() -> None:
     }
 
     assert len(spent) >= 5
+
+
+def test_the_heaviest_spender_spends_the_points_they_earn() -> None:
+    """cc-5si, at population scale.
+
+    The Office Manager is the archetype that earns more in one visit than the
+    costliest published reward costs — a hundred-and-forty-dollar group order
+    is about fourteen hundred points. While the ledger held at most one
+    redemption per visit, that made them structurally unable to keep up with
+    their own earning: they redeemed 46% of what they earned and carried
+    sixty-five thousand points at the end of the window.
+
+    So the assertion is a ratio rather than a ceiling. A ceiling would have to
+    be a number chosen to sit just above whatever this population happens to
+    produce, and it would also have to be generous enough for the Lapsed
+    Customer, whose whole point is a balance they never spent. What separates
+    the two is not the size of the balance, it is whether the customer *could*
+    have spent it.
+    """
+    population = fixture_population()
+    personas = {
+        visitor.demo_id: visitor.persona_id for visitor in population.demo_visitors
+    }
+    earns = [
+        entry.delta
+        for entry in population.loyalty_ledger
+        if entry.delta > 0
+        and entry.order_id is not None
+        and personas[entry.demo_id] == "office_manager"
+    ]
+    earned = sum(earns)
+    redeemed = -sum(
+        entry.delta
+        for entry in population.loyalty_ledger
+        if entry.reason == "REWARD_REDEEMED"
+        and personas[entry.demo_id] == "office_manager"
+    )
+
+    # The precondition that makes this the archetype the defect showed up in:
+    # nobody earns faster per visit, so nobody was hurt more by a cap of one
+    # redemption per visit. Roughly fourteen hundred points a lunch run,
+    # against a costliest published reward of sixteen twenty-five.
+    assert earns
+    assert earned / len(earns) == max(
+        sum(rate) / len(rate) for rate in _earn_rates(population, personas).values()
+    )
+    assert redeemed >= 0.75 * earned
+
+
+def _earn_rates(
+    population: SyntheticPopulation, personas: Mapping[str, str]
+) -> dict[str, list[int]]:
+    """Return every archetype's per-visit earnings, for comparing rates."""
+    rates: dict[str, list[int]] = {}
+    for entry in population.loyalty_ledger:
+        if entry.delta > 0 and entry.order_id is not None:
+            rates.setdefault(personas[entry.demo_id], []).append(entry.delta)
+    return rates

@@ -60,28 +60,36 @@ every one of them.
 | Persona | PRD §02 measurement | The bound |
 | --- | --- | --- |
 | The Regular | turns-to-reorder, target 1 | `usual_share ≥ 0.85`, `store_share ≥ 0.90`, `order_count ≥ 30` |
-| The Lapsed Customer | is stored value surfaced unasked (P3) | `days_since_order ≥ 90` **and** `points_balance ≥ 1250` |
+| The Lapsed Customer | is stored value surfaced unasked (P3) | `days_since_order ≥ 90` **and** `points_balance ≥ costliest_reward` |
 | The Explorer | are answers hedged appropriately | `usual_share ≤ 0.15`, `distinct_baskets ≥ 20`, `distinct_stores ≥ 5` |
 
 Every bound, not a weighted score. A score would let a Regular with no dominant usual
 place well by ordering a lot, which is exactly the fixture that cannot demonstrate its
 own metric.
 
-**The Lapsed Customer has the least margin, and it is worth knowing.** Six of the
-sixty lapsed customers in the shipped population clear the points bar; four are needed.
-The rest have spent their balance down — `[loyalty].redemption_probability` is 0.65, so
-most customers redeem on their way out rather than forgetting. That margin of two is
-the tightest constraint anywhere in this ticket, and it moves when #27 retunes the
-rewards arithmetic. It is decoupled deliberately (see below) so the movement cannot be
-silent: `test_fixtures.py` fails rather than the roster quietly thinning.
+**The Lapsed Customer's margin was the tightest thing in this ticket and is now the
+loosest, and both facts are about issue #27 rather than about this rule.** Against
+issue #25's provisional arithmetic, six of sixty lapsed customers cleared the bar and
+four were needed — a margin of two, and the reason the original text warned about it.
+Under the published terms the earn rate is ten points a dollar, this archetype redeems
+at 0.04, and fifty-nine of sixty now clear the costliest published reward. The bar did
+not move down; the population moved up. `test_fixtures.py` fails rather than the roster
+quietly thinning, which is what makes either direction visible.
 
 **An archetype that cannot fill its roster contributes fewer fixtures.** It does not
 get topped up with the best of the customers who failed. The failure this avoids is
 specific and bad: a demo assigning a visitor "the Regular" who turns out to have no
 usual, because a quota had to come out to four. A short roster is reported by the CLI
 and asserted against the shipped population by `test_fixtures.py`, so it is loud rather
-than silent — but it is honest, and a sixty-customer population genuinely demonstrates
-less than a five-hundred-customer one.
+than silent.
+
+The test that guards this checks the *criteria*, not a count. A count is the obvious
+assertion and the wrong one: whether a sixty-customer population happens to yield fewer
+exemplars than a five-hundred-customer one depends on where the bars sit, and it
+stopped being true when issue #27 changed the earn rate. What must never stop being
+true is that everybody on the roster earned their place — and, so that the bounds are
+shown to bite at all, that the thin population really did contain customers they turned
+away.
 
 ## Three things `persona_fixtures` deliberately does not claim
 
@@ -99,22 +107,96 @@ in ingredient. Every food named in a narrative is a real catalogue row and a tes
 asserts it — but "the population offers genuine variety of food" is issue #28's claim
 to make, against a real harvest, and is not made here.
 
-**Its points balances are not reconciled.** `points_balance` is what this generator's
-provisional `[loyalty]` arithmetic sums to. It is stored value the assistant can
-surface, which is what P3 needs of it; it is not a Chipotle Rewards balance, and issue
-#27 owns making it one. Two consequences worth naming:
+**Its points balances are Chipotle's arithmetic, not its rewards policy.**
+`points_balance` is what the ledger sums to, and since issue #27 every number that
+ledger uses — the earn rate, the expiry window, the daily cap, every reward price —
+is read off Chipotle's published terms. What is *not* claimed here is that any
+particular customer's balance is one Chipotle would recognise: how eagerly an
+archetype redeems is a tuning parameter in `population.toml`, and it is the one thing
+about the ledger this project still chooses.
 
-- `personas[lapsed].fixture.at_least.points_balance` is deliberately the *same number*
-  as the current `redemption_threshold` and deliberately **not a reference to it**. It
-  is a selection bar — "enough stored value to be worth interrupting someone about" —
-  and when #27 moves the threshold, this is retuned beside it rather than dragged along
-  by it. The two answer different questions.
-- The Office Manager's narrative says nothing about points, because that archetype
-  outruns the redemption rule: `[loyalty]` allows at most one redemption per order, so
-  a customer earning more than `redemption_threshold` per visit accumulates a balance
-  no real programme would show (38,359 points, on the shipped seed). Filed as `cc-5si`
-  against #27. What that fixture is here to demonstrate is group ordering, so that is
-  what its sentence is about.
+## The bar for stored value is read, not chosen
+
+This is the part of the ticket that had to be redone, and the reason is worth writing
+down because the mistake was a reasonable one.
+
+The Lapsed Customer's criterion is "enough stored value to be worth interrupting
+someone about". Issue #26 first shipped it as `points_balance = 1250` — the same
+number as `[loyalty].redemption_threshold`, and *deliberately not a reference to it*.
+The argument was that the two answer different questions: the threshold is arithmetic
+and the bar is a selection decision, so #27 retuning one should not silently move the
+other. Written as a reference it would have moved without anyone deciding it should.
+
+Issue #27 did not retune `redemption_threshold`. It **deleted** it. The earn rate and
+every reward price now come from the published terms, and `redemption_threshold`
+survives only in `PUBLISHED_KEYS`, as a key a config is refused for still carrying. So
+the copy outlived the thing it was a copy of, and the criterion went on comparing
+against a number nothing published any more — which is exactly the decoupling working
+as designed, and exactly the wrong outcome.
+
+The repair is not to point the bar back at the config. It is to notice that this
+particular bar was never ours to choose:
+
+```toml
+[personas.fixture.at_least]
+days_since_order = 90
+points_balance = "costliest_reward"
+```
+
+A bound's value is now a number chosen here **or** a name from
+`config.PUBLISHED_BOUNDS`, resolved against `RewardsTerms` at selection time by
+`fixtures.PUBLISHED_READERS`. Two names exist, both about the Rewards Exchange.
+`cheapest_reward` is the least a balance can be and still buy anything — the
+redemption threshold, and the ledger already uses it as one. `costliest_reward` is the
+price of the most expensive thing published, and issue #27 had already named it: the
+docstring on `RewardsTerms.costliest` says it is "the number a balance worth surfacing
+unprompted is measured against", and `test_ledger_population.py` asserts that ninety
+per cent of lapsed customers clear it. Issue #26 is joining that decision rather than
+making a second one beside it.
+
+Which is the distinction the two vocabularies now draw. `MEASURES` says what may be
+**bounded**; `PUBLISHED_BOUNDS` says what a bound may be **read from**. "At least
+twenty orders" is a product decision and belongs in the config. "Enough points to
+matter" is a fact about someone else's programme.
+
+The test that pins it reprices the published Rewards Exchange out of every lapsed
+customer's reach and requires the roster to empty, while every other archetype's
+roster — all of them bounded on facts about orders — comes out identical. A bar stored
+anywhere in this package leaves that first assertion standing.
+
+## The Office Manager could not spend what they earned
+
+The same pass fixed `cc-5si`, filed against this work when the original was written.
+
+`ledger_for` redeemed at most once per visit. Nothing Chipotle publishes says that; it
+was invented here. For most archetypes it never bound, but the Office Manager puts in a
+hundred-and-forty-dollar group order and earns about fourteen hundred points for it,
+against a costliest published reward of 1,625. They could not keep up with their own
+earning however much they wanted to, redeemed 46% of what they earned, and finished
+eighteen months carrying sixty-five thousand points. That is not a number any rewards
+programme would show anyone.
+
+Two things were wrong and they needed different fixes.
+
+The **cap** is gone: the redemption branch is a loop, and
+`redemption_probability` is asked again after each redemption. That is issue #27's own
+rule applied to the one rule in the module that was not published — and on its own it
+fixed the Weekend Family, whose balance was drifting up more slowly for the same
+reason.
+
+The **eagerness** was retuned, which the cap's removal did not fix, because 0.18 was
+never the cap biting. It was tuned against issue #25's provisional arithmetic; under
+ten published points per dollar it describes someone who earns a free entrée every
+lunch run and shrugs. It is now 0.60, and the archetype redeems 96% of what it earns.
+The number is behaviour, not arithmetic, and behaviour is what `population.toml` is
+still allowed to hold.
+
+The Lapsed Customer's 0.04 was **not** touched. Their balance accumulates because they
+never spend it, which is the persona, and `test_ledger_population.py` requires ninety
+per cent of them to end above the costliest published reward. The distinction the
+regression test draws is therefore not about the size of a balance but about whether
+the customer *could* have spent it: a customer who always wants to redeem must end
+every visit unable to afford anything at all, whatever they earn.
 
 ## No name in the narrative
 

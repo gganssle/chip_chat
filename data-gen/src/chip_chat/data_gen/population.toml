@@ -259,7 +259,10 @@ delivery_share = 0.08
 # well by ordering a lot. `rank_by` orders the ones that qualify, highest
 # first; a leading `-` reads it lowest first. Bounds and `rank_by` may name any
 # measure in `chip_chat.data_gen.config.MEASURES`; a name outside it is a
-# ConfigError rather than a bound that quietly never bites.
+# ConfigError rather than a bound that quietly never bites. A bound's VALUE is
+# a number chosen here or a name from `PUBLISHED_BOUNDS`, read off Chipotle's
+# published terms -- for a criterion that is a fact about their programme
+# rather than a decision of ours.
 [personas.fixture]
 # The PRD's Regular, measured by turns-to-reorder with a target of one. That
 # target is only reachable if the usual is unambiguous, so the bar is the usual
@@ -306,26 +309,36 @@ delivery_share = 0.15
 # well by ordering a lot. `rank_by` orders the ones that qualify, highest
 # first; a leading `-` reads it lowest first. Bounds and `rank_by` may name any
 # measure in `chip_chat.data_gen.config.MEASURES`; a name outside it is a
-# ConfigError rather than a bound that quietly never bites.
+# ConfigError rather than a bound that quietly never bites. A bound's VALUE is
+# a number chosen here or a name from `PUBLISHED_BOUNDS`, read off Chipotle's
+# published terms -- for a criterion that is a fact about their programme
+# rather than a decision of ours.
 [personas.fixture]
 # The PRD's Lapsed Customer, measured by whether stored value is surfaced
 # before they think to ask. Both halves are required: months of silence AND a
 # balance worth mentioning. Silence alone is a customer with nothing to
 # surface, and points alone is a customer who was in last week.
 #
-# `points_balance` is deliberately the current `[loyalty].redemption_threshold`
-# and deliberately not a reference to it. It is a SELECTION bar -- "enough
-# stored value that a visitor would want to hear about it" -- and issue #27
-# reconciles the rewards arithmetic against the published terms. When #27 moves
-# the threshold, this number is retuned beside it rather than dragged along by
-# it, because the two answer different questions.
+# `points_balance` is READ, not chosen. It was first written here as the
+# literal 1250 -- a copy of `[loyalty].redemption_threshold`, deliberately not
+# a reference to it, so that issue #27 retuning the arithmetic could not
+# silently move the fixture criteria. Issue #27 did not retune the number, it
+# DELETED it: the earn rate and every reward price are now read off Chipotle's
+# published terms, and the copy outlived the thing it was a copy of.
+#
+# `costliest_reward` is the published price of the most expensive thing on the
+# Rewards Exchange, and it is the bar `RewardsTerms.costliest` already names in
+# its own docstring as what "a balance worth surfacing unprompted" is measured
+# against. A Lapsed Customer who clears it has a free entree waiting that they
+# never claimed, which is exactly what PRD requirement P3 surfaces unasked.
+# There is no number here to retune, which is the point.
 rank_by = "points_balance"
 narrative = "a regular at {store} until {last_order_month}, and not seen since -- {points_balance:,} points still unredeemed from {order_count} orders."
 
 [personas.fixture.at_least]
 order_count = 20
 days_since_order = 90
-points_balance = 1250
+points_balance = "costliest_reward"
 
 [[personas]]
 persona_id = "explorer"
@@ -359,7 +372,10 @@ delivery_share = 0.20
 # well by ordering a lot. `rank_by` orders the ones that qualify, highest
 # first; a leading `-` reads it lowest first. Bounds and `rank_by` may name any
 # measure in `chip_chat.data_gen.config.MEASURES`; a name outside it is a
-# ConfigError rather than a bound that quietly never bites.
+# ConfigError rather than a bound that quietly never bites. A bound's VALUE is
+# a number chosen here or a name from `PUBLISHED_BOUNDS`, read off Chipotle's
+# published terms -- for a criterion that is a fact about their programme
+# rather than a decision of ours.
 [personas.fixture]
 # The PRD's Explorer, measured by whether answers are correct, sourced and
 # appropriately hedged. The bound is inverted on purpose: a LOW `usual_share`
@@ -383,9 +399,15 @@ label = "The Office Manager"
 narrative = "Puts in the midweek lunch order for the whole floor, on delivery."
 share = 0.08
 seed_points = 900
-# Orders on the company card and rarely thinks about the points, which is
-# how a large balance accumulates on a busy account.
-redemption_probability = 0.18
+# The one archetype whose eagerness had to be retuned when issue #27 made the
+# earn rate the published ten points per dollar (cc-5si). A hundred-and-forty
+# dollar group order earns about 1,400 points, more than the costliest
+# published reward costs, so at 0.18 this customer earned faster than they
+# could ever spend and reached sixty-five thousand points over eighteen months
+# -- not a balance any programme would show. The number is behaviour, not
+# arithmetic: someone whose lunch run earns a free entree every visit uses
+# them, and that is the perk of being the one who does the run.
+redemption_probability = 0.60
 cadence_days = 11.0
 cadence_spread = 0.35
 active_from_share = 0.05
@@ -411,19 +433,24 @@ delivery_share = 0.65
 # well by ordering a lot. `rank_by` orders the ones that qualify, highest
 # first; a leading `-` reads it lowest first. Bounds and `rank_by` may name any
 # measure in `chip_chat.data_gen.config.MEASURES`; a name outside it is a
-# ConfigError rather than a bound that quietly never bites.
+# ConfigError rather than a bound that quietly never bites. A bound's VALUE is
+# a number chosen here or a name from `PUBLISHED_BOUNDS`, read off Chipotle's
+# published terms -- for a criterion that is a fact about their programme
+# rather than a decision of ours.
 [personas.fixture]
 # Out of scope for V0 as a persona, in scope as data: issue #26 asks that the
 # group orderer "shape the generated data so that nothing has to be regenerated
 # when it arrives". A fixture that already demonstrates multi-entree ordering
 # is that shaping made checkable.
 rank_by = "entrees_per_order"
-# Deliberately says nothing about points. This archetype outspends the
-# redemption rule -- `[loyalty]` lets a customer redeem at most once per
-# order, so one earning more than `redemption_threshold` per visit
-# accumulates a balance no real programme would show. It is the
-# provisional arithmetic issue #27 reconciles (filed as a bead against
-# it), and what this fixture is here to demonstrate is group ordering.
+# Deliberately says nothing about points, and now for a reason about the
+# persona rather than about a bug. It used to say nothing because this
+# archetype's balance was an artefact: the ledger let a customer redeem at
+# most once per visit, so one earning more per visit than the costliest
+# reward costs could never drain it, and every office manager sat on tens of
+# thousands of points (cc-5si). That cap is gone -- nothing published imposed
+# it -- and this archetype's eagerness is retuned above. What the fixture is
+# here to demonstrate is still group ordering, which is what `rank_by` picks.
 narrative = "puts in the floor's lunch order at {store}: {order_count} orders averaging {entrees_per_order:.1f} entrees, ${lifetime_spend:,.0f} in all."
 
 [personas.fixture.at_least]
@@ -463,7 +490,10 @@ delivery_share = 0.35
 # well by ordering a lot. `rank_by` orders the ones that qualify, highest
 # first; a leading `-` reads it lowest first. Bounds and `rank_by` may name any
 # measure in `chip_chat.data_gen.config.MEASURES`; a name outside it is a
-# ConfigError rather than a bound that quietly never bites.
+# ConfigError rather than a bound that quietly never bites. A bound's VALUE is
+# a number chosen here or a name from `PUBLISHED_BOUNDS`, read off Chipotle's
+# published terms -- for a criterion that is a fact about their programme
+# rather than a decision of ours.
 [personas.fixture]
 rank_by = "entrees_per_order"
 narrative = "feeds the table at {store} most weekends -- {order_count} orders averaging {entrees_per_order:.1f} entrees, usually including {usual_order}."
@@ -506,7 +536,10 @@ delivery_share = 0.25
 # well by ordering a lot. `rank_by` orders the ones that qualify, highest
 # first; a leading `-` reads it lowest first. Bounds and `rank_by` may name any
 # measure in `chip_chat.data_gen.config.MEASURES`; a name outside it is a
-# ConfigError rather than a bound that quietly never bites.
+# ConfigError rather than a bound that quietly never bites. A bound's VALUE is
+# a number chosen here or a name from `PUBLISHED_BOUNDS`, read off Chipotle's
+# published terms -- for a criterion that is a fact about their programme
+# rather than a decision of ours.
 [personas.fixture]
 # Recognised by how recently their history STARTS, which is the one thing that
 # makes a newcomer a newcomer.
@@ -551,7 +584,10 @@ delivery_share = 0.20
 # well by ordering a lot. `rank_by` orders the ones that qualify, highest
 # first; a leading `-` reads it lowest first. Bounds and `rank_by` may name any
 # measure in `chip_chat.data_gen.config.MEASURES`; a name outside it is a
-# ConfigError rather than a bound that quietly never bites.
+# ConfigError rather than a bound that quietly never bites. A bound's VALUE is
+# a number chosen here or a name from `PUBLISHED_BOUNDS`, read off Chipotle's
+# published terms -- for a criterion that is a fact about their programme
+# rather than a decision of ours.
 [personas.fixture]
 rank_by = "distinct_stores"
 narrative = "turns up every couple of months and usually somewhere new: {order_count} orders across {distinct_stores} stores since {first_order_month}."

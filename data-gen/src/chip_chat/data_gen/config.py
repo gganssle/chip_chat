@@ -116,6 +116,39 @@ issue #26 exists to prevent.
 """
 
 
+PUBLISHED_BOUNDS = (
+    "cheapest_reward",
+    "costliest_reward",
+)
+"""What a fixture bound may be *instead of* a number: a published quantity.
+
+A bound is normally a number this project chose — "at least twenty orders" is
+a product decision and belongs in the config. Some are not. "Enough stored
+value to be worth interrupting someone about" is a fact about Chipotle's
+Rewards Exchange, and writing it as a literal is how issue #26 first shipped:
+``points_balance = 1250``, a copy of a config key issue #27 then deleted, so
+the criterion outlived the number it was a copy of.
+
+These names resolve against
+:class:`~chip_chat.data_gen.rewards.RewardsTerms` at selection time, so the
+bar moves when Chipotle's does and cannot be retuned here at all. The
+resolvers are in :mod:`chip_chat.data_gen.fixtures` and ``test_fixtures.py``
+asserts that every name in this tuple has one.
+
+The distinction is the point of the two vocabularies: :data:`MEASURES` says
+what may be *bounded*, and this says what a bound may be *read from*.
+"""
+
+
+Bound = float | str
+"""One side of a fixture criterion: a number chosen here, or a published name.
+
+A :class:`str` is always one of :data:`PUBLISHED_BOUNDS` — the config reader
+refuses any other — so nothing downstream has to guess whether a string is a
+bound it can resolve.
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class FixtureSpec:
     """What makes a customer a good exemplar of one archetype.
@@ -145,14 +178,17 @@ class FixtureSpec:
             first. Prefix with ``-`` for lowest first, which is how the
             Explorer asks for the *least* repetitive customer. Names a
             measure from :data:`MEASURES`.
-        at_least: Lower bounds, keyed by measure. Inclusive.
-        at_most: Upper bounds, keyed by measure. Inclusive.
+        at_least: Lower bounds, keyed by measure. Inclusive. A value is
+            either a number or a name from :data:`PUBLISHED_BOUNDS`, which
+            :mod:`chip_chat.data_gen.fixtures` resolves against the published
+            rewards terms.
+        at_most: Upper bounds, keyed by measure. Inclusive. Same two forms.
     """
 
     narrative: str
     rank_by: str
-    at_least: tuple[tuple[str, float], ...]
-    at_most: tuple[tuple[str, float], ...]
+    at_least: tuple[tuple[str, Bound], ...]
+    at_most: tuple[tuple[str, Bound], ...]
 
     @property
     def measure(self) -> str:
@@ -643,9 +679,16 @@ def _fixture(where: str, entry: Mapping[str, Any]) -> FixtureSpec:
     at_most = _bounds(f"{where}.at_most", table)
     lower = dict(at_least)
     for name, ceiling in at_most:
-        if name in lower and lower[name] > ceiling:
+        floor = lower.get(name)
+        # Only when both are numbers. A published bound has no value until the
+        # rewards terms are loaded, and a pair where one side is published
+        # cannot contradict itself here without inventing the number this whole
+        # mechanism exists to stop inventing. Nothing is lost: an archetype
+        # bounded into emptiness still contributes no fixtures, and the CLI
+        # says so by name.
+        if isinstance(floor, float) and isinstance(ceiling, float) and floor > ceiling:
             raise ConfigError(
-                f"{where} asks for {name} at least {lower[name]} and at most "
+                f"{where} asks for {name} at least {floor} and at most "
                 f"{ceiling}; no customer can clear both, so the archetype "
                 "would contribute no fixture at all"
             )
@@ -657,23 +700,42 @@ def _fixture(where: str, entry: Mapping[str, Any]) -> FixtureSpec:
     )
 
 
-def _bounds(where: str, table: Mapping[str, Any]) -> tuple[tuple[str, float], ...]:
-    """Return one bounds table as sorted ``(measure, value)`` pairs.
+def _bounds(where: str, table: Mapping[str, Any]) -> tuple[tuple[str, Bound], ...]:
+    """Return one bounds table as sorted ``(measure, bound)`` pairs.
 
     Absent means unbounded. Sorted so that the same criteria written in a
     different order are the same criteria, which keeps the population's digest
     a function of what the config says rather than of how it was typed.
+
+    A bound is a number or a name from :data:`PUBLISHED_BOUNDS`. A string that
+    is neither is refused here rather than at selection time, because a
+    criterion that cannot be resolved is a criterion that never bites.
     """
     raw = table.get(where.split(".")[-1])
     if raw is None:
         return ()
     if not isinstance(raw, dict):
         raise ConfigError(f"{where} must be a table of measures, got {raw!r}")
-    bounds = []
+    bounds: list[tuple[str, Bound]] = []
     for name in sorted(raw):
         _measure(where, name)
-        bounds.append((name, _number(f"{where}.{name}", raw, minimum=0.0)))
+        value = raw[name]
+        if isinstance(value, str):
+            bounds.append((name, _published(f"{where}.{name}", value)))
+        else:
+            bounds.append((name, _number(f"{where}.{name}", raw, minimum=0.0)))
     return tuple(bounds)
+
+
+def _published(where: str, name: str) -> str:
+    """Raise unless ``name`` is one of :data:`PUBLISHED_BOUNDS`."""
+    if name not in PUBLISHED_BOUNDS:
+        raise ConfigError(
+            f"{where} is {name!r}, which is neither a number nor a published "
+            f"quantity; expected a number or one of {list(PUBLISHED_BOUNDS)}. "
+            "A bound written as prose is a bound that resolves to nothing."
+        )
+    return name
 
 
 def _measure(where: str, name: str) -> None:

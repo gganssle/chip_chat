@@ -229,18 +229,53 @@ def test_an_eager_customer_still_only_redeems_what_they_can_afford() -> None:
 
 
 def test_a_splurging_customer_takes_the_best_reward_they_can_afford() -> None:
-    """Which is what makes the Rewards Exchange's expensive end reachable."""
+    """Which is what makes the Rewards Exchange's expensive end reachable.
+
+    The order is a group order, deliberately. A customer who redeems at every
+    visit never carries a balance between them — that is the point of the
+    change cc-5si asked for — so the only way one of them reaches the
+    expensive end is to earn it in a single visit. Two hundred dollars is two
+    thousand points, and the costliest published reward costs less than that.
+    """
     terms = fixture_terms()
 
     entries = ledger(
-        [an_order(index, "60.00") for index in range(1, 20)],
+        [an_order(index, "200.00") for index in range(1, 20)],
         redeems=1.0,
         splurge_share=1.0,
     )
 
+    assert terms.costliest.point_cost < 200 * terms.points_per_dollar
     assert terms.costliest.name in {
         entry.reward_name for entry in entries if entry.delta < 0
     }
+
+
+def test_a_customer_who_always_redeems_is_never_left_holding_a_balance() -> None:
+    """cc-5si. Nothing this package invents may stop a customer spending.
+
+    The defect: the redemption branch used to sit outside a loop, so a visit
+    held at most one redemption. A customer earning more in a visit than the
+    costliest published reward costs could therefore never drain their
+    balance however much they wanted to, and the Office Manager archetype
+    reached sixty-five thousand points over eighteen months — not a number any
+    rewards programme would show anyone.
+
+    Nothing published imposes that cap, and issue #27's rule for this module is
+    that no number in it is one this project chose. So the assertion is about
+    capability rather than about a tuned outcome: a customer who always wants
+    to redeem ends every visit unable to afford anything at all, whatever they
+    earn. Under the defect this fails by two orders of magnitude.
+    """
+    terms = fixture_terms()
+    a_visit = Decimal("500.00")
+    assert a_visit * terms.points_per_dollar > terms.costliest.point_cost
+
+    entries = ledger(
+        [an_order(index, str(a_visit)) for index in range(1, 40)], redeems=1.0
+    )
+
+    assert balances(entries)[-1] < terms.cheapest.point_cost
 
 
 def test_an_archetype_that_never_redeems_accumulates() -> None:
