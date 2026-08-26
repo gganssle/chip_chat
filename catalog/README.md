@@ -14,9 +14,12 @@ in it:
 1. **The synthetic order generator** (issue #25) composes orders only from
    catalogue rows, which is what keeps the fake-accounts / real-menu boundary
    honest.
-2. **The vision matcher** (issue #54) resolves described slots to catalogue SKUs
-   through a vocabulary *generated from this table at build time*, so the model's
-   vocabulary cannot drift from what is orderable (RFC-001 §07).
+2. **The vision matcher** (`vision/src/chip_chat/vision/matcher.py`) resolves
+   described slots to catalogue SKUs through a vocabulary *generated from this
+   table at build time*, so the model's vocabulary cannot drift from what is
+   orderable (RFC-001 §07). It resolves a vessel and a protein through
+   `(item_type, primary_filling)` and a modifier through `modifiers`, never
+   through either half of an entree alone and never against model free text.
 3. **The retrieval chunker** (issue #35) treats one row of `menu_items` as one
    chunk, carrying its nutrition and allergen fields as metadata (RFC-001 §08).
 

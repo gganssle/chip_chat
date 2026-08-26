@@ -4,7 +4,7 @@ Three harvests go in — the menu of issue #19, the nutrition and allergen data
 of issue #20, the stores of issue #21 — and eight tables come out. Three
 subsystems resolve against those tables and none of them may name a food that
 is not in them: the synthetic order generator of issue #25 composes orders only
-from real catalogue rows, the vision matcher of issue #54 resolves described
+from real catalogue rows, :mod:`chip_chat.vision.matcher` resolves described
 slots to catalogue SKUs through a vocabulary generated from
 :attr:`~chip_chat.catalog.records.MenuCatalog.vocabulary`, and the retrieval
 chunker of issue #35 treats one row of ``menu_items`` as one chunk.

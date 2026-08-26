@@ -27,7 +27,7 @@ object the matcher is given.** :class:`DescribedMeal` has no ``notes`` field.
 
     description = describer.describe(photo.blob_ref)
     render_to_visitor(description.notes)      # display-only, and the only reader
-    resolve(description.meal)                 # issue #54. No notes to be had.
+    resolve(description.meal)                 # stage 5. No notes to be had.
 
 That is the difference between a rule and an arrangement. A rule saying "do not
 parse notes" is obeyed until somebody is in a hurry; a matcher that is handed an

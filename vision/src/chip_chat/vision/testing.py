@@ -416,13 +416,16 @@ def vocabulary_module_source(
 
     Mirrors ``render_module`` there: the same docstring header carrying the
     catalogue content version, one :class:`~enum.StrEnum` per slot, ``SLOT_ITEMS``
-    and ``DESCRIBE_SCHEMA``. It is a mirror rather than a call because
-    ``chip-chat-vision`` does not depend on ``chip-chat-catalog`` -- the
-    generated module is loaded by name at runtime, not imported -- and a test
-    fixture that reached for the generator would reintroduce the dependency the
-    design removes. ``tests/fixtures/generated-vocabulary.py.txt`` is a copy of
-    the real generator's output, and ``tests/test_vocabulary.py`` loads it, so
-    the mirror is checked against the thing it mirrors.
+    and ``DESCRIBE_SCHEMA``. It is a mirror rather than a call because the
+    generated module is *loaded by dotted name at runtime and never imported* --
+    that is the whole of RFC-001 section 07's "generated from the live
+    catalogue", and a fixture that called the generator would be testing the
+    describer against a module built the one way production never builds one.
+    (Stage 5 does import :mod:`chip_chat.catalog`, for the rows it resolves
+    against. The vocabulary is the thing that is not imported, and it is not
+    imported here either.) ``tests/fixtures/generated-vocabulary.py.txt`` is a
+    copy of the real generator's output, and ``tests/test_vocabulary.py`` loads
+    it, so the mirror is checked against the thing it mirrors.
 
     Args:
         terms: Slot name to the terms it publishes. Defaults to

@@ -85,7 +85,7 @@ with agent_step(index=0), tool_call(ToolName.MATCH_MEAL_FROM_PHOTO, ...):
     except DescribeError as declined:
         return say(declined.message)  # the lane failed; the turn did not
 show(description.notes)  # display-only, and the only reader
-resolve(description.meal)  # #54. There are no notes on it.
+resolve(description.meal)  # stage 5. There are no notes on it.
 ```
 
 `vision.describe` is a child of `tool.<tool_name>` in RFC-001 §09's tree, so
@@ -102,13 +102,13 @@ from chip_chat.vision import MealMatcher, Outcome, SlotRules
 matcher = MealMatcher(load_catalog(blobs), rules=SlotRules.from_env())
 
 resolution = matcher.resolve(
-    description.meal,                      # no notes on it to parse
+    description.meal,  # no notes on it to parse
     restaurant_id=session.store_id,
     content_version=description.content_version,
 )
 if resolution.resolved:
-    return card(resolution.items(), resolution.total())   # #62 renders it
-return ask(resolution)                                    # #55 writes it
+    return card(resolution.items(), resolution.total())  # #62 renders it
+return ask(resolution)  # #55 writes it
 ```
 
 `matcher.resolve` is the other child of `tool.<tool_name>`, so the same rule
@@ -258,7 +258,7 @@ beside it:
 ```python
 description = describer.describe(photo.blob_ref)
 show(description.notes)  # display-only, and the only reader there is
-resolve(description.meal)  # #54. There are no notes on it to parse.
+resolve(description.meal)  # stage 5. There are no notes on it to parse.
 ```
 
 That is the difference between a rule and an arrangement. "Do not parse `notes`"
@@ -318,6 +318,113 @@ The labeled photo set is [#56](https://github.com/gganssle/chip_chat/issues/56)
 and does not exist yet. What ships here is the check plus a test proving it
 catches the shape it is looking for; #56 feeds it real photographs and scores
 the number.
+
+### Nothing is named that the catalogue does not publish
+
+That is stage 5, and it is the other half of D3. Stage 4 makes it impossible for
+the model to *say* a product name; `matcher.py` is where one is said, and it
+holds a `MenuCatalog` and nothing else — no client, no deployment, no network.
+The only path from a described meal to a product identifier is a lookup in that
+catalogue, so there is no fuzzy match against model text anywhere in it and no
+nearest-term fallback. A term that resolves to nothing produces a question, and
+a question names no item.
+
+Two lookups, and neither is a string comparison against something a model wrote:
+
+- **A vessel and a protein are each half of an entree.** `CMG-101` is the
+  Chicken Bowl; neither `bowl` nor `chicken` identifies it, and the vocabulary
+  leaves `item_ids` empty for both slots so that nothing can resolve "a bowl" to
+  a SKU without learning what was in it. The pair resolves through the published
+  `(item_type, primary_filling)`, and both published names come off the same
+  vocabulary rows the model's enum was generated from.
+- **A modifier's identity is per-parent.** Guacamole is one identifier on a
+  burrito and another on a taco, at different prices —
+  [`docs/action-surface.md`](../docs/action-surface.md) §1.3 calls resolving it
+  to one identifier and reusing it "the first mistake a naive matcher makes". So
+  the vocabulary's `item_ids` is a *candidate set*, and the answer is the
+  `modifiers` row joining a candidate to the entree the meal resolved to.
+
+A menu that sells a Chicken Bowl and a Steak Burrito does not sell a steak bowl.
+Both halves of that description are terms the catalogue publishes and the pair is
+not a row, so the answer is a question — not the nearest entree, which would be a
+real SKU on an order nobody asked for.
+
+The test for this is not thirty photographs. It is *every answer the schema
+permits*: each vessel crossed with each protein, rice, bean, and every subset of
+the salsas and toppings. A photograph can only ever produce one of them, so a
+matcher that fabricates nothing across the whole space fabricates nothing from a
+photograph either. #56 asks the different question — precision and recall against
+real food.
+
+### Below the floor, required and optional part company
+
+D3 moves the failure into a confidence we can threshold on, and PRD V5 says what
+to do at the bottom of that range: ask, do not guess. The floors are per slot
+because the slots are not equally forgiving, and they are configuration because
+[#56](https://github.com/gganssle/chip_chat/issues/56) exists to tune them
+against a labeled set — a constant is not tunable.
+
+| Slot | Floor | Required | Why this number |
+| --- | ---: | :---: | --- |
+| `protein` | 0.75 | yes | A wrong protein is a different meal at a different price, and the slot a visitor is most likely to send back. |
+| `vessel` | 0.70 | yes | Also a different order, but a photograph shows the vessel plainly and a model is rarely unsure of it — a floor above the protein's would fire on almost nothing and refuse the odd good photograph for it. |
+| `rice` | 0.55 | yes | Required by the published grammar and frequently half-hidden under everything else. A protein's floor here would question most real photographs. |
+| `beans` | 0.55 | yes | The same. |
+| `salsas` | 0.50 | no | Optional, so the floor decides what is *dropped* rather than what is asked. |
+| `toppings` | 0.50 | no | The same. |
+
+`rice` and `beans` are required because
+[`docs/action-surface.md`](../docs/action-surface.md) §1.3 reads their groups off
+the published menu as `(1, 1)` on every burrito, bowl and salad: a bowl with no
+rice selection is not an under-specified bowl but an invalid one. Requiredness is
+a knob too — `CHIP_CHAT_MATCHER_RICE_REQUIRED` — because the grammar is per
+`item_type` and a taco has no rice group at all.
+
+The asymmetry below the floor is the part worth arguing:
+
+- A **required** slot that is missing, low, or resolves to no catalogue row
+  becomes a clarifying question, and **nothing is proposed alongside it**. A card
+  missing its protein and priced as though it were not is worse than a question:
+  the price is wrong and the omission is invisible at a glance.
+- An **optional** slot in the same state is **dropped, and recorded**. A topping
+  the model half-saw must not arrive as an order the visitor did not want, and
+  the card is editable in place — so the cheap correction is adding one back
+  rather than noticing one that was never mentioned. It is recorded because a
+  floor whose effect nobody can see is a floor nobody can tune.
+
+### A total is a sum of published prices, or it is nothing
+
+Money is per restaurant, because Chipotle's is — see
+[`decisions/menu-pricing.md`](../docs/decisions/menu-pricing.md). Every resolved
+item carries the `item_prices` row for the restaurant being quoted, and the total
+is their sum. If any one of them has no price row, the total is `None` rather
+than a smaller number: a partial sum looks like a price, is lower than the real
+one, and says nothing about the line it is missing.
+
+### One catalogue, one vocabulary
+
+`Description.content_version` is the build whose vocabulary constrained the
+model. Hand it to `resolve()` and a matcher holding a different catalogue raises
+`CatalogueDriftError` instead of resolving terms from one menu against the rows
+of another — which is how a real SKU ends up in front of a visitor for food the
+photograph does not show. It is a build fault, so it raises; the four ordinary
+answers (`resolved`, `clarify`, `several_meals`, `not_orderable`) are an
+`Outcome` rather than an exception, because a deterministic matcher answering
+"not this" is a result.
+
+### The count gates the pipeline; it does not shape the draft
+
+At `meals_visible >= 2`, stage 5 does not run — RFC-001 §07, and
+[`decisions/multi-meal-photos.md`](../docs/decisions/multi-meal-photos.md). The
+schema returns one slot set, so on a frame with several meals those slots
+describe the photograph rather than any one meal, and resolving them would
+produce a draft composed entirely of real catalogue items that nobody in the
+picture is eating. The count travels onto the `Resolution`, because PRD V7
+requires saying how many were seen rather than picking one.
+
+`is_chipotle_style` false is the other refusal — PRD V4. What to offer instead is
+[#55](https://github.com/gganssle/chip_chat/issues/55); declining to build a
+draft out of a poke bowl's slots is this package's.
 
 ### The image never crosses a tool boundary
 
@@ -457,6 +564,13 @@ name, run it again tomorrow.
 | `CHIP_CHAT_UPLOAD_JPEG_QUALITY` | 85 | Invisible re-encoding, small blob. |
 | `CHIP_CHAT_UPLOAD_MAX_SECONDS` | 30 | Bounds the **read**, which the byte ceiling does not — a trickle is under every size limit forever. |
 
+The matcher's floors are the other knobs, one pair per slot —
+`CHIP_CHAT_MATCHER_<SLOT>_THRESHOLD` and `CHIP_CHAT_MATCHER_<SLOT>_REQUIRED`.
+Every one is optional and falls back to the table above, so an unset environment
+is the argued starting point rather than an unthresholded matcher; a value that
+does not parse fails at startup, because a misspelled threshold that silently
+kept the default would be a tuning run that measured the wrong number.
+
 Uploads are also rate limited and charged to the turn's budget, and those knobs
 live in [`api/`](../api/README.md) with the rest of the spend cap:
 `CHIP_CHAT_SESSION_UPLOADS_PER_WINDOW`, `CHIP_CHAT_SOURCE_UPLOADS_PER_WINDOW`,
@@ -490,6 +604,16 @@ something behind it. `conftest.py` builds the payloads that are not photographs:
 archives, an ELF binary, a shell script, HTML, a PDF, an SVG with script in it,
 and a decompression bomb whose IHDR is patched and CRC-corrected so that it is
 dangerous for the right reason rather than merely corrupt.
+
+`tests/test_matcher.py` reaches across to `catalog/tests/catalog_fixtures.py`
+for its last two cases, which resolve against a catalogue built by harvesting
+the harvest tests' fixture site rather than against one this package wrote. A
+matcher that worked only against the shape of its own fixtures would pass every
+other test in the file and fail on the first real catalogue. The fixtures it uses
+for everything else — `menu_catalog()` beside `generated_vocabulary()` in
+`testing.py` — are built from one set of terms on purpose: a vocabulary and a
+catalogue from two different builds is the drift `resolve()` raises on, and a
+fixture pair that could drift would make every assertion in the file conditional.
 
 `tests/test_upload_abuse.py` is the adversarial suite from #80, and it asks a
 different question from `test_validate.py`: not "was the verdict right" but

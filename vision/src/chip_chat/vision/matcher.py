@@ -154,9 +154,11 @@ _DEFAULT_FLOORS: Final[Mapping[Slot, float]] = {
 """Starting floors, chosen by what being wrong costs rather than by symmetry.
 
 ``protein`` is the highest because a wrong protein is a different meal at a
-different price, and it is the slot a visitor is most likely to send back. The
-vessel sits just below it: a bowl mistaken for a burrito is also a different
-order, but it is the slot a photograph shows most plainly. Rice and beans are
+different price, and it is the slot a visitor is most likely to send an order
+back over. The vessel sits just below it: a bowl mistaken for a burrito is also
+a different order, but a photograph shows the vessel plainly and a model is
+rarely unsure of it, so a floor above the protein's would fire on almost nothing
+and refuse the occasional legitimate photograph for it. Rice and beans are
 required and *frequently* half-hidden under everything else, so a floor as high
 as the protein's would ask a question about most real photographs. Salsas and
 toppings are optional, so their floor decides what gets dropped rather than what
@@ -227,6 +229,12 @@ class SlotRule:
         required: Whether falling below the floor -- or being absent, or
             resolving to no catalogue row -- escalates to a question. An
             optional slot in the same state is dropped instead.
+
+            ``vessel`` and ``protein`` are the exception, and setting either to
+            ``False`` does not make a draft possible without it: the two are
+            the halves of one entree and there is no SKU to propose from one of
+            them. What the flag still controls there is the *floor*, which is
+            checked either way. It is a knob on the other four.
     """
 
     floor: float
@@ -363,7 +371,12 @@ class ResolvedItem:
         unit_price: What the restaurant charges, or ``None`` where no price row
             exists for it. ``None`` is not zero and must never be defaulted to
             zero on the way to a total.
-        available: Whether the restaurant had it at harvest time.
+        available: Whether the restaurant had it at harvest time. ``False`` also
+            for an item this restaurant published no price row for at all --
+            the fail-closed reading, since the alternative is telling a visitor
+            a restaurant stocks something nobody said it stocks. The two cases
+            are distinguishable: only the second has a null
+            :attr:`unit_price`.
     """
 
     slot: Slot

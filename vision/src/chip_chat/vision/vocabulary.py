@@ -148,10 +148,13 @@ class Vocabulary:
     slot_items: Mapping[str, Mapping[str, tuple[str, ...]]]
     """Slot to term to the catalogue items it may resolve to.
 
-    Stage 4 does not use this -- resolving a term to a SKU is stage 5's job and
-    issue #54's -- but it is generated from the same rows as the enums and
-    travels with them, so that the matcher and the describer cannot end up
-    holding vocabularies from two different catalogue builds.
+    Stage 4 does not use this -- resolving a term to a SKU is stage 5's job, and
+    :mod:`chip_chat.vision.matcher` does it against the catalogue's own rows.
+    It is generated from the same rows as the enums and travels with them, so
+    that the matcher and the describer cannot end up holding vocabularies from
+    two different catalogue builds; :attr:`content_version` is what
+    :meth:`~chip_chat.vision.matcher.MealMatcher.resolve` checks to make that
+    structural rather than hoped for.
     """
 
     content_version: str | None = None

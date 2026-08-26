@@ -465,6 +465,25 @@ def test_a_floor_read_from_the_environment_changes_the_answer(
     assert relaxed.resolve(meal).outcome is Outcome.RESOLVED
 
 
+def test_the_entree_halves_are_required_whatever_the_configuration_says(
+    catalog: MenuCatalog,
+) -> None:
+    """A knob cannot make a draft possible without a vessel or a protein.
+
+    The two are the halves of one entree, so there is no SKU to propose from
+    either alone -- turning the flag off leaves the floor in force and the
+    question with it. That is the one place :class:`SlotRule` is not a knob,
+    and it is a property of the catalogue rather than a policy.
+    """
+    relaxed = MealMatcher(
+        catalog, rules=SlotRules.from_env({f"{ENV_PREFIX}PROTEIN_REQUIRED": "false"})
+    )
+
+    resolution = relaxed.resolve(described(protein=None))
+    assert resolution.outcome is Outcome.CLARIFY
+    assert resolution.item_ids() == ()
+
+
 def test_required_ness_is_configuration_too(catalog: MenuCatalog) -> None:
     """The published grammar is per ``item_type``, so the required set is a knob.
 
@@ -605,6 +624,22 @@ def test_an_item_with_no_price_row_does_not_total_to_a_smaller_number() -> None:
     (guacamole,) = [item for item in resolution.modifiers if item.term == "guacamole"]
     assert guacamole.unit_price is None
     assert resolution.total() is None
+
+
+def test_an_item_the_restaurant_never_priced_is_not_reported_as_stocked() -> None:
+    """A missing price row is not a claim that the restaurant has the item.
+
+    Telling a visitor a store stocks something nobody published a row for is
+    the same class of mistake as naming a SKU nobody published. The two cases
+    stay distinguishable: only this one has a null price.
+    """
+    matcher = MealMatcher(menu_catalog(unpriced=["guacamole"]))
+    resolution = matcher.resolve(described(toppings=[("guacamole", SURE)]))
+
+    (guacamole,) = resolution.unavailable()
+    assert guacamole.term == "guacamole"
+    assert guacamole.unit_price is None
+    assert all(item.available for item in resolution.items() if item is not guacamole)
 
 
 def test_a_resolution_with_nothing_on_it_has_no_total(matcher: MealMatcher) -> None:
