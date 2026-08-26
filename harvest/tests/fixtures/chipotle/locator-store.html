@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Chipotle Mexican Grill in $city, $region</title>
+    <script type="application/ld+json">
+    {"@graph":[{"@context":"https://schema.org","@type":"Restaurant","name":"Chipotle Mexican Grill","address":{"@type":"PostalAddress","streetAddress":"$street","addressLocality":"$city","addressRegion":"$region","postalCode":"$postal_code","addressCountry":"US"},"openingHours":$opening_hours,"telephone":"$telephone","hasMap":"https://www.google.com/maps/search/?api=1&query=$latitude,$longitude"},{"@context":"http://www.schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","name":"US Directory","position":1,"item":{"@type":"Thing","@id":"../../index.html"}}]}]}
+    </script>
+    <script type="application/ld+json">
+    {"@context":["https://www.w3.org/ns/credentials/v2","https://schema.org"],"credentialSubject":{"address":{"@type":"PostalAddress","addressCountry":"US","addressLocality":"$county_city","addressRegion":"$region","postalCode":"$postal_code","streetAddress":"$street"},"asOf":"2026-08-20T16:53:40Z","geo":{"@type":"GeoCoordinates","latitude":$latitude,"longitude":$longitude},"name":"Chipotle Mexican Grill","telephone":"$telephone"},"issuer":"did:web:yext.com","type":["VerifiableCredential","CertifiedFact:CoreSnapshot"]}
+    </script>
+</head>
+<body>
+    <h1>Chipotle Mexican Grill</h1>
+    <a href="https://www.chipotle.com/order/build/burrito?restaurant=$restaurant">Order a burrito</a>
+    <a href="https://www.chipotle.com/order/build/burrito-bowl?restaurant=$restaurant">Order a bowl</a>
+</body>
+</html>

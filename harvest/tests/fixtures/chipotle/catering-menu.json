@@ -1,0 +1,292 @@
+{
+  "restaurantNumber": 0,
+  "menu": [
+    {
+      "id": "CMG-4012",
+      "name": "BBTB",
+      "shortName": "BBTB",
+      "posId": "99999",
+      "unit": "EACH",
+      "description": "Mix and match your favorites with Burritos by the Box, or we\u2019ll send you an assortment perfect for small get-togethers. Plus, every two burritos come with Chips, Tomatillo Green-Chili Salsa, and Sour Cream.",
+      "sortOrder": 0,
+      "bases": [
+        {
+          "id": "CMG-5001",
+          "name": "Cilantro-Lime White Rice",
+          "posId": "10001"
+        },
+        {
+          "id": "CMG-5002",
+          "name": "Cilantro-Lime Brown Rice",
+          "posId": "10021"
+        }
+      ],
+      "proteins": [
+        {
+          "id": "CMG-4002",
+          "name": "Chicken",
+          "posId": "91"
+        },
+        {
+          "id": "CMG-4003",
+          "name": "Carnitas",
+          "posId": "92"
+        },
+        {
+          "id": "CMG-4001",
+          "name": "Steak",
+          "posId": "90"
+        }
+      ],
+      "toppings": [],
+      "premiumToppings": [],
+      "salsas": [],
+      "tortillas": [],
+      "displayUnit": "burrito",
+      "displayName": "Burritos by the Box",
+      "formatServesText": "{$item.quantity} Burritos ({$item.price:C}/{$menu.displayUnit})",
+      "maxPrice": 12.5,
+      "minPrice": 8.75,
+      "isAmountFromSubItems": true,
+      "shouldTaxSubItemsOnly": false,
+      "itemConfig": {
+        "min": 6,
+        "max": 200,
+        "increment": 1
+      },
+      "config": {
+        "proteinCount": 0,
+        "baseCount": 1,
+        "toppingCount": 0,
+        "premiumToppingCount": 0,
+        "salsaCount": 0,
+        "tortillaCount": 0,
+        "readonly": {
+          "fillings": [
+            {
+              "id": "CMG-4109",
+              "name": "Black Beans"
+            },
+            {
+              "id": "CMG-4119",
+              "name": "Cheese"
+            }
+          ],
+          "sides": [
+            {
+              "id": "CMG-4027",
+              "name": "Chips"
+            },
+            {
+              "id": "CMG-4124",
+              "name": "Tomatillo-Green Chili Salsa"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "CMG-4105",
+      "name": "Single",
+      "shortName": "SingleSpread",
+      "posId": "60302",
+      "unit": "PERSON",
+      "description": "Build Your Own catering and keep it simple and delicious. The Single comes with 1 protein, 2 bases, 2 toppings, 2 salsas, and 1 type of tortilla.",
+      "sortOrder": 0,
+      "bases": [
+        {
+          "id": "CMG-4106",
+          "name": "Cilantro-Lime White Rice",
+          "posId": "60303"
+        },
+        {
+          "id": "CMG-4107",
+          "name": "Cilantro-Lime Brown Rice",
+          "posId": "60304"
+        },
+        {
+          "id": "CMG-4109",
+          "name": "Black Beans",
+          "posId": "60306"
+        }
+      ],
+      "proteins": [
+        {
+          "id": "CMG-4111",
+          "name": "Chicken",
+          "posId": "60308"
+        },
+        {
+          "id": "CMG-4113",
+          "name": "Carnitas",
+          "posId": "60310"
+        },
+        {
+          "id": "CMG-4112",
+          "name": "Steak",
+          "posId": "60309"
+        }
+      ],
+      "toppings": [
+        {
+          "id": "CMG-4118",
+          "name": "Fajita Veggies",
+          "posId": "60315"
+        },
+        {
+          "id": "CMG-4119",
+          "name": "Shredded Cheese",
+          "posId": "60316"
+        },
+        {
+          "id": "CMG-4120",
+          "name": "Sour Cream",
+          "posId": "60317"
+        }
+      ],
+      "premiumToppings": [
+        {
+          "id": "CMG-4121",
+          "name": "Guacamole",
+          "posId": "60318"
+        },
+        {
+          "id": "CMG-4122",
+          "name": "Queso",
+          "posId": "60319"
+        }
+      ],
+      "salsas": [
+        {
+          "id": "CMG-4123",
+          "name": "Fresh Tomato Salsa",
+          "posId": "60320"
+        },
+        {
+          "id": "CMG-4125",
+          "name": "Roasted Chili-Corn Salsa",
+          "posId": "60322"
+        },
+        {
+          "id": "CMG-4124",
+          "name": "Tomatillo-Green Chili Salsa",
+          "posId": "60321"
+        }
+      ],
+      "tortillas": [
+        {
+          "id": "CMG-4127",
+          "name": "Crispy Corn Taco Shells",
+          "posId": "60324"
+        },
+        {
+          "id": "CMG-4128",
+          "name": "Soft Flour Tortillas",
+          "posId": "60325"
+        }
+      ],
+      "displayUnit": "person",
+      "displayName": "Build Your Own",
+      "displaySubName": "Single",
+      "formatServesText": "Serves {$item.quantity} ({$item.price:C}/{$menu.displayUnit})",
+      "tagline": "Best Value",
+      "maxPrice": 9.0,
+      "minPrice": 8.75,
+      "isAmountFromSubItems": false,
+      "shouldTaxSubItemsOnly": false,
+      "itemConfig": {
+        "min": 10,
+        "max": 200,
+        "increment": 5
+      },
+      "config": {
+        "proteinCount": 1,
+        "baseCount": 2,
+        "toppingCount": 2,
+        "premiumToppingCount": 0,
+        "salsaCount": 2,
+        "tortillaCount": 1
+      }
+    },
+    {
+      "id": "CMG-4027",
+      "name": "Chips",
+      "shortName": "Chips",
+      "posId": "60211",
+      "unit": "EACH",
+      "description": "Order Chips & Dips for a spread of house-made Chips, all 4 salsas, and your choice of Guacamole or Queso Blanco.",
+      "sortOrder": 0,
+      "bases": [],
+      "proteins": [],
+      "toppings": [],
+      "premiumToppings": [
+        {
+          "id": "CMG-4028",
+          "name": "Queso",
+          "posId": "60213"
+        },
+        {
+          "id": "CMG-4029",
+          "name": "Guacamole",
+          "posId": "60212"
+        },
+        {
+          "id": "CMG-4032",
+          "name": "Queso Blanco",
+          "posId": "60230"
+        }
+      ],
+      "salsas": [],
+      "tortillas": [],
+      "displayUnit": "pack",
+      "displayName": "Chips & Dips",
+      "formatDisplayName": "{$item.quantity}X {$menu.displayName}",
+      "formatServesText": "Serves {$menu.itemConfig.serves} ({$item.price:C}/{$menu.displayUnit})",
+      "maxPrice": 40.0,
+      "minPrice": 40.0,
+      "isAmountFromSubItems": false,
+      "shouldTaxSubItemsOnly": true,
+      "itemConfig": {
+        "min": 1,
+        "max": 20,
+        "increment": 1,
+        "serves": "10-15 each"
+      },
+      "config": {
+        "proteinCount": 0,
+        "baseCount": 0,
+        "toppingCount": 0,
+        "premiumToppingCount": 1,
+        "salsaCount": 0,
+        "tortillaCount": 0,
+        "readonly": {
+          "salsas": [
+            {
+              "id": "CMG-4123",
+              "name": "Fresh Tomato Salsa"
+            },
+            {
+              "id": "CMG-4326",
+              "name": "Roasted Chili-Corn Salsa"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "CMG-4014",
+      "name": "Catering Delivery",
+      "shortName": "Delivery",
+      "unit": "FEE",
+      "sortOrder": 0,
+      "bases": [],
+      "proteins": [],
+      "toppings": [],
+      "premiumToppings": [],
+      "salsas": [],
+      "tortillas": [],
+      "displayUnit": "Delivery Charge",
+      "max": 1350.0
+    }
+  ]
+}

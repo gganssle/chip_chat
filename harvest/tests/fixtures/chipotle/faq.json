@@ -1,0 +1,642 @@
+{
+ "data": {
+  "faqsList": {
+   "items": [
+    {
+     "categories": [
+      {
+       "category": "Rewards Program ",
+       "position": 1.0,
+       "subcategory": [
+        {
+         "title": "Rewards Program ",
+         "questions": [
+          {
+           "question": "Okay, so how does Chipotle Rewards work?",
+           "answer": {
+            "json": [
+             {
+              "nodeType": "paragraph",
+              "content": [
+               {
+                "nodeType": "text",
+                "value": "Once you’re a member, you'll earn 10 points per $1 spent at Chipotle. Earn points automatically when you order in our app and on Chipotle.com or use your phone to scan your member card at the register. You can redeem your points for free menu items and more in the Rewards Exchange. Members also get to choose a birthday reward, a welcome offer, bonus reward drops, and more."
+               }
+              ]
+             }
+            ]
+           },
+           "isactive": false,
+           "rank": 1,
+           "topQuestion": false
+          },
+          {
+           "question": "What can I redeem my points for?",
+           "answer": {
+            "json": [
+             {
+              "nodeType": "paragraph",
+              "content": [
+               {
+                "nodeType": "text",
+                "value": "Points can be exchanged for free menu items, like burritos and guac. You can also use your points to help Chipotle cultivate a better world through nonprofit donations. Visit the Rewards Exchange in the app or online to exchange your points."
+               }
+              ]
+             }
+            ]
+           },
+           "isactive": false,
+           "rank": 5,
+           "topQuestion": false
+          },
+          {
+           "question": "Do points expire?",
+           "answer": {
+            "json": [
+             {
+              "nodeType": "paragraph",
+              "content": [
+               {
+                "nodeType": "text",
+                "value": "Points expire after 365 days of account inactivity (i.e., no qualifying purchases), unless sooner terminated as a result of your account being deactivated. However, your points won't expire as long as you keep your account active through purchases. You can track your points in the Points History section of your account."
+               }
+              ]
+             }
+            ]
+           },
+           "isactive": false,
+           "rank": 24,
+           "topQuestion": false
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "category": "Delivery",
+       "position": 2.0,
+       "subcategory": [
+        {
+         "title": "Delivery - General ",
+         "questions": [
+          {
+           "question": "Can I cancel my delivery after I've submitted my order?",
+           "answer": {
+            "json": [
+             {
+              "nodeType": "paragraph",
+              "content": [
+               {
+                "nodeType": "text",
+                "value": "When you submit a delivery order, it's sent directly to our courier team and restaurant crew, so it can get cooked up and on its way to you. That makes canceling orders sort of a challenge. If you really must cancel, and you've ordered directly through our app or online, reach out to our Customer Service team through the "
+               },
+               {
+                "nodeType": "link",
+                "content": [
+                 {
+                  "nodeType": "text",
+                  "value": "Contact Us"
+                 }
+                ],
+                "data": {
+                 "href": "https://www.chipotle.com/content/chipotle/us/en/contact-us.html"
+                }
+               },
+               {
+                "nodeType": "text",
+                "value": " page. If you ordered through a partner, check your confirmation email to contact their team directly. Keep in mind that you may incur a cancelation fee."
+               }
+              ]
+             }
+            ]
+           },
+           "isactive": false,
+           "rank": 5,
+           "topQuestion": true
+          }
+         ]
+        },
+        {
+         "title": "Payment",
+         "questions": [
+          {
+           "question": "Who do I contact regarding delivery payment issues, including refund requests?",
+           "answer": {
+            "json": [
+             {
+              "nodeType": "paragraph",
+              "content": [
+               {
+                "nodeType": "text",
+                "value": "If you ordered through"
+               },
+               {
+                "nodeType": "link",
+                "content": [
+                 {
+                  "nodeType": "text",
+                  "value": " chipotle.com"
+                 }
+                ],
+                "data": {
+                 "href": "https://www.chipotle.com/",
+                 "title": "",
+                 "target": "_self"
+                }
+               },
+               {
+                "nodeType": "text",
+                "value": " or our app, our Customer Care team has your back. "
+               }
+              ]
+             },
+             {
+              "nodeType": "paragraph",
+              "content": [
+               {
+                "nodeType": "text",
+                "value": "Contact them by clicking on the ASK PEPPER button in the bottom right of this page. If you placed your order directly through one of our delivery partners, please contact them directly."
+               }
+              ]
+             }
+            ]
+           },
+           "isactive": false,
+           "rank": 1,
+           "topQuestion": false
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "category": "Catering",
+       "position": 3.0,
+       "subcategory": [
+        {
+         "title": "GENERAL",
+         "questions": [
+          {
+           "question": "Who do I reach out to for questions regarding my catering order?",
+           "answer": {
+            "json": [
+             {
+              "nodeType": "paragraph",
+              "content": [
+               {
+                "nodeType": "text",
+                "value": "If you have questions that are not covered here, or about an order you have yet to place, or regarding an existing order that has not yet been picked up or delivered, please contact 1-800-Chipotle. "
+               },
+               {
+                "nodeType": "line-break",
+                "content": []
+               },
+               {
+                "nodeType": "line-break",
+                "content": []
+               },
+               {
+                "nodeType": "text",
+                "value": "For any questions regarding an order after it's been picked up or delivered, please reach out to our Customer Care team on our Contact Us page found here."
+               }
+              ]
+             }
+            ]
+           },
+           "isactive": false,
+           "rank": 1,
+           "topQuestion": false
+          },
+          {
+           "question": "Does Chipotle cater?",
+           "answer": {
+            "json": [
+             {
+              "nodeType": "paragraph",
+              "content": [
+               {
+                "nodeType": "text",
+                "value": "Yes we do. Depending on your location, Chipotle offers several delicious catering options that are perfect for any business meeting, event or party—feeding as few as 6 or as many as 200. Check out our Build-Your-Own Catering and Burritos by the Box Catering options "
+               },
+               {
+                "nodeType": "link",
+                "content": [
+                 {
+                  "nodeType": "text",
+                  "value": "here"
+                 }
+                ],
+                "data": {
+                 "href": "https://www.chipotle.com/catering",
+                 "title": "",
+                 "target": "_self"
+                }
+               },
+               {
+                "nodeType": "text",
+                "value": ". Looking for individual meals for a group? Chipotle group ordering lets you build an order together. "
+               },
+               {
+                "nodeType": "link",
+                "content": [
+                 {
+                  "nodeType": "text",
+                  "value": "Get started."
+                 }
+                ],
+                "data": {
+                 "href": "https://www.chipotle.com/catering",
+                 "title": "",
+                 "target": "_self"
+                }
+               }
+              ]
+             }
+            ]
+           },
+           "isactive": false,
+           "rank": 2,
+           "topQuestion": false
+          }
+         ]
+        },
+        {
+         "title": "Rewards",
+         "questions": [
+          {
+           "question": "How do I get Chipotle Rewards points for my catering orders?",
+           "answer": {
+            "json": [
+             {
+              "nodeType": "paragraph",
+              "content": [
+               {
+                "nodeType": "text",
+                "value": "You "
+               },
+               {
+                "nodeType": "text",
+                "value": "can",
+                "format": {
+                 "variants": [
+                  "strong"
+                 ]
+                }
+               },
+               {
+                "nodeType": "text",
+                "value": " earn rewards points for catering if:"
+               },
+               {
+                "nodeType": "line-break",
+                "content": []
+               },
+               {
+                "nodeType": "text",
+                "value": "The order was placed online while logged into a Rewards account."
+               },
+               {
+                "nodeType": "line-break",
+                "content": []
+               },
+               {
+                "nodeType": "text",
+                "value": "The order was placed by calling 1-800-CHIPOTLE and opting for pay at pickup so the Rewards ID can be scanned at the register upon payment."
+               }
+              ]
+             },
+             {
+              "nodeType": "paragraph",
+              "content": [
+               {
+                "nodeType": "text",
+                "value": "You "
+               },
+               {
+                "nodeType": "text",
+                "value": "cannot",
+                "format": {
+                 "variants": [
+                  "strong"
+                 ]
+                }
+               },
+               {
+                "nodeType": "text",
+                "value": " earn rewards points for catering if:"
+               }
+              ]
+             },
+             {
+              "nodeType": "paragraph",
+              "content": [
+               {
+                "nodeType": "text",
+                "value": "The order was placed online without logging into a Rewards account - even if the email on the order matches a Rewards account."
+               },
+               {
+                "nodeType": "line-break",
+                "content": []
+               },
+               {
+                "nodeType": "text",
+                "value": "The order was placed by calling 1-800-CHIPOTLE and prepaid."
+               }
+              ]
+             }
+            ]
+           },
+           "isactive": false,
+           "rank": 1,
+           "topQuestion": false
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "category": "Food",
+       "position": 5.0,
+       "subcategory": [
+        {
+         "title": "GMOs",
+         "questions": [
+          {
+           "question": "Where can I go to learn more about genetically modified foods?",
+           "answer": {
+            "json": [
+             {
+              "nodeType": "paragraph",
+              "content": [
+               {
+                "nodeType": "text",
+                "value": "There are many resources available online to learn about GMOs, and we encourage everyone to learn more about this issue and anything else that impacts the food they eat. The following links represent a diverse set of views on the topic:"
+               }
+              ]
+             },
+             {
+              "nodeType": "unordered-list",
+              "content": [
+               {
+                "nodeType": "list-item",
+                "content": [
+                 {
+                  "nodeType": "link",
+                  "content": [
+                   {
+                    "nodeType": "text",
+                    "value": "Center for Food Safety"
+                   }
+                  ],
+                  "data": {
+                   "href": "http://www.centerforfoodsafety.org/",
+                   "target": "_self"
+                  }
+                 }
+                ]
+               },
+               {
+                "nodeType": "list-item",
+                "content": [
+                 {
+                  "nodeType": "link",
+                  "content": [
+                   {
+                    "nodeType": "text",
+                    "value": "Environmental Working Group"
+                   }
+                  ],
+                  "data": {
+                   "href": "https://www.ewg.org/",
+                   "target": "_self"
+                  }
+                 }
+                ]
+               },
+               {
+                "nodeType": "list-item",
+                "content": [
+                 {
+                  "nodeType": "link",
+                  "content": [
+                   {
+                    "nodeType": "text",
+                    "value": "GMO Myths and Truths"
+                   }
+                  ],
+                  "data": {
+                   "href": "http://gmomythsandtruths.earthopensource.org/",
+                   "target": "_self"
+                  }
+                 }
+                ]
+               },
+               {
+                "nodeType": "list-item",
+                "content": [
+                 {
+                  "nodeType": "link",
+                  "content": [
+                   {
+                    "nodeType": "text",
+                    "value": "National Academy of Sciences"
+                   }
+                  ],
+                  "data": {
+                   "href": "http://nas-sites.org/ge-crops/",
+                   "target": "_self"
+                  }
+                 }
+                ]
+               },
+               {
+                "nodeType": "list-item",
+                "content": [
+                 {
+                  "nodeType": "link",
+                  "content": [
+                   {
+                    "nodeType": "text",
+                    "value": "World Health Organization"
+                   }
+                  ],
+                  "data": {
+                   "href": "https://www.who.int/foodsafety/areas_work/food-technology/faq-genetically-modified-food/en/",
+                   "target": "_self"
+                  }
+                 }
+                ]
+               }
+              ]
+             }
+            ]
+           },
+           "isactive": false,
+           "rank": 14,
+           "topQuestion": false
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "category": "Gift Cards & Coupons",
+       "position": 6.0,
+       "subcategory": [
+        {
+         "title": "Gift Cards",
+         "questions": [
+          {
+           "question": "How do I get cash back for my Chipotle gift card balance?",
+           "answer": {
+            "json": [
+             {
+              "nodeType": "paragraph",
+              "content": [
+               {
+                "nodeType": "text",
+                "value": "Chipotle gift cards with a balance of less than $10 ($15 in California) are eligible to receive a payout of the unused balance. Fill out and submit the gift card cash back form linked below to request a payout of a gift card balance and Chipotle’s Customer Care team will process your request."
+               }
+              ],
+              "data": {
+               "data-renderer-start-pos": "693"
+              },
+              "format": {
+               " text-transform": " none",
+               " color": " rgb(206, 207, 210)",
+               "margin": " 0.75rem 0px 0px",
+               " text-indent": " 0px",
+               " text-decoration-style": " initial",
+               " padding": " 0px",
+               " -webkit-text-stroke-width": " 0px",
+               " word-spacing": " 0px",
+               " letter-spacing": " normal",
+               " background-color": " rgba(206, 206, 217, 0.07)",
+               " text-decoration-thickness": " initial",
+               " text-decoration-color": " initial",
+               " text-align": " start",
+               " orphans": " 2",
+               " widows": " 2",
+               " white-space": " pre-wrap",
+               " font": " 400 14px / 1.714 \"Atlassian Sans\", ui-sans-serif, -apple-system, \"system-ui\", \"Segoe UI\", Ubuntu, \"Helvetica Neue\", sans-serif"
+              }
+             },
+             {
+              "nodeType": "paragraph",
+              "content": [
+               {
+                "nodeType": "text",
+                "value": "If you are eligible, the payout will be sent via bank transfer or check. To make a request please visit the gift card cash back page"
+               },
+               {
+                "nodeType": "span",
+                "content": [
+                 {
+                  "nodeType": "span",
+                  "content": [
+                   {
+                    "nodeType": "text",
+                    "value": " "
+                   }
+                  ],
+                  "format": {
+                   "color": " rgb(206, 207, 210)"
+                  }
+                 },
+                 {
+                  "nodeType": "link",
+                  "content": [
+                   {
+                    "nodeType": "span",
+                    "content": [
+                     {
+                      "nodeType": "text",
+                      "value": "here"
+                     }
+                    ],
+                    "format": {
+                     "color": " rgb(206, 207, 210)"
+                    }
+                   }
+                  ],
+                  "data": {
+                   "href": "https://www.chipotle.com/gift-card-cashback",
+                   "title": "https://www.chipotle.com/gift-card-cashback",
+                   "target": "_self"
+                  }
+                 }
+                ],
+                "format": {
+                 "color": " rgb(206, 207, 210)"
+                }
+               }
+              ],
+              "data": {
+               "data-renderer-start-pos": "693"
+              },
+              "format": {
+               " text-transform": " none",
+               " color": " rgb(206, 207, 210)",
+               "margin": " 0.75rem 0px 0px",
+               " text-indent": " 0px",
+               " text-decoration-style": " initial",
+               " padding": " 0px",
+               " -webkit-text-stroke-width": " 0px",
+               " word-spacing": " 0px",
+               " letter-spacing": " normal",
+               " background-color": " rgba(206, 206, 217, 0.07)",
+               " text-decoration-thickness": " initial",
+               " text-decoration-color": " initial",
+               " text-align": " start",
+               " orphans": " 2",
+               " widows": " 2",
+               " white-space": " pre-wrap",
+               " font": " 400 14px / 1.714 \"Atlassian Sans\", ui-sans-serif, -apple-system, \"system-ui\", \"Segoe UI\", Ubuntu, \"Helvetica Neue\", sans-serif"
+              }
+             }
+            ]
+           },
+           "isactive": false,
+           "rank": 6,
+           "topQuestion": true
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "category": "Ordering",
+       "position": 7.0,
+       "subcategory": [
+        {
+         "title": "General",
+         "questions": [
+          {
+           "question": "Can I cancel my online or mobile order after I've submitted it?",
+           "answer": {
+            "json": [
+             {
+              "nodeType": "paragraph",
+              "content": [
+               {
+                "nodeType": "text",
+                "value": "When you submit an order, it's sent directly to our restaurant crew, so we're unable to cancel."
+               }
+              ]
+             }
+            ]
+           },
+           "isactive": false,
+           "rank": 6,
+           "topQuestion": true
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

@@ -133,9 +133,9 @@ python -m chip_chat.harvest.sources.chipotle --landing landing --dataset all
 Five documents: the public page again, the menu metadata *with nutrition* that
 the nutrition calculator reads, the allergen and diet endpoint the `/allergens`
 chart is drawn from, the `/allergens` page itself for the prose around that
-chart, and the restaurant's menu — for its item list, not its prices. Both
-datasets share one cache, so `--dataset all` costs seven documents rather than
-nine.
+chart, and the restaurant's menu — for its item list, not its prices. This
+dataset and the menu share one cache, so building both costs seven documents
+rather than nine. `--dataset all` adds the policy corpus below.
 
 **Eight tables come out**, under `parsed/chipotle/nutrition/`:
 
@@ -172,6 +172,102 @@ chart and the metadata agree exactly about allergens today, on all twenty-six
 foods both describe, and the parser asserts that on every run — a disagreement
 raises rather than picking a winner. They disagree about Whole30, which is why
 `item_diets` records the document alongside the answer.
+
+### Chipotle's rewards, FAQ, catering and stores — `sources.chipotle`, `--dataset policy`
+
+Issue #21. The policy half of the corpus: what the rules actually say, what a
+reward actually costs, whether Chipotle caters, and where the restaurants are.
+
+```bash
+python -m chip_chat.harvest.sources.chipotle --landing landing --dataset policy
+python -m chip_chat.harvest.sources.chipotle --landing landing --dataset policy --stores 200
+```
+
+Much the largest of the three datasets, because of the stores: a locator page and
+a profile for each of fifty of them, on top of a sitemap that lists all four
+thousand. A cold run makes 113 requests and lands about eight megabytes, which at
+the two-second politeness gate takes a little under four minutes. A warm one makes
+none.
+
+Five kinds of thing, from five different places:
+
+| Where | What comes out of it |
+| --- | --- |
+| `/rewards-terms` | The programme's terms, split into their published sections |
+| `/rewards` | The Rewards Exchange line-up, with its point costs |
+| `graphql/execute.json/chipotle/FAQ-Query` | 136 published answers in 40 sections |
+| `catering.chipotle.com` + `cateringorder/v1/menu/tiered` | Six catering packages, priced |
+| `locations.chipotle.com` + `restaurant/v3/restaurant/<id>` | Fifty stores with hours, addresses and names |
+
+**Ten tables come out**, under `parsed/chipotle/policy/`:
+
+| Table | What it is |
+| --- | --- |
+| `policy_documents` | One row per policy page, labelled `TERMS` or `OVERVIEW`. |
+| `policy_sections` | Its sections, in order, with their headings — the boundaries a chunker needs. |
+| `faq_categories` | The FAQ's own two-level table of contents, in its published order. |
+| `faq_entries` | Every published question and answer, with any URLs the answer linked to. |
+| `rewards` | The published rewards and what each costs in points. |
+| `catering_packages` | What a catering order can be made of, with prices and party sizes. |
+| `catering_package_options` | What goes in each one, and whether it is chosen or included. |
+| `stores` | Address, city, region, coordinates and telephone, per store. |
+| `store_profiles` | The store's *name* and operational region, from the endpoint that publishes one. |
+| `store_hours` | Opening times, one row per store per day of the week. |
+
+**Section boundaries are preserved rather than re-derived.** Issue #21 says the
+policy corpus chunks by section and not by a fixed window, and a boundary thrown
+away at harvest time cannot be recovered at index time. The rewards terms arrive
+as one authored block and leave as nineteen sections, because the page marks each
+heading as a paragraph that is entirely bold — which is also how the parser tells
+a heading from the many bold *lead-ins* inside a section.
+
+**The published point costs are read, not reconstructed.** The signed-in Rewards
+Exchange is not public, and this source does not try to reach it; the rewards
+landing page publishes the whole line-up with its prices in plain markup — 85
+points for a side tortilla, 1,625 for an entrée — and that is what lands. Nothing
+here turns a number of dollars into a number of points. The earn rate is published
+as prose and stays prose, in `faq_entries` and `policy_sections`, where an answer
+can quote it.
+
+**A reward's picture is not a reward's item.** Half the tiles use marketing art,
+and an "ENTRÉE" is not the burrito its photograph happens to show, so `rewards`
+keeps the published `image_path` verbatim and derives no `item_id` from it.
+Joining a reward to what it redeems for is issue #24's job, with the whole
+catalogue in hand.
+
+**The catering API has its own subscription key.** Not the one the www page
+publishes in its `<meta>` tags — that key answers 401 there. It is read the same
+way, from where the catering site hands it to its own front end: the
+`VUE_APP_SUBSCRIPTION_KEY` in its script bundle, whose hashed filename is itself
+read out of the catering page rather than remembered. Two documents to reach one
+key, and no copied credential in this repository.
+
+**Fifty stores, and which fifty is a decision.** They are chosen by round-robin
+across the states in the published sitemap, so they are fifty states rather than
+fifty branches of Los Angeles, and the reference restaurant of issue #19 is always
+among them — checked by number, so that a locator page moving would stop the
+harvest rather than attach the harvested prices to the wrong address. The parser
+refuses to build a dataset with fewer than thirty stores, which is how issue #21's
+criterion is checked rather than asserted. See
+[`docs/decisions/store-selection.md`](../docs/decisions/store-selection.md) for what
+that choice costs — chiefly that these stores are not near anybody in particular.
+
+**A store's name and a store's address are two tables.** Every locator page in the
+country calls its restaurant "Chipotle Mexican Grill"; the name that makes "the
+Ballard store" mean something is published only by the restaurant endpoint. Two
+documents, two rows, two `source_url`s — rather than one row whose provenance is
+half of each.
+
+**A day nobody published hours for is a row saying so.** `store_hours` holds seven
+rows per store whether or not seven were published, with an `is_published` flag,
+for the same reason `item_allergens` holds a row per allergen: a missing row reads
+as "nothing to worry about", and "we publish nothing about Sunday" is a different
+answer from "closed on Sunday".
+
+The rewards, the terms, the catering prices and one store were compared against the
+live pages by hand on 26 August 2026 — see
+[`docs/chipotle-policy-spot-check.md`](../docs/chipotle-policy-spot-check.md), which is
+also where the section boundary this dataset nearly lost is written down.
 
 ## Testing against it
 

@@ -1,9 +1,9 @@
 """Where Chipotle publishes the address of its own menu API.
 
 The ordering front end does not have the API host or its subscription key
-compiled into a bundle. The public page hands both to the browser in a pair of
-``<meta>`` tags, and the browser then calls the API with them. This module
-reads the same two tags.
+compiled into a bundle. The public page hands both to the browser in a handful
+of ``<meta>`` tags, and the browser then calls the API with them. This module
+reads the same tags.
 
 That is a deliberate choice, not a flourish. A harvester with a copied
 subscription key pasted into a constant is a harvester that breaks silently on
@@ -12,7 +12,8 @@ rather than to a published fact. Reading the tags means the only thing this
 source knows that any visitor's browser does not is which of the endpoints it
 wants.
 
-The tags, as published::
+The tags, as published — the menu and nutrition sources need the first two,
+and the policy source of issue #21 needs the third::
 
     <meta property="servicesconfig"
           data-host="https://services.chipotle.com"
@@ -21,6 +22,10 @@ The tags, as published::
           data-ingredients="/menu-metadata/v1/menu-metadata/ingredients"
           data-allergens="/menu-metadata/v1/menu-metadata/allergendiets"
           data-baseUrl="https://services.chipotle.com"
+          data-appKey="..."/>
+
+    <meta property="rest"
+          data-endpoint="/restaurant/v3/restaurant"
           data-appKey="..."/>
 """
 
@@ -86,7 +91,7 @@ where Chipotle says that the chart does not reflect contact during preparation
 and that absence from it is not a guarantee.
 """
 
-_CONFIG_TAGS = ("servicesconfig", "mmd")
+_CONFIG_TAGS = ("servicesconfig", "mmd", "rest")
 
 
 class _MetaTagCollector(HTMLParser):
@@ -122,6 +127,9 @@ class ServicesConfig:
         allergens_path: Path of the allergen and diet endpoint. Harvested by
             the nutrition source, not this one; carried so that source does
             not have to re-read the page.
+        restaurant_path: Path of the restaurant endpoint, which is where a
+            store's name and operational region are published. Harvested by
+            the policy source of issue #21, and carried for the same reason.
         source_url: The page these values were read from.
         harvested_at: When that page was fetched.
     """
@@ -130,6 +138,7 @@ class ServicesConfig:
     app_key: str
     ingredients_path: str
     allergens_path: str | None
+    restaurant_path: str | None
     source_url: str
     harvested_at: datetime
 
@@ -149,6 +158,27 @@ class ServicesConfig:
         if self.allergens_path is None:
             return None
         return f"{self.base_url}{self.allergens_path}"
+
+    def restaurant_url(self, restaurant_id: str) -> str:
+        """Return the URL publishing one restaurant's name and region.
+
+        Args:
+            restaurant_id: The restaurant's identifier.
+
+        Returns:
+            The absolute URL.
+
+        Raises:
+            ChipotleSourceError: If the page published no restaurant endpoint.
+        """
+        if self.restaurant_path is None:
+            raise ChipotleSourceError(
+                f"{self.source_url} no longer publishes the restaurant endpoint "
+                f"in its <meta> tags; there is nowhere left to read a store's "
+                f"name from"
+            )
+        identifier = quote(restaurant_id, safe="")
+        return f"{self.base_url}{self.restaurant_path}/{identifier}"
 
     @property
     def nutrition_url(self) -> str:
@@ -207,11 +237,13 @@ def parse_services_config(
     collector.feed(html)
     services = collector.tags.get("servicesconfig", {})
     metadata = collector.tags.get("mmd", {})
+    restaurants = collector.tags.get("rest", {})
 
     base_url = (services.get("data-host") or metadata.get("data-baseurl") or "").strip()
     app_key = (services.get("data-appkey") or metadata.get("data-appkey") or "").strip()
     ingredients_path = (metadata.get("data-ingredients") or "").strip()
     allergens_path = (metadata.get("data-allergens") or "").strip()
+    restaurant_path = (restaurants.get("data-endpoint") or "").strip()
 
     missing = [
         name
@@ -233,6 +265,9 @@ def parse_services_config(
         app_key=app_key,
         ingredients_path=_absolute_path(ingredients_path),
         allergens_path=_absolute_path(allergens_path) if allergens_path else None,
+        restaurant_path=(
+            _absolute_path(restaurant_path).rstrip("/") if restaurant_path else None
+        ),
         source_url=source_url,
         harvested_at=harvested_at,
     )

@@ -11,12 +11,17 @@ what is cached and refuses to fetch anything, which is both how a parser
 change is iterated on and how the reproducibility claim is checked: run it
 twice and compare the manifests it prints.
 
-Two datasets, chosen with ``--dataset``: the menu of issue #19, the nutrition
-and allergen data of issue #20, or ``all`` for both. They share the landing
-zone and most of their documents, so running both costs barely more than
-running either::
+Three datasets, chosen with ``--dataset``: the menu of issue #19, the nutrition
+and allergen data of issue #20, the policy corpus, catering and stores of issue
+#21, or ``all`` for every one. They share the landing zone and, in the case of
+the first two, most of their documents, so running them together costs less
+than running them apart::
 
     python -m chip_chat.harvest.sources.chipotle --landing landing --dataset all
+
+The policy dataset is much the largest of the three in requests — it reads a
+locator page and a profile for each of fifty stores — and much the smallest in
+bytes.
 """
 
 import argparse
@@ -32,6 +37,7 @@ from chip_chat.harvest.cache import DocumentCache
 from chip_chat.harvest.errors import HarvestError
 from chip_chat.harvest.harvester import Harvester
 from chip_chat.harvest.sources.chipotle.config import HOME_URL
+from chip_chat.harvest.sources.chipotle.locator import DEFAULT_STORE_COUNT
 from chip_chat.harvest.sources.chipotle.menu import (
     DEFAULT_RESTAURANT_IDS,
     harvest_menu,
@@ -47,13 +53,19 @@ from chip_chat.harvest.sources.chipotle.nutrition_records import (
 )
 from chip_chat.harvest.sources.chipotle.nutrition_records import NutritionDataset
 from chip_chat.harvest.sources.chipotle.parse import parse_menu
+from chip_chat.harvest.sources.chipotle.policy import harvest_policy, load_policy
+from chip_chat.harvest.sources.chipotle.policy_parse import parse_policy
+from chip_chat.harvest.sources.chipotle.policy_records import (
+    DEFAULT_PARSED_PREFIX as DEFAULT_POLICY_PREFIX,
+)
+from chip_chat.harvest.sources.chipotle.policy_records import PolicyDataset
 from chip_chat.harvest.sources.chipotle.records import (
     DEFAULT_PARSED_PREFIX,
     MenuDataset,
 )
 from chip_chat.harvest.transport import DEFAULT_CONTACT, HttpxTransport
 
-DATASETS = ("menu", "nutrition", "all")
+DATASETS = ("menu", "nutrition", "policy", "all")
 """What ``--dataset`` accepts. ``menu`` is the default so that the command in
 issue #19's documentation keeps meaning what it meant."""
 
@@ -87,7 +99,18 @@ def build_parser() -> argparse.ArgumentParser:
         default="menu",
         help=(
             "Which dataset to build: the menu (issue #19), the nutrition and "
-            "allergen data (issue #20), or both. Defaults to menu."
+            "allergen data (issue #20), the policy corpus, catering and stores "
+            "(issue #21), or all of them. Defaults to menu."
+        ),
+    )
+    parser.add_argument(
+        "--stores",
+        type=int,
+        default=DEFAULT_STORE_COUNT,
+        metavar="N",
+        help=(
+            "How many stores the policy dataset reads from the locator. "
+            f"Defaults to {DEFAULT_STORE_COUNT}; issue #21 requires at least 30."
         ),
     )
     parser.add_argument(
@@ -120,6 +143,14 @@ def build_parser() -> argparse.ArgumentParser:
             f"{DEFAULT_NUTRITION_PREFIX}."
         ),
     )
+    parser.add_argument(
+        "--policy-prefix",
+        default=DEFAULT_POLICY_PREFIX,
+        help=(
+            "Key prefix for the parsed policy tables. Defaults to "
+            f"{DEFAULT_POLICY_PREFIX}."
+        ),
+    )
     return parser
 
 
@@ -140,13 +171,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     manifests: dict[str, Any] = {}
     try:
         with _harvester(args) as harvester:
+            prefixes = {
+                "menu": args.prefix,
+                "nutrition": args.nutrition_prefix,
+                "policy": args.policy_prefix,
+            }
             for name in wanted:
                 dataset = _build(name, harvester, blobs, args, restaurants)
-                prefix = args.prefix if name == "menu" else args.nutrition_prefix
-                written = dataset.write(blobs, prefix)
+                written = dataset.write(blobs, prefixes[name])
                 manifests[name] = dataset.manifest()
                 print(
-                    f"wrote {len(written)} files under {args.landing / prefix}",
+                    f"wrote {len(written)} files under {args.landing / prefixes[name]}",
                     file=sys.stderr,
                 )
     except HarvestError as error:
@@ -181,7 +216,7 @@ def _build(
     blobs: LocalBlobStore,
     args: argparse.Namespace,
     restaurants: list[str],
-) -> MenuDataset | NutritionDataset:
+) -> MenuDataset | NutritionDataset | PolicyDataset:
     """Obtain one dataset's documents and parse them."""
     if name == "menu":
         if harvester is None:
@@ -189,6 +224,18 @@ def _build(
                 load_menu(DocumentCache(blobs), restaurants, home_url=args.home_url)
             )
         return parse_menu(harvest_menu(harvester, restaurants, home_url=args.home_url))
+    if name == "policy":
+        if harvester is None:
+            return parse_policy(
+                load_policy(
+                    DocumentCache(blobs),
+                    home_url=args.home_url,
+                    store_count=args.stores,
+                )
+            )
+        return parse_policy(
+            harvest_policy(harvester, home_url=args.home_url, store_count=args.stores)
+        )
     if harvester is None:
         return parse_nutrition(
             load_nutrition(DocumentCache(blobs), restaurants, home_url=args.home_url)
