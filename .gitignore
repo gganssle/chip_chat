@@ -59,3 +59,8 @@ web/dist/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# --- Gas Town session runtime state (per-worktree, never shared) -------------
+# Each worktree running a session rewrites these. Tracking them makes two
+# polecat branches conflict on files whose content is meaningless.
+.runtime/
