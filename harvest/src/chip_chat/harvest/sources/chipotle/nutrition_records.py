@@ -52,6 +52,38 @@ TABLES = (
 )
 """Table names, in the order the manifest lists them."""
 
+TABLE_KEYS: dict[str, tuple[str, ...]] = {
+    "nutrients": ("nutrient_key",),
+    "item_nutrition": ("item_id", "nutrient_key", "portion_unit", "portion_value"),
+    "item_group_calories": ("group_key",),
+    "dietary_tags": ("tag_code",),
+    "item_allergens": ("item_id", "allergen_code"),
+    "item_diets": ("item_id", "diet_code"),
+    "allergen_chart": ("menu_item_id", "name"),
+    "caveats": ("position",),
+}
+"""What identifies a row, for the week-on-week diff of issue #38.
+
+``item_allergens`` and ``item_diets`` are the two rows in this repository where
+the diff is not merely interesting. A tag means CONTAINS and an absent tag is
+not a published negative (cc-2bv), so a status flipping from ``CONTAINS`` to
+``NOT_LISTED`` is a change in what the corpus will tell somebody about their
+allergy — and it degrades silently, because nothing errors when it happens.
+Keyed by ``(item_id, allergen_code)`` so that flip is reported as a
+modification of one named row rather than as a churn of counts.
+
+``item_nutrition`` carries the portion in its key because the same nutrient is
+published for an item at more than one portion size, and a key of
+``(item_id, nutrient_key)`` alone would collide and cost the table its keyed
+diff. ``allergen_chart`` is keyed by ``(menu_item_id, name)`` rather than by
+``sort_order``: the chart lists "Crispy Corn Tortilla" and "Tortilla Chips"
+separately and reorders more readily than it renames.
+
+See ``TABLE_KEYS`` in :mod:`chip_chat.harvest.sources.chipotle.records` for the
+general rule, and :mod:`chip_chat.harvest.changes` for what happens when one of
+these is wrong.
+"""
+
 
 class TagKind(StrEnum):
     """What Chipotle publishes a dietary tag code as.

@@ -51,6 +51,34 @@ TABLES = (
 )
 """Table names, in the order the manifest lists them."""
 
+TABLE_KEYS: dict[str, tuple[str, ...]] = {
+    "policy_documents": ("document_id",),
+    "policy_sections": ("document_id", "position"),
+    "faq_categories": ("category", "subcategory"),
+    "faq_entries": ("category", "subcategory", "rank"),
+    "rewards": ("name",),
+    "catering_packages": ("package_id",),
+    "catering_package_options": ("package_id", "slot", "position"),
+    "stores": ("store_id",),
+    "store_profiles": ("store_id",),
+    "store_hours": ("store_id", "day_of_week"),
+}
+"""What identifies a row, for the week-on-week diff of issue #38.
+
+``rewards`` is keyed by ``name`` rather than by ``position``, because the
+Rewards Exchange is a list that is reordered far more often than it is
+restocked, and a positional key would report a promotion moving up the page as
+every reward below it changing. A store closing, by contrast, has a real
+identifier to disappear from: ``store_id``.
+
+``policy_sections`` and ``catering_package_options`` are positional for the
+same reason ``meal_contents`` is — the source publishes an ordered list with no
+per-line identity — with the same consequence, which is that an inserted line
+reads as a run of modifications.
+
+See ``TABLE_KEYS`` in :mod:`chip_chat.harvest.sources.chipotle.records`.
+"""
+
 MINIMUM_STORES = 30
 """How many stores issue #21 requires.
 

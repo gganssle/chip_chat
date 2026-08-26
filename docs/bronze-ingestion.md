@@ -321,9 +321,12 @@ Against the four acceptance criteria:
   deduplicates and conforms both streams. It also decided how the parsed and
   catalogue tables reach the lakehouse, and the answer was "through this
   pipeline" — see §1. `docs/silver-conformance.md` is that layer's write-up.
-- **No schedule.** [#38](https://github.com/gganssle/chip_chat/issues/38) argues
-  the weekly re-harvest and the freshness signal. Nothing in this workspace
-  should be able to start spending on its own.
+- **No schedule.** [#38](https://github.com/gganssle/chip_chat/issues/38) has
+  since argued the weekly re-harvest and the freshness signal, and put the
+  schedule in GitHub Actions rather than here — the harvest is a
+  politeness-gated crawl with no Spark work in it, and it has nowhere in ADLS
+  to land until `cc-j92` closes. Nothing in this workspace can still start
+  spending on its own. See [corpus-freshness.md](corpus-freshness.md).
 - **No harvest into ADLS.** The deployed harvest still writes to a local
   directory; the landing zone is uploaded. That is a gap in the path #18–#25
   built, not in this pipeline, and it is filed as its own issue.

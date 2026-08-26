@@ -52,6 +52,36 @@ TABLES = (
 )
 """Table names, in the order the manifest lists them."""
 
+TABLE_KEYS: dict[str, tuple[str, ...]] = {
+    "menu_items": ("item_id",),
+    "item_prices": ("restaurant_id", "item_id"),
+    "modifier_groups": ("item_id", "group_name"),
+    "modifiers": ("item_id", "group_name", "modifier_item_id"),
+    "portion_options": ("item_id", "modifier_item_id", "option_id"),
+    "meals": ("meal_id",),
+    "meal_contents": ("meal_id", "position"),
+    "meal_prices": ("restaurant_id", "meal_id"),
+    "ingredients": ("key",),
+    "item_ingredients": ("item_id", "group_title"),
+}
+"""What identifies a row, for the week-on-week diff of issue #38.
+
+Chipotle's own identifiers wherever it publishes one — ``item_id``, ``meal_id``
+— because a diff keyed on a name reports a renamed item as one disappearance
+and one arrival, and the difference between those two stories is the whole
+value of the report.
+
+``meal_contents`` is the exception and is keyed positionally: a meal's contents
+are a published list with no per-line identifier, and ``(meal_id, position)`` is
+the only thing that is stable while the list is. If Chipotle inserts a line in
+the middle, every line after it reads as modified. That is noisier than a real
+identity would be and it is not wrong.
+
+:mod:`chip_chat.harvest.changes` verifies uniqueness at diff time and degrades
+to a contents-only diff for any table where one of these turns out to collide,
+so a wrong entry here costs detail rather than correctness.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class MenuItem:

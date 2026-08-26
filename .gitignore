@@ -44,6 +44,15 @@ harvest/output/
 data-gen/output/
 data/generated/
 
+# The landing zone the harvest and the weekly re-harvest (gh-38) write to.
+# `make reharvest LANDING=...` puts it wherever you say; `landing/` is the
+# default and the name every command in the docs uses.
+landing/
+
+# The rendered change report a re-harvest is asked to write outside the landing
+# zone -- a CI artefact, not a source file.
+change-report.md
+
 # --- Node (web/) ------------------------------------------------------------
 node_modules/
 .next/

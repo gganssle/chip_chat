@@ -129,6 +129,8 @@ class PdfDocuments:
 def harvest_pdfs(
     harvester: Harvester,
     documents: Iterable[CachedDocument],
+    *,
+    refresh: bool = False,
 ) -> PdfDocuments:
     """Discover the PDFs linked from ``documents`` and land them.
 
@@ -138,6 +140,10 @@ def harvest_pdfs(
     Args:
         harvester: The framework instance doing the fetching.
         documents: The already-harvested documents to look for links in.
+        refresh: Ask the source again for every document, conditionally
+            where the cache holds a validator. This is what the weekly
+            re-harvest of issue #38 passes: without it a warm landing zone is
+            never revisited, and the corpus quietly stops being current.
 
     Returns:
         What was found.
@@ -151,7 +157,7 @@ def harvest_pdfs(
 
     def fetch(url: str) -> CachedDocument | None:
         try:
-            return harvester.fetch(url)
+            return harvester.fetch(url, refresh=refresh)
         except (PermanentFetchError, RobotsDisallowedError):
             return None
 

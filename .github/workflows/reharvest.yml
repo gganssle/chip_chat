@@ -1,0 +1,120 @@
+name: Weekly re-harvest
+
+# Issue #38's weekly job. It lives here rather than in Databricks, and that is a
+# decision with a reason and an expiry date.
+#
+# --- WHY NOT A DATABRICKS JOB ------------------------------------------------
+#
+# The re-harvest is a politeness-gated crawl of a public website. It is network
+# bound, single threaded by construction, and does no Spark work at all. Running
+# it on a Databricks job cluster would spend three hundred seconds of VM startup
+# and a DBU-hour rate to do something a free runner does with an HTTP client.
+#
+# It also could not land anywhere useful today. Nothing writes the landing zone
+# to ADLS yet -- the harvest and the generator are both local-only (cc-j92,
+# cc-b15) -- so a workspace-hosted harvest would have no container to write to
+# and the bronze pipeline would ingest nothing new.
+#
+# When those land, this workflow's last step becomes "sync the landing zone to
+# ADLS and start the bronze pipeline update", and the schedule stays here. The
+# harvest belongs where egress is free; the *rebuild* belongs in the workspace,
+# and the release pointer this run writes is the signal that connects them.
+#
+# --- THE LANDING ZONE BETWEEN RUNS -------------------------------------------
+#
+# A re-harvest needs last week's corpus: to diff against, and so that an
+# unchanged page can be revalidated rather than downloaded. GitHub's cache is
+# where that lives until ADLS does. It is best-effort by design -- a cache entry
+# untouched for seven days is evicted, and a weekly run sits right on that edge
+# -- so a miss has to be survivable, and it is: a cold run re-harvests
+# everything, reports every document as added, and publishes a first release.
+# The report says which happened, so a silent cold start is not possible.
+
+on:
+  schedule:
+    # 07:00 UTC on Mondays. Early enough that a failure is looked at during the
+    # working week rather than discovered on a Friday afternoon.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      stores:
+        description: "How many stores the policy dataset reads"
+        required: false
+        default: "30"
+      max_age_days:
+        description: "Fail if the corpus is still older than this many days"
+        required: false
+        default: "8"
+
+concurrency:
+  # Two re-harvests at once would share one landing zone and one politeness
+  # gate would not be shared between them, which is the one way this workflow
+  # could be rude to the source. Never cancel a run in flight: it holds a
+  # half-written cache, and the next run is a week away.
+  group: reharvest
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  reharvest:
+    name: refresh the corpus and report what changed
+    runs-on: ubuntu-latest
+    # Generous, because the politeness gate is the point: this job is meant to
+    # be slow. Not unbounded, because a hung fetch should stop costing minutes.
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install the workspace
+        run: make setup
+
+      # restore-keys is what makes this a rolling cache rather than a
+      # write-once one: the key is unique per run so every run saves, and the
+      # prefix match is what lets the next run restore the newest previous save.
+      - name: Restore last week's landing zone
+        uses: actions/cache@v4
+        with:
+          path: landing
+          key: chip-chat-landing-${{ github.run_id }}
+          restore-keys: |
+            chip-chat-landing-
+
+      - name: Re-harvest, diff, and publish
+        id: reharvest
+        run: |
+          make reharvest \
+            LANDING=landing \
+            STORES='${{ inputs.stores || 30 }}' \
+            MAX_AGE_DAYS='${{ inputs.max_age_days || 8 }}' \
+            REPORT=change-report.md
+
+      # Runs on failure too. A weekly job whose only artefact when it breaks is
+      # a log line is a job whose failures nobody can compare week to week --
+      # and the report a failed run writes is the one that says how far it got.
+      - name: Publish the change report where a human will see it
+        if: always()
+        run: |
+          if [ -f change-report.md ]; then
+            cat change-report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The run produced no change report." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Keep the change report as an artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: change-report
+          path: change-report.md
+          if-no-files-found: warn
+          # Longer than the default so a "when did this item disappear?"
+          # question can be answered from the reports rather than from memory.
+          retention-days: 90

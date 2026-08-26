@@ -28,6 +28,17 @@ from chip_chat.harvest.analysis import (
 )
 from chip_chat.harvest.blobs import BlobStore, InMemoryBlobStore, LocalBlobStore
 from chip_chat.harvest.cache import CachedDocument, DocumentCache, canonical_url
+from chip_chat.harvest.changes import (
+    DocumentChange,
+    RowChange,
+    TableChange,
+    TableSnapshot,
+    diff_documents,
+    diff_tables,
+    render_report,
+    snapshot_documents,
+    snapshot_tables,
+)
 from chip_chat.harvest.clock import Clock, SystemClock
 from chip_chat.harvest.errors import (
     CacheCorruptError,
@@ -38,7 +49,13 @@ from chip_chat.harvest.errors import (
     RobotsDisallowedError,
     TransientFetchError,
 )
-from chip_chat.harvest.harvester import Harvester
+from chip_chat.harvest.freshness import (
+    DEFAULT_MAX_AGE_DAYS,
+    CorpusFreshness,
+    DocumentAge,
+    read_freshness,
+)
+from chip_chat.harvest.harvester import Harvester, conditional_headers
 from chip_chat.harvest.layout import (
     PDF_CONTENT_TYPE,
     LayoutCell,
@@ -48,6 +65,13 @@ from chip_chat.harvest.layout import (
     parse_layout,
 )
 from chip_chat.harvest.ratelimit import GLOBAL_GATE, PolitenessGate, RateLimiter
+from chip_chat.harvest.release import (
+    Release,
+    ReleaseError,
+    ReleaseStore,
+    read_current,
+    run_id_for,
+)
 from chip_chat.harvest.robots import RobotsPolicy
 from chip_chat.harvest.transport import (
     HttpResponse,
@@ -59,6 +83,7 @@ from chip_chat.harvest.version import __version__
 from chip_chat.otel import service_name
 
 __all__ = [
+    "DEFAULT_MAX_AGE_DAYS",
     "GLOBAL_GATE",
     "PDF_CONTENT_TYPE",
     "SERVICE_NAME",
@@ -68,10 +93,13 @@ __all__ = [
     "CacheCorruptError",
     "CachedDocument",
     "Clock",
+    "CorpusFreshness",
+    "DocumentAge",
     "DocumentAnalysis",
     "DocumentAnalysisError",
     "DocumentAnalyzer",
     "DocumentCache",
+    "DocumentChange",
     "FetchError",
     "HarvestError",
     "Harvester",
@@ -85,19 +113,34 @@ __all__ = [
     "PermanentFetchError",
     "PolitenessGate",
     "RateLimiter",
+    "Release",
+    "ReleaseError",
+    "ReleaseStore",
     "RobotsDisallowedError",
     "RobotsPolicy",
+    "RowChange",
     "SystemClock",
+    "TableChange",
+    "TableSnapshot",
     "TransientFetchError",
     "Transport",
     "__version__",
     "analyze_once",
     "build_user_agent",
     "canonical_url",
+    "conditional_headers",
     "default_token_provider",
+    "diff_documents",
+    "diff_tables",
     "is_pdf",
     "parse_layout",
+    "read_current",
+    "read_freshness",
+    "render_report",
+    "run_id_for",
     "service_name",
+    "snapshot_documents",
+    "snapshot_tables",
 ]
 
 SERVICE_NAME = service_name("harvest")

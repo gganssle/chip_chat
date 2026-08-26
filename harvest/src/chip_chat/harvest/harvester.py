@@ -5,7 +5,10 @@ implemented once below:
 
 1. Consult ``robots.txt`` for the origin. If it disallows the path, refuse.
 2. Look in the cache. A hit returns without touching the network — which is
-   what makes a warm re-run cost the site nothing at all.
+   what makes a warm re-run cost the site nothing at all. A *refresh* instead
+   offers the cached ``ETag`` and ``Last-Modified`` back as conditional
+   headers, so a weekly re-harvest of an unchanged page costs the site a 304
+   and no body.
 3. Wait for the politeness gate: a real delay since the last request, and a
    process-wide ceiling on requests in flight.
 4. Fetch, retrying transient failures with backoff and never retrying a 4xx.
@@ -55,6 +58,34 @@ its mind is honoured within a day rather than never."""
 
 JSON_ACCEPT = "application/json, text/javascript;q=0.9, */*;q=0.1"
 
+NOT_MODIFIED = 304
+"""The whole reason issue #38's weekly re-harvest is not a weekly re-download."""
+
+
+def conditional_headers(etag: str | None, last_modified: str | None) -> dict[str, str]:
+    """Return the request headers that ask "only if it changed".
+
+    Both validators are offered when both are known. They are not redundant:
+    an ``ETag`` is exact but some CDNs vary it per edge, and a
+    ``Last-Modified`` date is coarse but stable, so a server that ignores one
+    may still honour the other. RFC 9110 has the server prefer ``If-None-Match``
+    where it understands both, which is the behaviour we want.
+
+    Args:
+        etag: The stored ``ETag``, or ``None``.
+        last_modified: The stored ``Last-Modified``, or ``None``.
+
+    Returns:
+        Zero, one or two headers. An empty mapping means there is nothing to
+        be conditional about, and the caller should ask unconditionally.
+    """
+    headers: dict[str, str] = {}
+    if etag:
+        headers["If-None-Match"] = etag
+    if last_modified:
+        headers["If-Modified-Since"] = last_modified
+    return headers
+
 
 def _retry_after_seconds(response: HttpResponse) -> float | None:
     """Return the ``Retry-After`` delay in seconds, if the server gave a usable one."""
@@ -69,7 +100,20 @@ def _retry_after_seconds(response: HttpResponse) -> float | None:
 
 
 class Harvester:
-    """Fetches public documents politely, and only ever once."""
+    """Fetches public documents politely, and only ever once.
+
+    Attributes:
+        user_agent: What this harvester tells a site it is.
+        requests_made: Every request that reached the transport, retries and
+            ``robots.txt`` included.
+        revalidations: How many of those were answered 304 — a page confirmed
+            unchanged without its body being sent again. Issue #38's claim
+            that a re-harvest "does not re-fetch what has not changed" is this
+            number set against ``requests_made``, which is why it is counted
+            rather than described.
+        bytes_fetched: Response bodies stored, in bytes. A revalidation adds
+            nothing to it, which is the point.
+    """
 
     def __init__(
         self,
@@ -118,6 +162,8 @@ class Harvester:
             raise ValueError(f"max_attempts must be at least 1, got {max_attempts}")
         self.user_agent = build_user_agent(contact)
         self.requests_made = 0
+        self.revalidations = 0
+        self.bytes_fetched = 0
         self._transport = transport
         self._clock: Clock = clock if clock is not None else SystemClock()
         self._gate = gate if gate is not None else GLOBAL_GATE
@@ -148,10 +194,14 @@ class Harvester:
 
         Args:
             url: An absolute ``http`` or ``https`` URL.
-            refresh: Fetch even on a cache hit. The previous body stays in the
-                store, so the two can be diffed.
+            refresh: Ask the server again even on a cache hit. The request is
+                *conditional* where the stored pointer carries an ``ETag`` or
+                a ``Last-Modified``, so an unchanged page is answered with a
+                304 and no body; the previous body stays in the store either
+                way, so the two can be diffed.
             headers: Extra request headers. ``User-Agent`` cannot be
-                overridden.
+                overridden, and neither can the conditional headers a refresh
+                supplies.
 
         Returns:
             The cached document, carrying ``source_url`` and ``harvested_at``.
@@ -174,8 +224,39 @@ class Harvester:
             cached = self._cache.get(target)
             if cached is not None:
                 return cached
+            return self._fetch_and_store(target, headers)
 
-        response = self._request(target, headers)
+        etag, last_modified = self._cache.validators(target)
+        conditional = conditional_headers(etag, last_modified)
+        if not conditional:
+            return self._fetch_and_store(target, headers)
+
+        merged = {**dict(headers or {}), **conditional}
+        response = self._request(target, merged, accept_not_modified=True)
+        if response.status_code != NOT_MODIFIED:
+            return self._store(target, response)
+
+        with self._counter_lock:
+            self.revalidations += 1
+        revalidated = self._cache.touch(target, self._clock.now())
+        if revalidated is not None:
+            return revalidated
+        # A 304 with nothing to revalidate. Only reachable if the pointer was
+        # deleted between reading its validators and recording the answer, so
+        # the honest response is to go and get the bytes rather than to invent
+        # a document.
+        return self._fetch_and_store(target, headers)
+
+    def _fetch_and_store(
+        self, target: str, headers: Mapping[str, str] | None
+    ) -> CachedDocument:
+        """Fetch ``target`` unconditionally and store what came back."""
+        return self._store(target, self._request(target, headers))
+
+    def _store(self, target: str, response: HttpResponse) -> CachedDocument:
+        """Store one response, counting the bytes the site had to send us."""
+        with self._counter_lock:
+            self.bytes_fetched += len(response.content)
         return self._cache.put(target, response, self._clock.now())
 
     def fetch_json(
@@ -282,6 +363,7 @@ class Harvester:
         headers: Mapping[str, str] | None,
         *,
         accept_error_statuses: bool = False,
+        accept_not_modified: bool = False,
     ) -> HttpResponse:
         """Fetch ``url`` through the gate, retrying transient failures.
 
@@ -290,6 +372,10 @@ class Harvester:
             headers: Extra request headers.
             accept_error_statuses: Return 4xx responses instead of raising.
                 Used for ``robots.txt``, where a 404 is a meaningful answer.
+            accept_not_modified: Return a 304 instead of raising. Set only
+                when the request actually carried a validator; a 304 to an
+                unconditional request is a broken server, and treating it as
+                "unchanged" would silently freeze that document forever.
 
         Returns:
             The response.
@@ -323,6 +409,8 @@ class Harvester:
             if response is not None:
                 status = response.status_code
                 if 200 <= status < 300:
+                    return response
+                if accept_not_modified and status == NOT_MODIFIED:
                     return response
                 if status == 429 or status >= 500:
                     last_error = TransientFetchError(url, f"HTTP {status}", status)
