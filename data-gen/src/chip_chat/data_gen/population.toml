@@ -1,0 +1,372 @@
+# The tuned population.
+#
+# Issue #25's fourth acceptance criterion: "generation parameters live in a
+# config file, not scattered constants, so the population can be retuned
+# without archaeology". This is that file. Every number the generator reads is
+# here, and `chip_chat.data_gen.config` validates all of them rather than
+# clamping any of them.
+#
+# PRD section 09 calls account realism "bounded by the generator", which makes
+# this a product surface: behaviour absent from the archetypes below cannot be
+# demonstrated by the assistant, however well the rest of the pipeline works.
+# Adding "the customer who only ever orders catering" is an edit here.
+
+[population]
+seed = 20260826
+customers = 500
+stores = 30
+months = 18
+# Fixed rather than "now". A generator whose window depends on the wall clock
+# is not reproducible whatever its seed says.
+ends_at = "2026-08-01T00:00:00+00:00"
+# Traffic is not spread evenly over thirty stores in the real world and should
+# not be here: the exponent concentrates it, the offset keeps the busiest store
+# busy rather than the only one busy.
+store_popularity_exponent = 0.85
+store_popularity_offset = 2.5
+# How sharply one customer prefers some items over others. A Dirichlet
+# concentration: below one gives most customers a few favourites, at one they
+# have none, and a population with no favourites gives the personalization
+# lane nothing to find.
+palate_concentration = 0.55
+# How far a customer's first and last order may slide from where their
+# archetype's shares put them. Without it every lapsed customer lapses on the
+# same afternoon, which reads as a generator rather than as a population.
+window_jitter_days = 21
+
+[timing]
+# Monday first. Friday is the peak, Sunday the trough.
+day_of_week_weights = [0.155, 0.150, 0.145, 0.150, 0.170, 0.130, 0.100]
+# January first. Multipliers around one: a month above one shortens the gap
+# between a customer's orders, a month below one lengthens it. This is the
+# seasonal drift, and it is why an 18-month window is not 18 identical months.
+month_weights = [0.90, 0.94, 1.02, 1.06, 1.10, 1.07, 1.04, 1.08, 1.06, 1.02, 0.95, 0.86]
+# How far an order may be moved to land on a better-weighted weekday.
+weekday_shift_days = 3
+# Assumed hours for a store that publishes none. The locator publishes hours
+# for most stores and not all, and an order at 3am in a store whose hours are
+# simply missing is worse than an order inside a stated assumption.
+default_opens = "10:45"
+default_closes = "22:00"
+# An order this close to closing is pulled back inside the published hours.
+last_order_minutes = 15
+
+[timing.store_timezones]
+# The locator publishes opening hours with no zone on them. They are local
+# times, and so is "weekday lunch peak", so the store has to name a zone
+# before either claim means anything. Keyed by the published `stores.region`,
+# a US state abbreviation. A state split across two zones is mapped to the one
+# most of its restaurants are in -- Florida to Eastern, Idaho to Mountain --
+# which is an approximation this table makes visible rather than hides. When
+# the locator harvest carries a store's own zone, this table goes away.
+default = "America/New_York"
+AK = "America/Anchorage"
+AL = "America/Chicago"
+AR = "America/Chicago"
+AZ = "America/Phoenix"
+CA = "America/Los_Angeles"
+CO = "America/Denver"
+CT = "America/New_York"
+DC = "America/New_York"
+DE = "America/New_York"
+FL = "America/New_York"
+GA = "America/New_York"
+HI = "Pacific/Honolulu"
+IA = "America/Chicago"
+ID = "America/Denver"
+IL = "America/Chicago"
+IN = "America/New_York"
+KS = "America/Chicago"
+KY = "America/New_York"
+LA = "America/Chicago"
+MA = "America/New_York"
+MD = "America/New_York"
+ME = "America/New_York"
+MI = "America/New_York"
+MN = "America/Chicago"
+MO = "America/Chicago"
+MS = "America/Chicago"
+MT = "America/Denver"
+NC = "America/New_York"
+ND = "America/Chicago"
+NE = "America/Chicago"
+NH = "America/New_York"
+NJ = "America/New_York"
+NM = "America/Denver"
+NV = "America/Los_Angeles"
+NY = "America/New_York"
+OH = "America/New_York"
+OK = "America/Chicago"
+OR = "America/Los_Angeles"
+PA = "America/New_York"
+PR = "America/Puerto_Rico"
+RI = "America/New_York"
+SC = "America/New_York"
+SD = "America/Chicago"
+TN = "America/Chicago"
+TX = "America/Chicago"
+UT = "America/Denver"
+VA = "America/New_York"
+VT = "America/New_York"
+WA = "America/Los_Angeles"
+WI = "America/Chicago"
+WV = "America/New_York"
+WY = "America/Denver"
+
+[timing.weekday_lunch]
+hours = [10, 11, 12, 13, 14, 15]
+weights = [0.05, 0.22, 0.38, 0.22, 0.09, 0.04]
+
+[timing.weekday_dinner]
+hours = [16, 17, 18, 19, 20, 21]
+weights = [0.08, 0.22, 0.30, 0.22, 0.12, 0.06]
+
+[timing.weekend_lunch]
+hours = [10, 11, 12, 13, 14, 15]
+weights = [0.04, 0.15, 0.28, 0.27, 0.16, 0.10]
+
+[timing.weekend_dinner]
+hours = [16, 17, 18, 19, 20, 21]
+weights = [0.10, 0.20, 0.26, 0.22, 0.14, 0.08]
+
+[catalogue]
+# Published `menu_items.category` values. A catalogue whose category names
+# change is a config edit, not a code change.
+entree_category = "Entree"
+side_categories = ["Side"]
+drink_categories = ["Drink"]
+# Published, orderable in principle, and noise in a basket.
+excluded_categories = ["Non Food Items"]
+# `modifiers.modifier_type` marking a paid extra portion.
+extra_portion_modifier_type = "ExtraPortion"
+# Slots the catalogue publishes as one-of; the generator always picks one.
+required_slots = ["rice", "beans"]
+# Slots the generator picks a variable number from.
+optional_slots = ["toppings", "salsas"]
+
+[orders]
+statuses = ["COMPLETED", "CANCELLED", "REFUNDED"]
+status_weights = [0.958, 0.028, 0.014]
+# A refunded order is real history and earns nothing.
+settled_statuses = ["COMPLETED"]
+
+[loyalty]
+# Provisional. Issue #27 reconciles these against the harvested rewards terms;
+# until it does, they are parameters here and are asserted as facts nowhere.
+points_per_dollar = 10
+redemption_threshold = 1250
+seed_reason = "SIGNUP_BONUS"
+earn_reason = "ORDER"
+redeem_reason = "REWARD_FREE_ENTREE"
+redemption_probability = 0.65
+
+[names]
+# Invented words combined by seed. There is no PII in this system by
+# construction (RFC-001 section 02) and there is none here either.
+given = [
+    "Ada", "Amara", "Ansel", "Beatriz", "Bo", "Caleb", "Camille", "Cyrus",
+    "Dara", "Dmitri", "Elena", "Emeka", "Esme", "Farid", "Freya", "Gita",
+    "Hana", "Hollis", "Ines", "Ivo", "Jonas", "Juno", "Kaia", "Kenji",
+    "Lena", "Lio", "Maeve", "Mateo", "Nadia", "Nils", "Odile", "Omar",
+    "Paloma", "Pierce", "Quinn", "Rafa", "Rosalind", "Sanne", "Silas",
+    "Tamsin", "Theo", "Ula", "Viggo", "Wren", "Xiomara", "Yusuf", "Zara", "Zev",
+]
+family = [
+    "Abara", "Beck", "Calloway", "Duarte", "Eiler", "Farrow", "Gallego",
+    "Halloran", "Iyer", "Janek", "Kovac", "Lindqvist", "Marchetti", "Nakamura",
+    "Oyelaran", "Pryce", "Quilliam", "Ramone", "Salter", "Tavares", "Ubeda",
+    "Vasquez", "Whitlock", "Xu", "Yardley", "Zaman", "Ashworth", "Bordelon",
+    "Castellan", "Dunmore", "Espinoza", "Fenwick", "Grieve", "Hartnell",
+    "Ilves", "Joubert", "Kestrel", "Larkin", "Moraes", "Nordahl",
+]
+# Free text a visitor may have typed about themselves. Deliberately about
+# preference rather than about medical need: an allergen answer comes from the
+# published chart, never from a sentence a visitor wrote.
+stated_preferences = [
+    "extra guac, always",
+    "no rice",
+    "keep it mild",
+    "as spicy as it comes",
+    "double protein when I am training",
+    "vegetarian on weekdays",
+    "no onions",
+    "I always want it to go",
+]
+stated_preference_share = 0.22
+home_store_override_share = 0.08
+
+# --------------------------------------------------------------------------
+# The archetypes. Shares sum to one; the population is apportioned by largest
+# remainder, so five hundred customers split the same way every run.
+# --------------------------------------------------------------------------
+
+[[personas]]
+persona_id = "regular"
+label = "The Weekly Regular"
+narrative = "Same bowl, same store, the same day nearly every week, for as long as the data goes back."
+share = 0.16
+seed_points = 250
+cadence_days = 7.0
+cadence_spread = 0.12
+active_from_share = 0.0
+active_until_share = 1.0
+usual_order_fidelity = 0.92
+weekday_fidelity = 0.85
+# Each regular keeps to one day; which day is drawn per customer from
+# `day_of_week_weights`. Pinning the whole archetype to Tuesday would put a
+# third of the population's orders on Tuesday, which is a generator showing
+# through rather than a regular.
+preferred_weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+lunch_share = 0.80
+entrees_min = 1
+entrees_max = 1
+toppings_min = 2
+toppings_max = 3
+side_probability = 0.10
+drink_probability = 0.25
+extra_probability = 0.05
+store_loyalty = 0.97
+delivery_share = 0.08
+
+[[personas]]
+persona_id = "lapsed"
+label = "The Lapsed Regular"
+narrative = "Ordered steadily for a year, then stopped about four months ago."
+share = 0.12
+seed_points = 180
+cadence_days = 9.0
+cadence_spread = 0.30
+active_from_share = 0.0
+# 1 - 4/18. The lapse is a property of the window, not of a hard-coded date.
+active_until_share = 0.778
+usual_order_fidelity = 0.70
+weekday_fidelity = 0.25
+lunch_share = 0.55
+entrees_min = 1
+entrees_max = 2
+toppings_min = 1
+toppings_max = 3
+side_probability = 0.18
+drink_probability = 0.30
+extra_probability = 0.06
+store_loyalty = 0.90
+delivery_share = 0.15
+
+[[personas]]
+persona_id = "explorer"
+label = "The Explorer"
+narrative = "Rarely orders the same thing twice, and rarely from the same store."
+share = 0.18
+seed_points = 60
+cadence_days = 12.0
+cadence_spread = 0.45
+active_from_share = 0.0
+active_until_share = 1.0
+usual_order_fidelity = 0.05
+weekday_fidelity = 0.05
+lunch_share = 0.50
+entrees_min = 1
+entrees_max = 2
+toppings_min = 0
+toppings_max = 4
+side_probability = 0.30
+drink_probability = 0.35
+extra_probability = 0.22
+store_loyalty = 0.55
+delivery_share = 0.20
+
+[[personas]]
+persona_id = "office_manager"
+label = "The Office Manager"
+narrative = "Puts in the midweek lunch order for the whole floor, on delivery."
+share = 0.08
+seed_points = 900
+cadence_days = 11.0
+cadence_spread = 0.35
+active_from_share = 0.05
+active_until_share = 1.0
+usual_order_fidelity = 0.15
+weekday_fidelity = 0.60
+preferred_weekdays = ["Tuesday", "Wednesday", "Thursday"]
+lunch_share = 0.95
+entrees_min = 4
+entrees_max = 9
+toppings_min = 1
+toppings_max = 3
+side_probability = 0.55
+drink_probability = 0.60
+extra_probability = 0.10
+store_loyalty = 0.93
+delivery_share = 0.65
+
+[[personas]]
+persona_id = "weekend_family"
+label = "The Weekend Family"
+narrative = "Three or four entrees, chips for the table, most weekends."
+share = 0.16
+seed_points = 140
+cadence_days = 16.0
+cadence_spread = 0.30
+active_from_share = 0.0
+active_until_share = 1.0
+usual_order_fidelity = 0.35
+weekday_fidelity = 0.70
+preferred_weekdays = ["Saturday", "Sunday"]
+lunch_share = 0.35
+entrees_min = 3
+entrees_max = 5
+toppings_min = 1
+toppings_max = 3
+side_probability = 0.70
+drink_probability = 0.75
+extra_probability = 0.12
+store_loyalty = 0.88
+delivery_share = 0.35
+
+[[personas]]
+persona_id = "newcomer"
+label = "The Newcomer"
+narrative = "First order about five months ago; still working out the usual."
+share = 0.10
+seed_points = 0
+cadence_days = 10.0
+cadence_spread = 0.40
+# 1 - 5/18. A population where everyone has eighteen months of history has no
+# one for the assistant to greet as new.
+active_from_share = 0.722
+active_until_share = 1.0
+usual_order_fidelity = 0.30
+weekday_fidelity = 0.10
+lunch_share = 0.60
+entrees_min = 1
+entrees_max = 2
+toppings_min = 1
+toppings_max = 3
+side_probability = 0.25
+drink_probability = 0.30
+extra_probability = 0.10
+store_loyalty = 0.80
+delivery_share = 0.25
+
+[[personas]]
+persona_id = "occasional"
+label = "The Occasional Visitor"
+narrative = "Turns up every couple of months, usually somewhere new."
+share = 0.20
+seed_points = 20
+cadence_days = 46.0
+cadence_spread = 0.50
+active_from_share = 0.0
+active_until_share = 1.0
+usual_order_fidelity = 0.20
+weekday_fidelity = 0.05
+lunch_share = 0.55
+entrees_min = 1
+entrees_max = 2
+toppings_min = 0
+toppings_max = 3
+side_probability = 0.20
+drink_probability = 0.30
+extra_probability = 0.08
+store_loyalty = 0.60
+delivery_share = 0.20

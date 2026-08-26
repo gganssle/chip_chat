@@ -1,0 +1,113 @@
+"""Command line for generating the synthetic population.
+
+The generator composes orders out of a catalogue, so the ordinary way to run
+it is against a landing zone that already has one::
+
+    python -m chip_chat.harvest.sources.chipotle --landing landing --dataset all
+    python -m chip_chat.catalog --landing landing --offline
+    python -m chip_chat.data_gen --landing landing
+
+Nothing here fetches anything. The catalogue is read from the landing zone and
+the population is written back beside it, which is also how the first
+acceptance criterion is checked by hand: run it twice and compare the
+``population_version`` it prints.
+
+``--seed`` overrides the seed in the config file without editing it, which is
+what you want when you are looking at *a* population rather than *the* one.
+``--config`` replaces the whole file, which is what you want when you are
+retuning it — and the point of issue #25's fourth criterion is that retuning
+is an edit to a file rather than a change to this program.
+"""
+
+import argparse
+import dataclasses
+import json
+import sys
+from collections.abc import Sequence
+from pathlib import Path
+
+from chip_chat.catalog import DEFAULT_PREFIX as CATALOG_PREFIX
+from chip_chat.catalog import load_catalog
+from chip_chat.catalog.errors import CatalogError
+from chip_chat.data_gen.config import load_config
+from chip_chat.data_gen.errors import GeneratorError
+from chip_chat.data_gen.generate import generate_population
+from chip_chat.data_gen.records import DEFAULT_PREFIX
+from chip_chat.harvest.blobs import LocalBlobStore
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Return the argument parser, so tests can exercise it without a shell."""
+    parser = argparse.ArgumentParser(
+        prog="python -m chip_chat.data_gen",
+        description="Generate the seeded synthetic population from a catalogue.",
+    )
+    parser.add_argument(
+        "--landing",
+        type=Path,
+        required=True,
+        help="Directory the catalogue lives in and the population is written to.",
+    )
+    parser.add_argument(
+        "--catalog-prefix",
+        default=CATALOG_PREFIX,
+        help=f"Key prefix the catalogue was written under. Defaults to {CATALOG_PREFIX}.",
+    )
+    parser.add_argument(
+        "--prefix",
+        default=DEFAULT_PREFIX,
+        help=f"Key prefix for the population. Defaults to {DEFAULT_PREFIX}.",
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Generation parameters. Defaults to the population.toml shipped "
+            "inside the package."
+        ),
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Override the seed in the config without editing the file.",
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Generate the population, write it, and print its manifest.
+
+    Args:
+        argv: Command line arguments, or ``None`` to read ``sys.argv``.
+
+    Returns:
+        A process exit status: zero on success, one if the catalogue cannot be
+        read or the parameters do not describe a population that can exist.
+    """
+    args = build_parser().parse_args(argv)
+    blobs = LocalBlobStore(args.landing)
+
+    try:
+        config = load_config(args.config)
+        if args.seed is not None:
+            config = dataclasses.replace(config, seed=args.seed)
+        catalog = load_catalog(blobs, args.catalog_prefix)
+        population = generate_population(catalog, config)
+    except (CatalogError, GeneratorError) as error:
+        print(f"population generation failed: {error}", file=sys.stderr)
+        return 1
+
+    written = population.write(blobs, args.prefix)
+    print(
+        f"wrote {len(written)} files under {args.landing / args.prefix}",
+        file=sys.stderr,
+    )
+    print(json.dumps(population.manifest(), indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

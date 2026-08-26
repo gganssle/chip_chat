@@ -501,11 +501,15 @@ name = "chip-chat-data-gen"
 version = "0.0.0"
 source = { editable = "data-gen" }
 dependencies = [
+    { name = "chip-chat-catalog" },
     { name = "chip-chat-otel" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "chip-chat-otel", editable = "otel" }]
+requires-dist = [
+    { name = "chip-chat-catalog", editable = "catalog" },
+    { name = "chip-chat-otel", editable = "otel" },
+]
 
 [[package]]
 name = "chip-chat-databricks"
