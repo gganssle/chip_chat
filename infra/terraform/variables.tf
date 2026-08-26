@@ -607,3 +607,33 @@ variable "databricks_smoke_timeout_seconds" {
   type        = number
   default     = 900
 }
+
+variable "databricks_uc_probe_timeout_seconds" {
+  description = <<-EOT
+    Ceiling on the two Unity Catalog verification jobs (gh-32). Longer than the
+    ADLS smoke job because the lineage probe polls: Unity Catalog records lineage
+    asynchronously, so the notebook waits for the graph to resolve rather than
+    reading it once and calling an early answer a failure.
+  EOT
+  type        = number
+  default     = 1800
+}
+
+variable "databricks_catalog_owner" {
+  description = <<-EOT
+    Unity Catalog owner of the catalog and its six schemas. Empty means the
+    identity running Terraform.
+
+    It must be an ACCOUNT-level principal — an account user, an account group or
+    a service principal. The workspace-local `admins` and `users` groups are not
+    ones, and Unity Catalog rejects them with "Could not find principal with
+    name admins", which reads like a typo and is not (verified 2026-08-26).
+
+    An account group is the right answer and cannot be created from here: it
+    needs a provider pointed at accounts.azuredatabricks.net and an account
+    admin to run it. Set this to that group's name once it exists, and the
+    catalog changes hands in one apply.
+  EOT
+  type        = string
+  default     = ""
+}

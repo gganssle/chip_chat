@@ -195,6 +195,15 @@ resource "databricks_grants" "raw_external_location" {
     principal  = databricks_service_principal.jobs.application_id
     privileges = ["READ_FILES", "WRITE_FILES", "CREATE_EXTERNAL_TABLE"]
   }
+
+  # READ_FILES and nothing else for the reader (gh-32). The gold-to-Snowflake
+  # publish reads files as well as tables, and a principal that is read-only in
+  # the catalog but could still write to the landing zone would not be read-only
+  # in any sense worth verifying.
+  grant {
+    principal  = databricks_service_principal.readonly.application_id
+    privileges = ["READ_FILES"]
+  }
 }
 
 resource "databricks_grants" "lakehouse_external_location" {

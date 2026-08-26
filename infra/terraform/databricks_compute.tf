@@ -218,6 +218,17 @@ resource "databricks_permissions" "job_policy_usage" {
     service_principal_name = databricks_service_principal.jobs.application_id
     permission_level       = "CAN_USE"
   }
+
+  # The read-only principal (gh-32) runs one job: the one that proves it cannot
+  # write. It needs the policy for the same reason the jobs principal does --
+  # neither may create compute any other way -- and it is listed here rather than
+  # in its own resource because this ACL is authoritative for the policy and a
+  # second `databricks_permissions` on the same object would overwrite this one
+  # on every alternate apply.
+  access_control {
+    service_principal_name = databricks_service_principal.readonly.application_id
+    permission_level       = "CAN_USE"
+  }
 }
 
 # --- How the app tier authenticates, and why there is no secret ---------------

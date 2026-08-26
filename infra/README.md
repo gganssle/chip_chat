@@ -78,6 +78,7 @@ is served by variables and workspaces instead. Files are split by concern.
 | `registry.tf` | Container registry for the agent image, plus its pull and push grants |
 | `databricks.tf` | Databricks workspace, Unity Catalog access connector and its ADLS grant, storage credential, external locations, Key Vault entries |
 | `databricks_compute.tf` | Cluster policies, cluster-create entitlements, the jobs service principal, the app identity's registration, the ADLS smoke job |
+| `databricks_catalog.tf` | The `chip_chat` catalog, the six medallion schemas, the grants on both, the read-only principal, and the two jobs that verify lineage and refusal |
 | `imports.tf` | Adoption of the Phase 0 estate |
 | `backend.tf` | Remote state |
 
@@ -573,6 +574,126 @@ az consumption usage list --start-date 2026-08-26 --end-date 2026-08-27 \
 ```
 
 Tracked as a bead so the number gets written down rather than remembered.
+
+
+## Unity Catalog
+
+Issue #32. The governance layer, created before there were any tables in it —
+ownership and grants are cheap to set on an empty catalog and tedious to
+retrofit onto a populated one, because everything made in between inherits
+whatever was true at the time.
+
+`docs/lakehouse-catalog.md` is the full write-up. The short version:
+
+| | |
+| --- | --- |
+| Catalog | `chip_chat`, managed storage at `abfss://lakehouse@…/_catalog` |
+| Schemas | Six — `{bronze,silver,gold}_{harvested,synthetic}` — each with its own managed root at `abfss://lakehouse@…/schemas/<name>` and `properties = {layer, stream}` |
+| Writer | `chip-chat-jobs`: `USE_CATALOG`; per schema `USE_SCHEMA`, `SELECT`, `MODIFY`, `CREATE_TABLE`, `CREATE_MATERIALIZED_VIEW`, `REFRESH` |
+| Reader | `chip-chat-readonly`: `USE_CATALOG`, `USE_SCHEMA`, `SELECT`, and `READ_FILES` on `chip-chat-raw`. Nothing else |
+| Ambient access | **None.** `account users` has no grant, the app tier has no grant, and `databricks_grants` is authoritative — a grant added in the UI is removed by the next apply |
+| Verification | Two manual-trigger jobs: `chip-chat-uc-lineage` and `chip-chat-uc-readonly-denied` |
+
+**Six schemas and not three.** Unity Catalog has three levels, so the issue's
+"two streams kept visibly separate within `bronze`/`silver`/`gold`" could only
+have been a table-naming convention — which is invisible on the day this ships,
+because there are no tables. As a schema suffix the boundary is visible in an
+empty catalogue, it is *grantable*, and it is a queryable property of the object.
+The header of `databricks_catalog.tf` carries the argument in full.
+
+### Two things Unity Catalog will not let a workspace-scoped stack do
+
+> ⚠️ **A Unity Catalog owner must be an account-level principal.** `owner =
+> "admins"` — the workspace admin group — fails with `cannot create catalog:
+> Could not find principal with name admins`, which reads like a typo and is
+> not. `admins` and `users` are workspace-local; UC resolves principals against
+> the *account*. An account group needs a provider pointed at
+> `accounts.azuredatabricks.net` and an account admin to run it, so the catalog
+> is owned by whoever applied. `var.databricks_catalog_owner` is the seam.
+
+> ⚠️ **`system.access` is not enabled, so lineage cannot be read from system
+> tables.** The `system` catalog here holds only `ai` and `information_schema`,
+> and enabling `system.access` — where `table_lineage` lives — is an
+> account-admin action with no workspace API. This is the third such wall, after
+> the `billing` schema and on-behalf-of tokens. The lineage probe uses
+> `POST /api/2.0/lineage-tracking/table-lineage` instead, which is
+> workspace-level and needs nothing turned on.
+
+### Unity Catalog, verified
+
+Against workspace `dbw-chip-chat`, 2026-08-26. Both jobs assert their own result
+and fail the run otherwise, so "SUCCESS" below is the assertion passing rather
+than the notebook finishing.
+
+| | |
+| --- | --- |
+| Catalog and schemas | `chip_chat` + six, created by `terraform apply`. `databricks schemas list chip_chat` shows all six with their comments and `properties = {layer, stream}` |
+| Managed storage | Catalog at `lakehouse/_catalog`; each schema at `lakehouse/schemas/<name>` — Unity Catalog accepted the sibling roots without complaint |
+| **Lineage** | `chip-chat-uc-lineage`, run `1113423536362313`: **SUCCESS** |
+| **Refusal** | `chip-chat-uc-readonly-denied`, run `420068911637398`: **SUCCESS** — the `SELECT` returned rows and all five writes were refused |
+| Cluster start | **4.8 min** cold, **~1.2 min** once the runtime image is cached on the host |
+
+The lineage the platform recorded, read back through the API:
+
+```
+abfss://raw@stchipchat….dfs.core.windows.net/_lineage_probe/<run>/menu.json
+   [securable_type EXTERNAL_LOCATION, securable_name chip-chat-raw]
+ → chip_chat.bronze_harvested.lineage_probe
+ → chip_chat.silver_harvested.lineage_probe
+ → chip_chat.gold_harvested.lineage_probe
+```
+
+The file really does appear as an upstream of the bronze table, which is the
+half of "a raw file through to a gold mart" that table-to-table lineage would
+not have shown.
+
+### When a run sits at "Setting up 1 nodes" for twenty minutes
+
+The run status says `RUNNING`, the cluster says `PENDING`, and the VM in
+`rg-chip-chat-databricks-managed` says `PowerState/running`. Everything looks
+like slow provisioning and it is not necessarily that. Read the cluster's own
+event log, which is the only place the reason appears:
+
+```bash
+databricks clusters events <cluster-id> -o json | jq '.events[] | select(.type=="ADD_NODES_FAILED")'
+```
+
+On 2026-08-26 that returned `SPARK_IMAGE_DOWNLOAD_FAILURE` — the node had booted
+and then spent twenty-five minutes failing to pull the Databricks Runtime image
+from `arprodeastus2a12.blob.core.windows.net` ("Timed out with exception after
+24023 attempts"), for the same `17.3.x-scala2.13` runtime that had downloaded
+fine hours earlier. It is a transient platform fault, not a configuration one:
+cancel the run and start it again, and the fresh node pulls the image normally.
+Worth knowing because the symptom is indistinguishable from the *node-type*
+capacity stall the inventory records, and the fix for that one — changing
+`var.databricks_node_type` — would have been a change to the wrong thing.
+
+### Verifying it
+
+```bash
+cd infra/terraform
+databricks jobs run-now $(terraform output -raw databricks_lineage_job_id)
+databricks jobs run-now $(terraform output -raw databricks_readonly_job_id)
+```
+
+In that order: the second reads what the first writes. Both run on single-node
+job compute under `chip-chat-job-single-node`, so they inherit #31's cost
+guardrail and cannot outlive themselves. Neither is scheduled.
+
+`chip-chat-uc-lineage` writes one JSON document into ADLS with `dbutils.fs.put`
+— not with Spark, so the only lineage edge touching that path is the read — then
+carries it through bronze, silver and gold and asserts that Unity Catalog
+recorded the chain. It leaves the three `lineage_probe` tables behind, because
+lineage is a property of objects that exist; dropping them would delete the
+evidence. Lineage is recorded asynchronously, so the notebook polls for up to
+five minutes rather than treating an early answer as a failure.
+
+`chip-chat-uc-readonly-denied` runs as the read-only principal. It reads first —
+a refusal proves nothing if the principal has no access at all — then attempts
+five writes and requires every one to be refused, including a file write to the
+landing zone, because the catalog is not the only way out of a workspace. It
+also fails if a write is refused for a reason that is *not* a permission error,
+so a syntax mistake cannot make it pass.
 
 ---
 

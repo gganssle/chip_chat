@@ -246,3 +246,35 @@ output "databricks_smoke_job_id" {
   description = "The end-to-end ADLS job. Run it with: databricks jobs run-now <id>"
   value       = databricks_job.adls_smoke.id
 }
+
+# --- Unity Catalog ----------------------------------------------------------
+
+output "databricks_catalog_name" {
+  description = "The lakehouse catalog. Null while var.databricks_unity_catalog_enabled is false."
+  value       = var.databricks_unity_catalog_enabled ? databricks_catalog.main[0].name : null
+}
+
+output "databricks_medallion_schemas" {
+  description = "The six medallion schemas, keyed by name, each with its layer and stream. The real/synthetic boundary is a schema-name suffix rather than a table-naming convention so that it is grantable — see the header of databricks_catalog.tf."
+  value = {
+    for name, schema in local.uc_schemas : name => {
+      layer  = schema.layer
+      stream = schema.stream
+    }
+  }
+}
+
+output "databricks_readonly_service_principal_application_id" {
+  description = "The read-only principal: USE_CATALOG, USE_SCHEMA and SELECT, plus READ_FILES on the raw landing zone. Nothing else. The chip-chat-uc-readonly-denied job proves it."
+  value       = databricks_service_principal.readonly.application_id
+}
+
+output "databricks_lineage_job_id" {
+  description = "Raw file -> bronze -> silver -> gold, then asserts Unity Catalog recorded the chain. Run it with: databricks jobs run-now <id>"
+  value       = var.databricks_unity_catalog_enabled ? databricks_job.uc_lineage[0].id : null
+}
+
+output "databricks_readonly_job_id" {
+  description = "Attempts five writes as the read-only principal and requires every one to be refused. Run the lineage job first — this one reads what it writes."
+  value       = var.databricks_unity_catalog_enabled ? databricks_job.uc_readonly_denied[0].id : null
+}
