@@ -35,7 +35,10 @@ from chip_chat.otel import (
     tool_call,
 )
 from chip_chat.otel.testing import SpanRecorder
-from chip_chat.vision.describe import DescribeUnavailableError
+from chip_chat.vision.describe import (
+    DescribeUnavailableError,
+    DescriptionRejectedError,
+)
 from chip_chat.vision.lane import PhotoLane
 from chip_chat.vision.matcher import Outcome
 from chip_chat.vision.testing import (
@@ -211,3 +214,25 @@ def test_a_declining_stage_four_marks_the_span_and_never_reaches_stage_five(
     # Stage 5 never ran: there is nothing to resolve, and a matcher.resolve span
     # over an absent description would be a trace telling a comfortable lie.
     assert "matcher.resolve" not in spans.names()
+
+
+def test_a_rejected_description_still_records_what_it_cost(
+    spans: SpanRecorder,
+) -> None:
+    """The expensive failure must not be the one that looks free.
+
+    A deployment answering nonsense costs exactly what one answering correctly
+    costs, and it tends to do it repeatedly. Recording the tokens only on the
+    happy path would hide that -- and would leave an LLM span with no counts on
+    it, which is indistinguishable from broken instrumentation.
+    """
+    lane = photo_lane(model=StubVisionModel(response="{}"))[0]
+
+    with pytest.raises(DescriptionRejectedError):
+        lane.match_as_tool(STUB_PHOTO_REF)
+
+    vision = spans.attributes_of("vision.describe")
+    assert vision[SpanAttributes.LLM_TOKEN_COUNT_TOTAL] == STUB_VISION_USAGE.total
+    assert spans.span_named("vision.describe").status.is_ok is False
+    # And the sum still works, rather than raising "no token counts".
+    assert spans.llm_token_usage().total == STUB_VISION_USAGE.total

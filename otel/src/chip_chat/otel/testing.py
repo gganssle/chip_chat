@@ -37,6 +37,7 @@ from chip_chat.otel.attributes import (
     SpanAttributes,
 )
 from chip_chat.otel.config import TelemetryConfig
+from chip_chat.otel.schema import SpanName
 from chip_chat.otel.spans import TokenUsage
 from chip_chat.otel.tracing import build_tracer_provider, use_tracer_provider
 
@@ -148,7 +149,7 @@ class SpanRecorder:
                 without them is the failure this exists to catch: it is a hole
                 in the cost dashboard that looks exactly like a cheap turn.
         """
-        total = TokenUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+        total = TokenUsage(prompt_tokens=0, completion_tokens=0)
         for span in self.llm_spans():
             attributes = span.attributes or {}
             missing = [
@@ -209,13 +210,21 @@ class SpanRecorder:
                 f"completion={reported.completion_tokens} total={reported.total}"
             )
         for span in self.finished_spans():
+            if span.name != SpanName.CHAT_TURN.value:
+                # A tool's or a step's rollup covers its own subtree and has no
+                # business matching the turn total. The turn's is found by name
+                # rather than by having no parent, because a turn is not always
+                # the trace root -- ASGI instrumentation above it would make a
+                # parentage check quietly vacuous rather than loudly wrong.
+                continue
             attributes = span.attributes or {}
             if ChipChatAttributes.TOKENS_TOTAL not in attributes:
-                continue
-            if span.parent is not None:
-                # Only the root rolls the whole turn up; a tool's rollup covers
-                # its own subtree and has no business matching the turn total.
-                continue
+                raise AssertionError(
+                    "chat.turn carries no token rollup, so what this "
+                    "conversation cost cannot be read without walking the "
+                    "trace -- which is the walk the rollup exists to spare "
+                    "Application Insights"
+                )
             rolled = _count(attributes, ChipChatAttributes.TOKENS_TOTAL)
             if rolled != reported.total:
                 raise AssertionError(

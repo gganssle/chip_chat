@@ -20,6 +20,7 @@ from chip_chat.otel.smoke import (
     new_session_id,
     vision_order_turn,
 )
+from chip_chat.otel.spans import TokenUsage
 from chip_chat.otel.testing import span_recorder
 
 SESSION = "test-session"
@@ -118,6 +119,23 @@ def test_the_demo_session_reaches_every_node_of_the_schema() -> None:
     assert {_node(name) for name in recorder.names()} == set(SpanName)
 
 
+EXPECTED_TURN_TOKENS = {
+    "knowledge_turn": TokenUsage(prompt_tokens=2_052, completion_tokens=112),
+    "account_turn": TokenUsage(prompt_tokens=2_292, completion_tokens=128),
+    # 1_020 + 1_402 + 1_540 for the three round trips, plus the vision call's
+    # 274/91 -- which is the number the fixture would lose if the photo lane's
+    # tokens ever stopped reaching the turn.
+    "vision_order_turn": TokenUsage(prompt_tokens=4_236, completion_tokens=251),
+}
+"""What each demo turn costs, written out rather than measured.
+
+Spelled out on purpose: passing ``llm_token_usage()`` back into
+``assert_token_counts_sum`` would compare the measurement to itself and exercise
+only half the check. These are the figures in ``smoke.py``, added up by hand, so
+a call whose counts moved fails here rather than agreeing with itself.
+"""
+
+
 def test_every_turn_reconciles_its_rollup_against_its_model_calls() -> None:
     """The demo is what a consumer runs to check the schema, so it must add up.
 
@@ -129,9 +147,7 @@ def test_every_turn_reconciles_its_rollup_against_its_model_calls() -> None:
     for turn in (knowledge_turn, account_turn, vision_order_turn):
         with span_recorder() as recorder:
             turn(SESSION)
-        recorder.assert_token_counts_sum(recorder.llm_token_usage())
-        rolled = recorder.attributes_of("chat.turn")[ChipChatAttributes.TOKENS_TOTAL]
-        assert rolled == recorder.llm_token_usage().total, turn.__name__
+        recorder.assert_token_counts_sum(EXPECTED_TURN_TOKENS[turn.__name__])
 
 
 def test_the_vision_span_is_counted_like_any_other_model_call() -> None:

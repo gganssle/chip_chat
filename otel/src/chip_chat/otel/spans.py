@@ -283,11 +283,19 @@ class TokenUsage:
         return self.prompt_tokens + self.completion_tokens
 
     def __add__(self, other: "TokenUsage") -> "TokenUsage":
-        """Roll two calls up into one, for a tool or a turn that made several."""
+        """Roll two calls up into one, for a tool or a turn that made several.
+
+        ``total_tokens`` stays ``None`` when neither side reported one, because
+        the sum of two sums is the sum: materialising it would make ``x +
+        TokenUsage(0, 0)`` unequal to ``x`` under dataclass equality, and every
+        test comparing a measured total against a hand-written one would have
+        to spell out a field it did not care about.
+        """
+        neither_reported = self.total_tokens is None and other.total_tokens is None
         return TokenUsage(
             prompt_tokens=self.prompt_tokens + other.prompt_tokens,
             completion_tokens=self.completion_tokens + other.completion_tokens,
-            total_tokens=self.total + other.total,
+            total_tokens=None if neither_reported else self.total + other.total,
         )
 
 

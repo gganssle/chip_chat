@@ -295,10 +295,22 @@ def test_a_photo_turn_counts_the_vision_tokens_too(
         for client in serving(model, limits, lane):
             say(client, "order me what's in this photo")
 
-    assert spans.llm_token_usage() == TokenUsage(
+    reported = TokenUsage(
         prompt_tokens=PROMPT_TOKENS * 2 + STUB_VISION_USAGE.prompt_tokens,
         completion_tokens=COMPLETION_TOKENS * 2 + STUB_VISION_USAGE.completion_tokens,
-        total_tokens=(PROMPT_TOKENS + COMPLETION_TOKENS) * 2 + STUB_VISION_USAGE.total,
+    )
+    # The whole criterion, not half of it. Reading llm_token_usage() alone would
+    # pass while the turn's rollup and the spend ledger both stopped at the tool
+    # boundary -- which is exactly what they did before the lane's tokens were
+    # given a way back to the loop.
+    spans.assert_token_counts_sum(reported)
+
+    turn = spans.attributes_of("chat.turn")
+    assert turn[ChipChatAttributes.TOKENS_TOTAL] == reported.total
+    # And the step that made the tool call owns its whole subtree's cost.
+    steps = [span for span in spans.finished_spans() if span.name == "agent.step"]
+    assert dict(steps[0].attributes or {})[ChipChatAttributes.TOKENS_TOTAL] == (
+        PROMPT_TOKENS + COMPLETION_TOKENS + STUB_VISION_USAGE.total
     )
 
 
@@ -440,8 +452,11 @@ def test_reorder_my_usual_with_extra_guac(limits: SpendLimits) -> None:
                 "BOWL-CHICKEN",
                 "SIDE-GUACAMOLE",
             ]
-            # "extra guac" is a second unit of the guacamole line, which is what
-            # `get_usual_order` tells the model and what the draft holds.
+            # "extra guac" is a second unit of the guacamole line rather than a
+            # new item, which is what `get_usual_order` tells the model to do and
+            # what the draft holds. The model is scripted here, so what this
+            # asserts is the path and the draft; that a deployment picks the
+            # quantity is #74's, measured against the real thing.
             assert card["lines"][1]["quantity"] == 2
 
             drafting = spans.tree_text()

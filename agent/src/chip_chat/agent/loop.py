@@ -288,21 +288,19 @@ def run_turn(
             reply = _complete(
                 model, conversation.messages, schemas, is_first=step_index == 0
             )
-            prompt_tokens += reply.prompt_tokens
-            completion_tokens += reply.completion_tokens
-            # What this round trip cost, on the span that contains it. The turn
-            # total lives on `chat.turn`; this is the per-step breakdown a
-            # runaway loop shows up in.
-            step.record_token_rollup(
-                TokenUsage(
-                    prompt_tokens=reply.prompt_tokens,
-                    completion_tokens=reply.completion_tokens,
-                )
-            )
+            # This step's own model call, plus whatever its tools spend on model
+            # calls of their own. A tool that calls a model -- the photo lane
+            # does, stage 4 is a vision completion -- bills tokens as real as
+            # the agent's, and a step total that stopped at the agent's would
+            # make every downstream figure wrong by exactly the lane.
+            spent = _spent(reply)
             conversation.messages.append(_assistant_message(reply))
 
             if not reply.tool_calls:
                 step.record_output(reply.content or "")
+                step.record_token_rollup(spent)
+                prompt_tokens += spent.prompt_tokens
+                completion_tokens += spent.completion_tokens
                 return TurnResult(
                     reply=(reply.content or "").strip() or _FALLBACK_REPLY,
                     prompt_tokens=prompt_tokens,
@@ -313,12 +311,16 @@ def run_turn(
                 )
 
             for invocation in reply.tool_calls:
+                lane_spend: list[TokenUsage] = []
                 result = dispatch(
                     invocation,
                     session_id=conversation.session_id,
                     desk=desk,
                     lane=lane,
+                    record_spend=lane_spend.append,
                 )
+                for usage in lane_spend:
+                    spent = spent + usage
                 conversation.messages.append(
                     {
                         "role": "tool",
@@ -332,6 +334,10 @@ def run_turn(
             step.record_output(
                 "called " + ", ".join(call.name for call in reply.tool_calls)
             )
+            # After the tools, so the step's rollup covers its whole subtree.
+            step.record_token_rollup(spent)
+            prompt_tokens += spent.prompt_tokens
+            completion_tokens += spent.completion_tokens
 
     return TurnResult(
         reply=_FALLBACK_REPLY,
@@ -340,6 +346,13 @@ def run_turn(
         steps=max_steps,
         card=card,
         receipt=receipt,
+    )
+
+
+def _spent(reply: ModelReply) -> TokenUsage:
+    """What one round trip's model call cost, as the provider reported it."""
+    return TokenUsage(
+        prompt_tokens=reply.prompt_tokens, completion_tokens=reply.completion_tokens
     )
 
 

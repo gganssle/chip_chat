@@ -52,7 +52,7 @@ span at all, because an off-schema span name is the one failure mode
 ``otel/README.md`` says breaks every eval built on top of it.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final
 
 from chip_chat.agent.hardcoded import ACCOUNT, MENU, SIMULATION_NOTICE, search_menu
@@ -63,6 +63,7 @@ from chip_chat.otel import (
     ConfirmationState,
     Document,
     OpsAction,
+    TokenUsage,
     ToolName,
     ops_write,
     retriever_search,
@@ -185,6 +186,7 @@ def dispatch(
     session_id: str,
     desk: OrderDesk,
     lane: PhotoLane | None = None,
+    record_spend: Callable[[TokenUsage], None] | None = None,
 ) -> Mapping[str, Any]:
     """Run one tool call and return what the model should see.
 
@@ -196,6 +198,13 @@ def dispatch(
         lane: The photo lane, where one is wired. ``None`` leaves
             ``match_meal_from_photo`` unimplemented, which is what
             :func:`offered_tools` has already told the model.
+        record_spend: Called with what a tool's *own* model calls cost, where a
+            tool makes any. The photo lane does -- stage 4 is a vision
+            completion -- and those tokens are as real as the agent's. Without
+            this they would reach ``tool.match_meal_from_photo`` and stop
+            there: the turn's rollup would undercount, and the spend ceiling
+            would count a photo turn as cheaper than it was, which is the one
+            direction a ceiling must never be wrong in.
 
     Returns:
         A JSON-serialisable result, which is both the tool message sent back to
@@ -219,6 +228,7 @@ def dispatch(
             desk=desk,
             lane=lane,
             recorder=recorder,
+            record_spend=record_spend,
         )
         recorder.record_result(result)
         return result
@@ -232,6 +242,7 @@ def _dispatch_inside_span(
     desk: OrderDesk,
     lane: PhotoLane | None,
     recorder: ToolRecorder,
+    record_spend: Callable[[TokenUsage], None] | None = None,
 ) -> Mapping[str, Any]:
     """Validate the arguments, then run the tool. Refusals are results.
 
@@ -273,6 +284,11 @@ def _dispatch_inside_span(
         # builds what the model is given.
         if result.usage is not None:
             recorder.record_token_rollup(result.usage)
+            if record_spend is not None:
+                # And onward to the turn. The rollup answers "what does this
+                # lane cost per call"; this is what keeps the turn total and
+                # the spend ceiling from stopping at the tool boundary.
+                record_spend(result.usage)
         return _photo_result(result)
     return result
 

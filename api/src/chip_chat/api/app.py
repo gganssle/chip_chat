@@ -73,6 +73,7 @@ from chip_chat.otel import (
     render_response,
     shutdown_tracing,
 )
+from chip_chat.vision.lane import PhotoLane
 from chip_chat.web import chat_page, stop_page
 
 __all__ = [
@@ -224,18 +225,35 @@ def default_kill_switch() -> CachedKillSwitch:
     )
 
 
-def build_service() -> Service:
+def build_service(lane: PhotoLane | None = None) -> Service:
     """Assemble the real service from the environment.
 
     Every ceiling comes from :meth:`~chip_chat.api.limits.SpendLimits.from_env`
     and every model deployment from
     :meth:`~chip_chat.agent.foundry.FoundryConfig.from_env`, so changing either
     on the Container App is a restart rather than a build.
+
+    Args:
+        lane: The photo lane. **Nothing supplies one yet, and a deployment
+            therefore does not offer** ``match_meal_from_photo`` -- see
+            :func:`~chip_chat.agent.tools.offered_tools` for why that is the
+            honest state rather than a hole. Two things have to exist first: an
+            upload route, since the tool takes a reference to a photograph the
+            visitor uploaded *on this turn* and there is no route that produces
+            one; and a production catalogue loader, which stage 5 needs and
+            which :class:`~chip_chat.api.drafts.DraftStore` needs too. Both are
+            #62 and #66's, and wiring half of it here would offer the model a
+            tool no visitor could ever hand a reference to. The parameter exists
+            so the seam is named rather than discovered.
+
+    Returns:
+        The assembled service.
     """
     return Service(
         gate=SpendGate(
             SpendGuard(SpendLimits.from_env(), kill_switch=default_kill_switch()),
             lambda: AzureChatModel(FoundryConfig.from_env()),
+            lane=lane,
         )
     )
 

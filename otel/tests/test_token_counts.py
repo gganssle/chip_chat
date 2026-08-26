@@ -24,6 +24,7 @@ from chip_chat.otel.spans import (
     vision_describe,
 )
 from chip_chat.otel.testing import SpanRecorder, span_recorder
+from chip_chat.otel.tracing import get_tracer
 
 PROMPT = 812
 COMPLETION = 64
@@ -157,3 +158,46 @@ def test_the_helper_catches_a_rollup_that_disagrees_with_its_own_spans() -> None
 
     with pytest.raises(AssertionError, match="rolled up 2 tokens"):
         spans.assert_token_counts_sum(TEXT_ONLY)
+
+
+def test_the_helper_catches_a_turn_that_rolled_nothing_up_at_all() -> None:
+    """A missing rollup is a hole, not a pass.
+
+    The check used to skip any span without one, so a turn that recorded no
+    rollup anywhere sailed through -- which is the failure it exists to find:
+    "what did this conversation cost" answerable only by walking the trace.
+    """
+    with span_recorder("otel") as spans:
+        with chat_turn(session_id="s", turn_index=0):
+            with agent_step(index=0), llm_completion(model="gpt-4o") as llm:
+                llm.record_usage(prompt_tokens=PROMPT, completion_tokens=COMPLETION)
+
+    with pytest.raises(AssertionError, match="carries no token rollup"):
+        spans.assert_token_counts_sum(TEXT_ONLY)
+
+
+def test_the_turn_is_found_by_name_rather_than_by_having_no_parent() -> None:
+    """Because a turn is not always the trace root.
+
+    ASGI or HTTP-client instrumentation installed above ``chat.turn`` gives it a
+    parent, and a check written against parentage would go quietly vacuous the
+    day somebody adds one -- passing every turn, including the wrong ones.
+    """
+    with span_recorder("otel") as spans:
+        # Resolved inside the recorder, so the outer span lands in the same
+        # recording -- exactly as a real ASGI instrumentation's would.
+        with get_tracer().start_as_current_span("GET /api/chat"):
+            with chat_turn(session_id="s", turn_index=0) as turn:
+                with agent_step(index=0), llm_completion(model="gpt-4o") as llm:
+                    llm.record_usage(prompt_tokens=PROMPT, completion_tokens=COMPLETION)
+                turn.record_token_rollup(TokenUsage(prompt_tokens=1, completion_tokens=1))
+
+    assert spans.span_named("chat.turn").parent is not None
+    with pytest.raises(AssertionError, match="rolled up 2 tokens"):
+        spans.assert_token_counts_sum(TEXT_ONLY)
+
+
+def test_usage_that_reported_no_total_stays_that_way_when_added() -> None:
+    """So a measured total compares equal to a hand-written one."""
+    running = TokenUsage(prompt_tokens=0, completion_tokens=0)
+    assert running + TEXT_ONLY == TEXT_ONLY

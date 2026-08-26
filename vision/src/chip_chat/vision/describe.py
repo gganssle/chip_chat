@@ -473,22 +473,34 @@ class MealDescriber:
                     catalogue_content_version=self._vocabulary.content_version
                 )
             try:
-                payload, usage = self._answer(ref)
+                answer = self._ask(ref)
+            except DescribeError as error:
+                # Nothing was billed, or nothing came back to bill for.
+                recorder.record_failure(error)
+                raise
+            # Before the response is judged, not after. A rejected description
+            # cost exactly what an accepted one did, and recording it only on
+            # the happy path would make the expensive failure -- the deployment
+            # answering nonsense, repeatedly -- the one that looks free. It
+            # would also leave an LLM span with no counts on it, which is how
+            # broken instrumentation looks.
+            if answer.usage is not None:
+                recorder.record_usage(
+                    prompt_tokens=answer.usage.prompt_tokens,
+                    completion_tokens=answer.usage.completion_tokens,
+                    total_tokens=answer.usage.total_tokens,
+                )
+            try:
+                payload = self._validated(answer.content)
             except DescribeError as error:
                 recorder.record_failure(error)
                 raise
-            if usage is not None:
-                recorder.record_usage(
-                    prompt_tokens=usage.prompt_tokens,
-                    completion_tokens=usage.completion_tokens,
-                    total_tokens=usage.total_tokens,
-                )
             # Recorded verbatim, notes included: a trace is where an operator
             # reads what the model actually said. That is not a downstream
             # parser, which is what the ban on reading `notes` is about.
             recorder.record_description(payload)
 
-        return _description(payload, ref, self._vocabulary.content_version, usage)
+        return _description(payload, ref, self._vocabulary.content_version, answer.usage)
 
     def describe_as_tool(self, ref: BlobRef, *, step: int = 0) -> Description:
         """Describe one photograph, opening the spans above it as well.
@@ -523,13 +535,16 @@ class MealDescriber:
         ):
             return self.describe(ref)
 
-    def _answer(self, ref: BlobRef) -> tuple[dict[str, Any], TokenUsage | None]:
-        """Read the image, ask the model, and check what came back.
+    def _ask(self, ref: BlobRef) -> VisionAnswer:
+        """Read the image and ask the model. No judgement of the answer here.
 
-        Returns:
-            The validated payload and what the provider said the call cost --
-            the second half travelling back so ``vision.describe`` can record a
-            token count it did not invent.
+        Split from :meth:`_validated` so that :meth:`describe` has the token
+        counts in hand *before* it decides whether the response is acceptable --
+        see the comment at that call site.
+
+        Raises:
+            DescribeUnavailableError: The photograph could not be read, or the
+                deployment could not be reached.
         """
         try:
             image = self._images.read(ref)
@@ -540,7 +555,7 @@ class MealDescriber:
             # rather than a failing turn.
             raise DescribeUnavailableError(f"could not read {ref}: {error}") from error
 
-        answer = self._model.describe(
+        return self._model.describe(
             image=image,
             media_type=NORMALIZED_MEDIA_TYPE,
             response_format=self._vocabulary.response_format(),
@@ -548,8 +563,15 @@ class MealDescriber:
             user_prompt=_USER_PROMPT,
         )
 
+    def _validated(self, content: str) -> dict[str, Any]:
+        """Parse the response and hold it to the generated schema.
+
+        Raises:
+            DescriptionRejectedError: If it is not JSON, or violates the schema.
+                Nothing is coerced: see the module docstring.
+        """
         try:
-            parsed = json.loads(answer.content)
+            parsed = json.loads(content)
         except json.JSONDecodeError as error:
             # Structured output should make this unreachable, which is exactly
             # why it is checked: the day it is reachable is the day something
@@ -560,7 +582,7 @@ class MealDescriber:
             ) from error
 
         try:
-            return self._vocabulary.validate(parsed), answer.usage
+            return self._vocabulary.validate(parsed)
         except SchemaViolationError as violation:
             raise DescriptionRejectedError(violation) from violation
 
