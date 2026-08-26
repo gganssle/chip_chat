@@ -1,6 +1,7 @@
 # `eval` — measuring the things that are otherwise opinions
 
-Golden set, adversarial suite, Arize experiments. Two of those ship today.
+Golden set, adversarial suite, Arize experiments. Two of those ship today, and
+both of them are now promoted into one versioned dataset.
 
 **The golden set** — issue [#29](https://github.com/gganssle/chip_chat/issues/29).
 Thirty-four questions across the five lanes, each carrying the lane it should
@@ -43,9 +44,35 @@ python -m chip_chat.eval.photos --check      # free
 python -m chip_chat.eval.photos --catalog <dir> --out eval/photos/BASELINE.md
 ```
 
+**The versioned dataset** — issue
+[#72](https://github.com/gganssle/chip_chat/issues/72). Both sets above, flattened
+into rows and given a version that is a hash of their content, so that #73 can run
+a prompt change as an experiment against a fixed thing and the comparison means
+something.
+
+```
+chip_chat.eval.dataset
+├── entries   one flat row per case and per frame
+├── versions  the fingerprint, and the column it rides in
+├── build     both manifests in, one dataset out
+├── store     the seam, and Arize AX behind it
+├── publish   create it, or add a version -- never mutate
+└── testing   a store that remembers, for driving a publish
+```
+
+```bash
+python -m chip_chat.eval.dataset --check     # free, and holds the repo to its own build
+python -m chip_chat.eval.dataset --write     # after adding a case or a frame
+uv run --with arize python -m chip_chat.eval.dataset --upload
+```
+
+[`dataset/README.md`](dataset/README.md) is the write-up: what a version is, why
+it is a hash rather than a number, and the three things a publish will not do.
+
 Both sets live beside their code — [`golden/`](golden/) and [`photos/`](photos/)
 — each with a `README.md` to read before adding an entry and a `BASELINE.md` for
-what has and has not been measured.
+what has and has not been measured. Adding to either changes the dataset's
+version, and `make dataset` is how the committed build catches up.
 
 ## Where the line between them is
 

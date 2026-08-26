@@ -169,6 +169,14 @@ warn_unused_ignores = true
 module = ["pillow_heif.*"]
 ignore_missing_imports = true
 
+# The Arize SDK is not in the lockfile at all, deliberately -- eval/pyproject.toml
+# carries the argument, and `chip_chat.eval.dataset.store` imports it inside the
+# one method that uploads. Nothing else in the tree can see it, so this is the
+# only import mypy has to be told about rather than shown.
+[[tool.mypy.overrides]]
+module = ["arize.*"]
+ignore_missing_imports = true
+
 [[tool.mypy.overrides]]
 module = ["chip_chat.otel.*", "chip_chat.agent.*"]
 disallow_any_generics = true

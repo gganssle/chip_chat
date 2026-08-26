@@ -213,6 +213,29 @@ golden: ## Run the golden set against the week-one slice and write the baseline
 photos-check: ## Check the labeled photo set's coverage, free
 	$(UV) run python -m chip_chat.eval.photos --check
 
+# --- The versioned dataset --------------------------------------------------
+#
+# Issue #72. Both sets, promoted into one dataset with a content hash for a
+# version. The build is a pure function of two committed JSON files, so
+# `dataset-check` is free and belongs in CI -- and it fails when the committed
+# eval/dataset/DATASET.json is not what those files currently build, which is
+# what stops the version from being a number somebody forgets to move.
+#
+# `dataset-upload` is the only target here that talks to anything. It needs
+# ARIZE_SPACE_ID and ARIZE_API_KEY, and `--with arize` because the SDK is
+# deliberately not in the lockfile -- eval/pyproject.toml has the argument.
+
+.PHONY: dataset-check dataset dataset-upload
+
+dataset-check: ## Build the eval dataset and hold the committed build to it, free
+	$(UV) run python -m chip_chat.eval.dataset --check
+
+dataset: ## Rebuild eval/dataset/DATASET.json after adding a case or a frame
+	$(UV) run python -m chip_chat.eval.dataset --write
+
+dataset-upload: ## Create the Arize dataset, or add a version holding the new entries
+	$(UV) run --with arize python -m chip_chat.eval.dataset --upload
+
 # --- Deploying the chat app -------------------------------------------------
 #
 # Terraform owns the estate; a deploy owns the image. compute.tf deliberately

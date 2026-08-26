@@ -23,6 +23,19 @@ dependencies = [
     "chip-chat-vision",
 ]
 
+# The `arize` SDK is deliberately absent, and this is the note that stops it
+# being added back without the argument. `chip_chat.eval.dataset.store` uploads
+# through it and imports it inside the method that needs it, so everything else
+# -- building the dataset, versioning it, checking the committed build in CI --
+# works without it.
+#
+# Adding it, as a dependency or as an extra, is not free: `uv` resolves one
+# universal lock for the workspace, and `arize` constrains protobuf hard enough
+# to drag the whole tree from 7.x back to 6.x. Paying that on every install, in
+# CI included, to make one command shorter for the one person running it is the
+# wrong trade. `eval/dataset/README.md` documents the command:
+#
+#     uv run --with arize python -m chip_chat.eval.dataset --upload
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
