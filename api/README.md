@@ -1,9 +1,14 @@
-# `api/` — the inline spend cap
+# `api/` — the request path, and the cap it cannot be built without
 
 This package holds the thing that stands between a public URL with no login and
 an invoice. RFC-001 §11 and the system design are both explicit that it ships
 **before the link is shared**, not when a Phase 10 hardening checklist is finally
-reached, so it is here before the service it will sit inside.
+reached.
+
+The cap arrived first (`cc-fv1`) and the service it sits inside arrived second
+(`cc-n6j`). For one commit in between, this package held a guard that was
+correct, tested, and **called by nothing** — which stops nobody spending
+anything. `app.py` and `turns.py` are that gap closed.
 
 ## The distinction this rests on, which is easy to blur
 
@@ -42,28 +47,52 @@ ceiling all read a number under the limit and all proceed.
 `api/tests/test_concurrency.py` starts its threads on a barrier for exactly this
 reason.
 
+## Not callable — unconstructable-without
+
+"Is there a caller?" is the wrong question, because a caller can be forgotten by
+the next route somebody adds. The question `turns.py` answers is **whether a
+request path exists that can skip the check**, and the answer is no, for three
+structural reasons:
+
+| Fact | Where |
+| --- | --- |
+| A `FundedTurn` cannot exist for a turn the guard refused — its constructor raises | `turns.py` |
+| A `SpendGate` cannot be built without a `SpendGuard` — required positional | `turns.py` |
+| Nothing else in the package exposes a model; only `FundedTurn.run` reaches one | `turns.py`, `app.py` |
+
+And a fourth that removes the other way to get this wrong: `FundedTurn.run`
+settles the turn's real token cost itself, so the ceiling counts tokens rather
+than turns whether or not the caller remembers.
+
+`api/tests/test_spend_gate.py` is the half a future contributor feels. Those
+tests fail when the *invariant* breaks rather than when the output changes:
+deleting the constructor check, adding a public accessor that returns a model,
+or adding a fifth route to the app each fail a test while leaving every happy
+path green.
+
 ## Using it
 
 ```python
-guard = SpendGuard(
-    SpendLimits.from_env(),
-    kill_switch=any_of(EnvironmentKillSwitch(), FileKillSwitch("/mnt/ops/stop")),
+gate = SpendGate(
+    SpendGuard(
+        SpendLimits.from_env(),
+        kill_switch=any_of(EnvironmentKillSwitch(), FileKillSwitch("/mnt/ops/stop")),
+    ),
+    lambda: AzureChatModel(FoundryConfig.from_env()),
 )
 
 # On entry, before a session exists. Emits no span; there is no turn yet.
-if (stop := guard.entry_state()) is not None:
+if (stop := gate.entry_state()) is not None:
     return stop_state_page(stop.message)
 
 with chat_turn(session_id=sid, turn_index=n, message=text) as turn:
-    with guard.turn(session_id=sid, source_address=ip) as budget:
-        if not budget.allowed:
-            turn.record_output(budget.message)
-            return stop_state_response(budget.message)  # 200, not an error
-        reply = agent.run(text)
-        budget.record_usage(prompt_tokens=p, completion_tokens=c)
+    with gate.turn(session_id=sid, source_address=ip) as funded:
+        if isinstance(funded, Stop):
+            return stop_state_response(funded.message)  # 200, not an error
+        result = funded.run(conversation, text)          # settles its own tokens
 ```
 
-`guard.budget_check` is a child of `chat.turn`, so `SpendGuard.turn` must be
+`guard.budget_check` is a child of `chat.turn`, so `SpendGate.turn` must be
 called inside one.
 
 ### The stop state is a designed state
@@ -128,7 +157,9 @@ one being traded for the other.
 ## What is not here yet
 
 The counters are process-local, which is honest for the single-instance
-deployment this demo runs on. `BudgetLedger` and `SourceRateLimiter` keep their
+deployment this demo runs on — and is why the container runs **one** uvicorn
+worker. A second worker would be a second ledger, and the daily ceiling would
+quietly mean twice what it says. `BudgetLedger` and `SourceRateLimiter` keep their
 state behind one lock and one interface so that a shared store has exactly two
 places to land when a second instance exists.
 

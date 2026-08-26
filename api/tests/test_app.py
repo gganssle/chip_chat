@@ -24,6 +24,7 @@ from chip_chat.api.killswitch import ManualKillSwitch
 from chip_chat.api.limits import SpendLimits
 from chip_chat.api.outcome import STOP_STATE_MESSAGE
 from chip_chat.api.testing import FakeClock
+from chip_chat.api.turns import SpendGate
 from chip_chat.otel import ChipChatAttributes, ToolName
 from chip_chat.otel.testing import span_recorder
 
@@ -65,8 +66,7 @@ def service(
     model: ScriptedModel,
 ) -> Service:
     return Service(
-        guard=SpendGuard(limits, kill_switch=kill_switch, clock=clock),
-        model_factory=lambda: model,
+        SpendGate(SpendGuard(limits, kill_switch=kill_switch, clock=clock), lambda: model)
     )
 
 
@@ -214,7 +214,7 @@ def test_the_source_rate_limit_stops_the_model_being_called(
         turn_token_reservation=10,
     )
     service = Service(
-        guard=SpendGuard(tight, kill_switch=kill_switch), model_factory=lambda: model
+        SpendGate(SpendGuard(tight, kill_switch=kill_switch), lambda: model)
     )
     with TestClient(create_app(service)) as client:
         for _ in range(2):
@@ -259,7 +259,7 @@ def test_real_token_counts_reach_the_ledger(
     mean tokens rather than turns."""
     model = ScriptedModel(answer("Sure.", prompt_tokens=120, completion_tokens=30))
     service = Service(
-        guard=SpendGuard(limits, kill_switch=kill_switch), model_factory=lambda: model
+        SpendGate(SpendGuard(limits, kill_switch=kill_switch), lambda: model)
     )
     with TestClient(create_app(service)) as client:
         say(client, "hello")
@@ -288,9 +288,7 @@ def test_the_rate_limit_counts_the_forwarded_client_and_not_the_proxy(
 
 
 def order_client(model: ScriptedModel, limits: SpendLimits) -> TestClient:
-    return TestClient(
-        create_app(Service(guard=SpendGuard(limits), model_factory=lambda: model))
-    )
+    return TestClient(create_app(Service(SpendGate(SpendGuard(limits), lambda: model))))
 
 
 def test_an_order_needs_the_button_and_not_the_prompt(limits: SpendLimits) -> None:
@@ -368,7 +366,7 @@ class ExplodingModel:
 
 def test_a_failing_model_does_not_fail_the_conversation(limits: SpendLimits) -> None:
     """RFC-001 section 10: a lane may fail, the conversation may not fail with it."""
-    service = Service(guard=SpendGuard(limits), model_factory=ExplodingModel)
+    service = Service(SpendGate(SpendGuard(limits), ExplodingModel))
     with TestClient(create_app(service)) as client, span_recorder("api") as spans:
         response = say(client, "hello")
     assert response.status_code == 200
@@ -384,7 +382,7 @@ def test_a_failed_turn_is_charged_the_pessimistic_reservation(
 ) -> None:
     """The tokens it bought before falling over are unknown; over-counting by
     less than one turn is the safe direction to be wrong in."""
-    service = Service(guard=SpendGuard(limits), model_factory=ExplodingModel)
+    service = Service(SpendGate(SpendGuard(limits), ExplodingModel))
     with TestClient(create_app(service)) as client:
         say(client, "hello")
     assert service.guard.ledger.global_usage().used == limits.turn_token_reservation

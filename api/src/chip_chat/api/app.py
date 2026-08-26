@@ -22,12 +22,16 @@ Three routes and no more:
     that could be refused for spending money it never spends would take the app
     down every time the ceiling was reached.
 
-**The one ordering that matters.** ``guard.turn`` opens before the agent is
-reached and closes after it, and the model call is inside the ``if
-budget.allowed`` branch. That is not a stylistic arrangement: it is the whole
-reason a refusal costs nothing. ``api/tests/test_app.py`` asserts on a model
-double that records calls, so a regression into an asynchronous check fails the
-test even though the visitor-facing copy would still read correctly.
+**The one ordering that matters, and why it is not up to this module.** A
+refusal has to cost nothing, which means the check runs before the model and not
+beside it. Rather than arranging the statements carefully and hoping the next
+route does too, the model is not reachable from here at all:
+:class:`~chip_chat.api.turns.SpendGate` holds it privately and hands it out only
+inside a :class:`~chip_chat.api.turns.FundedTurn`, which cannot be constructed
+for a turn the guard refused. So a second route added later cannot call a model
+without passing the check first -- there is nothing else to call. Read
+:mod:`chip_chat.api.turns`; ``api/tests/test_spend_gate.py`` is what fails if
+somebody takes that apart.
 
 **What is deliberately absent.** No login, no visitor identifier in any tool
 argument, and no ``session_id`` a client can choose: the cookie is minted here,
@@ -39,7 +43,6 @@ underneath that anyway.
 import logging
 import secrets
 import threading
-from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -48,9 +51,8 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
-from chip_chat.agent import ACCOUNT, AzureChatModel, ChatModel, FoundryConfig
-from chip_chat.agent.loop import Conversation, run_turn
-from chip_chat.agent.orders import OrderDesk
+from chip_chat.agent import ACCOUNT, AzureChatModel, FoundryConfig
+from chip_chat.agent.loop import Conversation
 from chip_chat.api.guard import SpendGuard
 from chip_chat.api.killswitch import (
     CachedKillSwitch,
@@ -59,7 +61,8 @@ from chip_chat.api.killswitch import (
     any_of,
 )
 from chip_chat.api.limits import SpendLimits
-from chip_chat.api.outcome import STOP_STATE_MESSAGE
+from chip_chat.api.outcome import Stop
+from chip_chat.api.turns import SpendGate
 from chip_chat.otel import (
     TelemetryConfig,
     chat_turn,
@@ -172,24 +175,23 @@ class SessionStore:
 class Service:
     """Everything one deployment of the app holds, assembled once at start-up.
 
-    Passed to :func:`create_app` rather than reached for through globals so that
-    a test can supply a model double and a driven clock. The model is a factory
-    rather than an instance because building the real one authenticates against
-    Azure, and a process that cannot reach Azure should still be able to serve
-    ``/healthz`` and say so.
+    The gate is required and positional, so there is no service -- and therefore
+    no application -- assembled without a spend cap behind it. It is passed to
+    :func:`create_app` rather than reached for through globals so that a test
+    can supply a model double and a driven clock.
+
+    Note what is *not* here: a model. The only object in this package that holds
+    one is :class:`~chip_chat.api.turns.SpendGate`, and it does not hand it out
+    except inside a funded turn.
     """
 
-    guard: SpendGuard
-    model_factory: Callable[[], ChatModel]
-    desk: OrderDesk = field(default_factory=OrderDesk)
+    gate: SpendGate
     sessions: SessionStore = field(default_factory=SessionStore)
-    _model: ChatModel | None = field(default=None, repr=False)
 
-    def model(self) -> ChatModel:
-        """Return the chat model, building it on first use."""
-        if self._model is None:
-            self._model = self.model_factory()
-        return self._model
+    @property
+    def guard(self) -> SpendGuard:
+        """The cap the gate enforces, for tests and for an ops surface."""
+        return self.gate.guard
 
 
 def default_kill_switch() -> CachedKillSwitch:
@@ -213,8 +215,10 @@ def build_service() -> Service:
     on the Container App is a restart rather than a build.
     """
     return Service(
-        guard=SpendGuard(SpendLimits.from_env(), kill_switch=default_kill_switch()),
-        model_factory=lambda: AzureChatModel(FoundryConfig.from_env()),
+        gate=SpendGate(
+            SpendGuard(SpendLimits.from_env(), kill_switch=default_kill_switch()),
+            lambda: AzureChatModel(FoundryConfig.from_env()),
+        )
     )
 
 
@@ -272,7 +276,7 @@ def create_app(service: Service | None = None) -> FastAPI:
     @application.get("/", response_class=HTMLResponse)
     async def entry(request: Request) -> HTMLResponse:
         """Serve the chat page, or the stop state when the door is shut."""
-        stop = resolved.guard.entry_state()
+        stop = resolved.gate.entry_state()
         body = stop_page(stop.message) if stop is not None else chat_page()
         response = HTMLResponse(body)
         _ensure_session(request, response)
@@ -300,58 +304,41 @@ def _run_turn(
 ) -> ChatReply:
     """One ``chat.turn``, from the budget check to the rendered reply.
 
-    Synchronous on purpose. The guard's whole promise is that the refusal
-    happens before a model is called, in the request path; FastAPI runs a
-    ``def`` handler's work in a thread pool, and this function is where that
-    work is, so the ordering is a plain sequence of statements that anybody can
-    read top to bottom.
+    Synchronous on purpose. FastAPI runs a ``def`` handler's work in a thread
+    pool, and this function is where that work is, so the ordering is a plain
+    sequence of statements anybody can read top to bottom.
     """
     session_id = conversation.session_id
-    with (
-        chat_turn(
-            session_id=session_id,
-            turn_index=conversation.next_turn_index(),
-            message=body.message,
-            persona_id=ACCOUNT.persona_id,
-        ) as turn,
-        service.guard.turn(
-            session_id=session_id, source_address=source_address
-        ) as budget,
-    ):
-        if not budget.allowed:
-            message = budget.message or STOP_STATE_MESSAGE
-            stop = budget.stop
-            if stop is not None:
-                turn.record_stopped(stop.reason.value)
-            _render(turn, message)
-            return ChatReply(reply=message, stopped=True)
-
-        # Confirmation before the model runs, so that place_order finds a
-        # confirmed draft rather than being told about one.
-        if body.confirm_draft_id:
-            service.desk.confirm(session_id, body.confirm_draft_id)
+    with chat_turn(
+        session_id=session_id,
+        turn_index=conversation.next_turn_index(),
+        message=body.message,
+        persona_id=ACCOUNT.persona_id,
+    ) as turn, service.gate.turn(
+        session_id=session_id, source_address=source_address
+    ) as funded:
+        if isinstance(funded, Stop):
+            # A Stop has no `run`. The refused branch could not call a model
+            # if it tried, which is why this is an `isinstance` and not a
+            # boolean somebody could invert.
+            turn.record_stopped(funded.reason.value)
+            _render(turn, funded.message)
+            return ChatReply(reply=funded.message, stopped=True)
 
         try:
-            result = run_turn(
+            result = funded.run(
                 conversation,
                 body.message,
-                model=service.model(),
-                desk=service.desk,
+                confirm_draft_id=body.confirm_draft_id,
             )
         except Exception as error:
             turn.record_failure(error)
-            # The tokens this turn bought before it fell over are unknown,
-            # so it is charged the pessimistic reservation. Over-counting by
-            # less than one turn is the safe direction to be wrong in.
-            budget.record_usage(prompt_tokens=service.guard.limits.turn_token_reservation)
+            _log.exception("turn failed", extra={"session_id": session_id})
+            funded.charge_reservation(service.guard.limits.turn_token_reservation)
             message = "Something went wrong on my side just then. Try asking again."
             _render(turn, message)
             return ChatReply(reply=message)
 
-        budget.record_usage(
-            prompt_tokens=result.prompt_tokens,
-            completion_tokens=result.completion_tokens,
-        )
         _render(turn, result.reply)
         return ChatReply(
             reply=result.reply,

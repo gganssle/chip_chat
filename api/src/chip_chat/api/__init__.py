@@ -6,23 +6,22 @@ purpose: an open URL with no login means anyone can drive tokens on the
 subscription, and RFC-001 section 11 is explicit that the cap ships before the
 link is shared rather than when a hardening checklist is finally reached.
 
-:mod:`chip_chat.api.app` is the request path it stands inside, and the cap is
-wired into it rather than merely available to it. That distinction is the whole
-value of this package: a guard nothing calls stops nobody spending anything, and
-"the cap is in place" has to be true of the running system and not only of the
-code.
+:mod:`chip_chat.api.app` is the request path it stands inside, and
+:mod:`chip_chat.api.turns` is what makes the wiring structural rather than
+remembered. That distinction is the whole value of this package: a guard nothing
+calls stops nobody spending anything, and "the cap is in place" has to be true
+of the running system and not only of the code.
 
     with chat_turn(session_id=sid, turn_index=n, message=text) as turn:
-        with guard.turn(session_id=sid, source_address=ip) as budget:
-            if not budget.allowed:
-                turn.record_output(budget.message)
-                return stop_state(budget.message)
-            reply = agent.run(text)          # only reached when allowed
-            budget.record_usage(prompt_tokens=p, completion_tokens=c)
+        with gate.turn(session_id=sid, source_address=ip) as funded:
+            if isinstance(funded, Stop):
+                return stop_state(funded.message)
+            result = funded.run(conversation, text)   # the only route to a model
 
-Read :mod:`chip_chat.api.guard` before changing any of it. The one property the
-whole module exists to hold is that a refusal happens *before* a model is
-called, in the request path, synchronously.
+Read :mod:`chip_chat.api.guard` for the four layers and
+:mod:`chip_chat.api.turns` for why there is no second route past them. The one
+property the whole package exists to hold is that a refusal happens *before* a
+model is called, in the request path, synchronously.
 """
 
 from chip_chat.api.app import (
@@ -56,6 +55,7 @@ from chip_chat.api.outcome import (
     Usage,
 )
 from chip_chat.api.ratelimit import SourceRateLimiter
+from chip_chat.api.turns import FundedTurn, SpendGate, UnfundedTurnError
 from chip_chat.otel import service_name
 
 __all__ = [
@@ -71,18 +71,21 @@ __all__ = [
     "Clock",
     "EnvironmentKillSwitch",
     "FileKillSwitch",
+    "FundedTurn",
     "KillSwitch",
     "ManualKillSwitch",
     "Reservation",
     "Service",
     "SessionStore",
     "SourceRateLimiter",
+    "SpendGate",
     "SpendGuard",
     "SpendLimits",
     "Stop",
     "StopReason",
     "SystemClock",
     "TurnBudget",
+    "UnfundedTurnError",
     "Usage",
     "__version__",
     "any_of",
