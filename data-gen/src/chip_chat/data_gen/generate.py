@@ -51,6 +51,7 @@ from chip_chat.data_gen.records import (
 )
 from chip_chat.data_gen.rewards import RewardsTerms
 from chip_chat.data_gen.rng import substream, weighted_choice
+from chip_chat.data_gen.texture import check_texture
 from chip_chat.data_gen.timeline import placed_at, visit_days
 
 
@@ -111,6 +112,11 @@ def generate_population(
         ThinCatalogError: If the catalogue has no orderable entree or no
             store. Refusing is the only honest response; inventing either is
             the failure this whole package is arranged around.
+        ThinPopulationError: If the population that came out is degenerate —
+            everybody ordering the same thing, one store taking every order,
+            nobody lapsed. Issue #28's gate, and it runs here so that it runs
+            on every generation rather than when somebody remembers. See
+            :mod:`chip_chat.data_gen.texture`.
     """
     menu = OrderableMenu(catalog, config.catalogue)
     stores = menu.stores(catalog.stores, config.stores)
@@ -176,7 +182,7 @@ def generate_population(
         visitors, orders, items, ledger, entree_ids(menu), ends_at.astimezone(UTC)
     )
 
-    return SyntheticPopulation(
+    population = SyntheticPopulation(
         seed=config.seed,
         catalog_content_version=menu.content_version,
         rewards_content_version=terms.content_version(),
@@ -189,6 +195,16 @@ def generate_population(
         order_items=tuple(items),
         loyalty_ledger=tuple(ledger),
     )
+
+    # Issue #28's gate, and it is here rather than in a test on purpose. A thin
+    # population is the one failure in this package that produces no error of
+    # its own: it generates, prices, writes and passes referential integrity,
+    # and is discovered a phase later by somebody reading gold marts. Checking
+    # it inside the generator is what makes "the validation suite runs on every
+    # generation" true of the run that actually wrote the files, rather than of
+    # the run somebody remembered to check.
+    check_texture(population, catalog, config)
+    return population
 
 
 def _window(config: GeneratorConfig) -> tuple[datetime, datetime]:

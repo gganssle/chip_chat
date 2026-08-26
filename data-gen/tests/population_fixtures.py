@@ -8,9 +8,11 @@ committed fixture and the loader disagree, which is a thing worth finding out.
 
 It is a *small* catalogue — two entrees, five modifiers each, thirty stores —
 so the tests below assert properties rather than quantities wherever the
-quantity would be an artefact of its size. Proving the population is not thin
-against a real catalogue is issue #28, and it needs a real harvest to mean
-anything.
+quantity would be an artefact of its size. That is also how issue #28 proves
+the population is not thin against it: every check in
+:mod:`chip_chat.data_gen.texture` is a coverage, a ratio, a share or an effect
+size measured against what this catalogue makes possible, so the same bounds
+mean the same thing here and against a real harvest.
 
 The published rewards terms come from the harvest tests' fixture site, written
 to a blob store and read back through

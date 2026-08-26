@@ -116,6 +116,44 @@ issue #26 exists to prevent.
 """
 
 
+TEXTURE_CHECKS = (
+    "order_frequency_ratio",
+    "item_coverage",
+    "protein_coverage",
+    "palate_divergence",
+    "usual_share_spread",
+    "without_a_usual",
+    "with_a_usual",
+    "basket_size_ratio",
+    "modifier_variety",
+    "store_coverage",
+    "store_concentration",
+    "busiest_store_share",
+    "lapsed_share",
+    "new_share",
+    "spend_ratio",
+    "spend_skew",
+    "persona_separation",
+    "catalogue_resolution",
+    "allergen_state_coverage",
+)
+"""What ``[texture]`` may bound: the vocabulary of "the population is not thin".
+
+Issue #28's subject. Every name here is measured by
+:mod:`chip_chat.data_gen.texture` on every generation, and every one of them
+must carry a bound in ``[texture.at_least]`` or ``[texture.at_most]`` —
+neither an unknown name nor a missing one is tolerated. The first would be a
+bound that measures nothing; the second would be a *measure* that bounds
+nothing, which is worse, because a suite of checks that cannot fail reads
+exactly like a suite of checks that passed.
+
+The bounds live in the config for the reason the archetypes do: what counts as
+enough variety is a product decision. PRD section 09 makes the generator a
+product surface, and "at least ten per cent of customers have no usual order"
+is a statement about the demo rather than about statistics.
+"""
+
+
 PUBLISHED_BOUNDS = (
     "cheapest_reward",
     "costliest_reward",
@@ -448,6 +486,59 @@ class NameConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class TextureConfig:
+    """What "the population is not thin" means, in numbers (issue #28).
+
+    Two kinds of number, and they do different jobs. The three *windows* say
+    what a question means — how long a silence is a lapse, how new is new, how
+    dominant a basket has to be before it counts as a usual — and moving one
+    of them changes what is being asked. The *bounds* say how much of it the
+    population has to have, and moving one changes how demanding the question
+    is. Both are here because both are product decisions; neither is in code.
+
+    Attributes:
+        lapsed_after_days: Days of silence after which a customer counts as
+            lapsed. Measured from their last order to the window's fixed end,
+            never to the wall clock.
+        new_within_days: A first order this recent makes a customer new.
+        no_usual_above: A ``usual_share`` at or below this is no usual at all
+            — the customer the assistant has to hedge with.
+        strong_usual_above: A ``usual_share`` at or above this is a usual
+            dominant enough to reorder in one turn.
+        at_least: Floors, as sorted ``(check, bound)`` pairs.
+        at_most: Ceilings, in the same form.
+    """
+
+    lapsed_after_days: int
+    new_within_days: int
+    no_usual_above: float
+    strong_usual_above: float
+    at_least: tuple[tuple[str, float], ...]
+    at_most: tuple[tuple[str, float], ...]
+
+    def bound(self, check: str) -> float:
+        """Return the bound one check is held to.
+
+        Args:
+            check: A name from :data:`TEXTURE_CHECKS`.
+
+        Returns:
+            The bound, whether it is a floor or a ceiling — which of the two
+            is a property of the check rather than of the config, and
+            :mod:`chip_chat.data_gen.texture` knows it.
+
+        Raises:
+            KeyError: If nothing bounds that check. The reader refuses a
+                config that leaves one unbounded, so reaching this is a bug
+                rather than a bad file.
+        """
+        for name, value in (*self.at_least, *self.at_most):
+            if name == check:
+                return value
+        raise KeyError(f"no bound for texture check {check!r}")
+
+
+@dataclass(frozen=True, slots=True)
 class GeneratorConfig:
     """The whole tuned population, read from one file.
 
@@ -486,6 +577,7 @@ class GeneratorConfig:
         orders: What happens to an order.
         loyalty: The rewards arithmetic.
         names: The display-name pools.
+        texture: What "not thin" means, and how much of it is required.
     """
 
     seed: int
@@ -504,6 +596,7 @@ class GeneratorConfig:
     orders: OrderConfig
     loyalty: LoyaltyConfig
     names: NameConfig
+    texture: TextureConfig
 
     def persona(self, persona_id: str) -> PersonaSpec:
         """Return one archetype by identifier.
@@ -600,6 +693,66 @@ def _config(raw: Mapping[str, Any]) -> GeneratorConfig:
         orders=_orders(_table(raw, "orders")),
         loyalty=_loyalty(_table(raw, "loyalty")),
         names=_names(_table(raw, "names")),
+        texture=_texture(_table(raw, "texture")),
+    )
+
+
+def _texture(raw: Mapping[str, Any]) -> TextureConfig:
+    """Build the texture bounds, refusing a vocabulary that does not line up.
+
+    Every name in :data:`TEXTURE_CHECKS` must be bounded exactly once, in
+    exactly one direction. Both halves matter and for different reasons. An
+    *unknown* name is a bound that measures nothing — the ordinary misspelling
+    — and a *missing* one is a measure that bounds nothing, which is the worse
+    of the two: the run still prints nineteen checks and eighteen of them
+    still pass, so the population is certified by a suite with a hole in it.
+    Neither is clamped, and neither is warned about.
+    """
+    at_least = _texture_bounds("texture.at_least", raw)
+    at_most = _texture_bounds("texture.at_most", raw)
+    bounded = [name for name, _ in (*at_least, *at_most)]
+    _unique("texture bounds", bounded)
+    unknown = sorted(set(bounded) - set(TEXTURE_CHECKS))
+    if unknown:
+        raise ConfigError(
+            f"texture bounds name {unknown}, which nothing measures; expected "
+            f"names from {list(TEXTURE_CHECKS)}. A bound on a check that does "
+            "not exist is a bound that never bites."
+        )
+    unbounded = sorted(set(TEXTURE_CHECKS) - set(bounded))
+    if unbounded:
+        raise ConfigError(
+            f"texture leaves {unbounded} unbounded. Every check has to carry a "
+            "bound: a measured property with nothing to clear is reported and "
+            "never fails, which is indistinguishable from a check that passed."
+        )
+    no_usual = _fraction("texture.no_usual_above", raw)
+    strong_usual = _fraction("texture.strong_usual_above", raw)
+    if strong_usual <= no_usual:
+        raise ConfigError(
+            f"texture.strong_usual_above ({strong_usual}) must be above "
+            f"no_usual_above ({no_usual}); otherwise a customer can be counted "
+            "both as having a usual and as having none"
+        )
+    return TextureConfig(
+        lapsed_after_days=_count("texture.lapsed_after_days", raw, minimum=1),
+        new_within_days=_count("texture.new_within_days", raw, minimum=1),
+        no_usual_above=no_usual,
+        strong_usual_above=strong_usual,
+        at_least=at_least,
+        at_most=at_most,
+    )
+
+
+def _texture_bounds(where: str, raw: Mapping[str, Any]) -> tuple[tuple[str, float], ...]:
+    """Return one texture bounds table as sorted ``(check, bound)`` pairs."""
+    table = raw.get(where.split(".")[-1])
+    if table is None:
+        return ()
+    if not isinstance(table, dict):
+        raise ConfigError(f"{where} must be a table of checks, got {table!r}")
+    return tuple(
+        (name, _number(f"{where}.{name}", table, minimum=0.0)) for name in sorted(table)
     )
 
 

@@ -176,3 +176,61 @@ def test_it_warns_when_an_archetype_cannot_fill_its_roster(
 
     assert "warning:" in reported
     assert "clear its own criteria" in reported
+
+
+def test_it_says_what_the_texture_checks_measured(
+    landing: Path, small: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Issue #28's suite runs on every generation, so every run says so.
+
+    Not a verdict — a degenerate population never gets this far, because
+    ``generate_population`` refuses it. This is the line whoever just retuned
+    the file reads: how much of the catalogue the population managed to reach.
+    """
+    assert run(landing, small) == 0
+
+    reported = capsys.readouterr().err
+
+    assert "texture: 19 checks held" in reported
+    assert "orderable things ordered" in reported
+
+
+def test_it_writes_the_texture_report_when_asked(
+    landing: Path, small: Path, tmp_path: Path
+) -> None:
+    """``--report`` is how the same document is produced against a real harvest."""
+    report = tmp_path / "texture.md"
+
+    assert run(landing, small, "--report", str(report)) == 0
+
+    written = report.read_text(encoding="utf-8")
+    assert "The synthetic population is not thin" in written
+    assert "persona_separation" in written
+    assert "customers worth a demo query" in written
+
+
+def test_a_population_that_comes_out_thin_stops_the_run(
+    landing: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """And stops it before anything is written, which is the point of the gate.
+
+    Thinness is asked for here by demanding more of the population than any
+    population could give, rather than by breaking the generator: the claim
+    under test is that the CLI refuses a population failing ``[texture]``, not
+    that some particular tuning produces one.
+    """
+    config = tmp_path / "unreachable.toml"
+    config.write_text(
+        PACKAGED.read_text(encoding="utf-8")
+        .replace("customers = 500", "customers = 40")
+        .replace("busiest_store_share = 0.35", "busiest_store_share = 0.001"),
+        encoding="utf-8",
+    )
+
+    assert main(["--landing", str(landing), "--config", str(config)]) == 1
+
+    reported = capsys.readouterr().err
+
+    assert "population generation failed" in reported
+    assert "busiest_store_share" in reported
+    assert not (landing / DEFAULT_PREFIX).exists()

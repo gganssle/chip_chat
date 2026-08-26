@@ -21,11 +21,13 @@ The cold-start risk of PRD section 06 is what all of this is guarding, and the
 ticket is blunt about the standard: "if a fixture cannot demonstrate its own
 metric, it is not finished".
 
-Two things this file does not assert, because the data cannot support them
-here. **Variety of food**: the committed fixture catalogue has two entrees in
-it, so a fixture's orders can be varied in structure and not in ingredient;
-proving the population is not thin against a real harvest is issue #28. What is
-asserted is variety of *behaviour*. **Rewards correctness**: points balances are
+Two things this file does not assert. **Variety of food**: the committed
+fixture catalogue has two entrees in it, so a fixture's orders can be varied in
+structure and not in ingredient, and a count here would be a test of the
+fixture. Issue #28 asks that question in the form that survives a small
+catalogue — coverage of what the catalogue makes orderable — in
+``test_texture_suite.py``. What is asserted here is variety of *behaviour*.
+**Rewards correctness**: points balances are
 this generator's provisional arithmetic and are reconciled against Chipotle's
 published terms by issue #27. What is asserted is that stored value exists to
 be surfaced, never that it is the right amount.

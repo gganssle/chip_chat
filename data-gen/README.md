@@ -104,9 +104,9 @@ redeemed is exactly the harvested Rewards Exchange.
 
 | Archetype | Redeems at | Ends up with |
 | --- | --- | --- |
-| The Lapsed Regular | 0.04 | ~8,900 points, unredeemed — 59 of 60 above the price of the most expensive published reward. |
-| The Office Manager | 0.18 | Tens of thousands: a floor's lunch on the company card, and nobody thinking about the points. |
-| The Weekly Regular | 0.55 | A few hundred. They spend what they earn. |
+| The Lapsed Regular | 0.04 | ~8,500 points at the median, unredeemed, and up to 16,500 — well above the price of the most expensive published reward. |
+| The Office Manager | 0.60 | ~2,200 at the median and up to 20,100: they earn a free entrée on most lunch runs and use most of them. |
+| The Weekly Regular | 0.55 | A couple of hundred. They spend what they earn. |
 
 That spread is why `redemption_probability` is on the archetype rather than on the
 programme: issue #27 asks that the Lapsed Regular carry a balance "worth surfacing
@@ -188,9 +188,10 @@ reads it. This bar first shipped as the literal `1250`, copied from a `[loyalty]
 that issue #27 then deleted, and the copy outlived it —
 `docs/decisions/persona-fixtures.md` has that story.
 
-Two things the table does not claim — that its `usual_share` is the `usual_order`
-mart's `confidence`, or that its personas vary by *food* (issue #28).
-`docs/decisions/persona-fixtures.md` has the arguments.
+One thing the table does not claim: that its `usual_share` is the `usual_order` mart's
+`confidence`. `docs/decisions/persona-fixtures.md` has the argument. It used to carry a
+second disclaimer — that its personas vary by behaviour and not by *food* — and issue #28
+below is where that one went.
 
 ## Retuning it
 
@@ -231,14 +232,84 @@ The knobs worth knowing about:
   `PUBLISHED_BOUNDS` — `"costliest_reward"`, `"cheapest_reward"` — read off the
   published terms, for a criterion that is a fact about Chipotle's programme rather
   than a decision of ours. A string that is neither is refused too.
+- `[texture]` — how much variety the population has to have before the generator will
+  hand it over. Three windows that say what a question means (how long a silence is a
+  lapse, how new is new, how dominant a basket has to be to count as a usual) and
+  nineteen bounds that say how much of it is enough. Every name in
+  `config.TEXTURE_CHECKS` must appear exactly once: an unknown name is refused, and so
+  is a *missing* one, because a measured property with no bound is reported and can
+  never fail.
+
+## Proving it is not thin
+
+Issue #28, and it is the gate on Phase 2 — trap 1 in the system design is thin synthetic
+data, and thinness stops being cheap to fix once a lakehouse is built on top of it. A thin
+population is the one failure in this package that raises nothing on its own: it
+generates, prices, writes, and passes referential integrity. It is simply useless.
+
+So `chip_chat.data_gen.texture` measures nineteen things about the population and
+`generate_population` **refuses** rather than returning one that fails any of them. There
+is no flag to skip it. The measurement is `docs/synthetic-population-texture.md`, which is
+generated rather than written and regenerated-and-compared by `test_texture_suite.py`.
+
+```bash
+# The checks run either way. --report writes down what they measured, which is what
+# you want when the catalogue is a real harvest rather than the committed fixture.
+python -m chip_chat.data_gen --landing landing --report texture.md
+```
+
+**Every food-variety check is relative to what the catalogue makes possible.** That is the
+whole trick, and it is what lets the claim be made at all: the committed fixture catalogue
+publishes nine orderable things, so *"twelve entrees were ordered"* is unassertable here
+and useless against a real harvest anyway. *"Every entree the catalogue publishes was
+ordered by somebody"* is a claim about this generator, holds at nine items and at nine
+hundred, and bites where the absolute threshold would not — a generator reaching three of
+six hundred items scores 0.005 and stops the run. Coverages, ratios, shares and effect
+sizes; never counts of foods.
+
+| What is checked | Measured how | The shipped population |
+| --- | --- | --- |
+| Not everyone orders at the same rate | p90/p10 of orders per customer | 7.8× |
+| The whole orderable menu is reached | ordered ÷ orderable | 9 of 9 |
+| More than one protein is chosen | chosen ÷ published | 2 of 2 |
+| `item_affinity` has something to learn | median Jensen–Shannon divergence of a customer's mix from the population's | 0.049 bits |
+| `usual_order` confidence varies | p90 − p10 of `usual_share` | 0.86 |
+| Some have no usual, and some emphatically do | share below 0.20, share above 0.60 | 35% and 27% |
+| Baskets vary in size and in build | p90/p10 of items per order; share of lines built unlike the commonest | 12× and 64% |
+| Traffic is uneven, and plausibly so | busiest ÷ quietest; busiest's share of all orders | 9.8× and 11% |
+| Somebody has lapsed, somebody is new | share silent 90 days; share first seen within 200 | 13% and 10% |
+| Spend is not normal around one mean | p90/p10, and Pearson skew | 12.7× and +1.94 |
+| **The archetypes are not seven labels on one distribution** | Cliff's delta on the *worst-separated* of 21 pairs | **1.00** |
+| Every order is a real menu item | lines resolving to a catalogue row | 48,767 of 48,767 |
+| The unknown-allergen path is exercised | allergen states ordered ÷ states the orderable menu carries | 1 of 1 |
+
+The last two are not distributional. They are the system design's demo bar, which is one
+sentence with two halves — *"a query that surfaces a genuinely interesting customer, whose
+every order is a real menu item"* — and the second half asserted on every generation rather
+than only under pytest. The allergen check is the coverage question underneath it: the
+catalogue models three allergen states and `NOT_LISTED` does not mean "does not contain",
+so a population that only ever ordered items with published allergen data would look
+healthy on every count above while never exercising the honest *"Chipotle does not publish
+this"* answer. This catalogue publishes allergen data for every orderable item and marks
+only `Napkins & Utensils` unpublished, which `[catalogue]` excludes from baskets — so full
+coverage here is one state of one, and the report says which.
+
+The **persona separation** check is the one the others cannot substitute for. A population
+can have a wide spread on every row above and still be one blob with seven names written
+on it, which is a demo where switching persona changes nothing a visitor can see.
+`test_texture_suite.py` reshuffles `persona_id` across customers, leaving every history
+untouched, and asserts that the check fails — which is how "it measures separation and not
+spread" is checkable rather than claimed.
+
+The report also names **twelve customers worth a demo query**, picked by superlative over
+the whole population rather than by hand: the largest unclaimed balance, the least
+predictable orderer, the one who has been to twenty stores. Different from
+`persona_fixtures`, which answers *which customer demonstrates this archetype*; these
+answer *which customer would make somebody lean forward*, and none of them mentions an
+archetype. `docs/decisions/population-texture.md` argues all of it.
 
 ## What this package does not do
 
-- **Prove the population is not thin.** That is issue #28, and it needs a real
-  harvest: the committed fixture catalogue has two entrees in it, so variety of
-  *food* is not assertable here. Variety of *behaviour* is, and `test_texture.py`
-  and `test_fixtures.py` assert it — the first across the archetypes, the second on
-  the individual customers a visitor is actually assigned.
 - **Write to ADLS.** `write()` takes a `BlobStore`, the same interface the harvest
   and the catalogue land through; an ADLS Gen2 implementation is `cc-b15`.
 - **Read the population back.** Deliberately. Issue #33 ingests these tables with

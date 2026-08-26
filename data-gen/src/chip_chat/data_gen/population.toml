@@ -218,6 +218,129 @@ stated_preference_share = 0.22
 home_store_override_share = 0.08
 
 # --------------------------------------------------------------------------
+# What "the population is not thin" means, in numbers (issue #28).
+#
+# Trap 1 in the system design. A thin population generates, prices, writes and
+# passes referential integrity; it is simply useless, because personalization
+# has nothing to find in it. `chip_chat.data_gen.texture` measures every check
+# below on EVERY generation and raises rather than warns, so a degenerate
+# population never reaches a landing zone.
+#
+# Every bound is RELATIVE TO WHAT THE CATALOGUE MAKES POSSIBLE -- a coverage, a
+# ratio, a share or an effect size -- never a count of foods. That is what lets
+# one set of numbers be meaningful against the committed nine-item fixture
+# catalogue and against a real harvest at the same time: "twelve entrees were
+# ordered" is a claim about Chipotle's menu, and "every entree the catalogue
+# publishes was ordered by somebody" is a claim about this generator. Issues
+# #25 and #26 both declined to assert food variety for exactly this reason and
+# both named #28 as the ticket that would settle it.
+#
+# Every name in `chip_chat.data_gen.config.TEXTURE_CHECKS` must appear exactly
+# once below. A name that is not in it is refused, and so is one that is
+# missing: a measured property with no bound is reported and never fails,
+# which is indistinguishable from a check that passed.
+# --------------------------------------------------------------------------
+
+[texture]
+# What the questions mean. Moving one of these changes what is being asked,
+# not how demanding the answer has to be.
+#
+# Ninety days of silence is a lapse. Read against the window's fixed end, never
+# against the wall clock -- a lapsed customer who lapses further every day is
+# not a reproducible measurement. It is the same bar `[personas.fixture]` holds
+# the Lapsed Customer to, deliberately: a population whose lapsed customers
+# cannot clear the fixture criteria has none worth showing anyone.
+lapsed_after_days = 90
+# A first order this recent makes somebody new. Matches the Newcomer fixture's
+# ceiling for the same reason.
+new_within_days = 200
+# A customer repeating their commonest basket this rarely has no usual at all,
+# and is the one the assistant has to say "I am not sure what your usual is"
+# to. That path is a feature (PRD section 02's Explorer), so the population has
+# to contain people who exercise it.
+no_usual_above = 0.20
+# And this often is a usual dominant enough to reorder in a single turn, which
+# is the Regular's whole demonstration.
+strong_usual_above = 0.60
+
+[texture.at_least]
+# Not everyone is a weekly regular: the busiest tenth of customers order at
+# least three times as often as the quietest tenth.
+order_frequency_ratio = 3.0
+# Everything this catalogue makes orderable was ordered by somebody. Not 1.0:
+# a real harvest publishes seasonal items that a fixed eighteen-month window
+# can legitimately miss a couple of, and failing the build for that would be
+# failing it for Chipotle's menu rather than for the generator.
+item_coverage = 0.95
+# More than one protein is chosen. This is the food-variety claim in the form
+# that survives a small catalogue -- the fixture publishes two proteins and a
+# real harvest publishes six, and "all of them" means both.
+protein_coverage = 0.90
+# There is something for `item_affinity` to learn: a typical customer's item
+# mix sits at least this many bits (Jensen-Shannon) from the population's.
+# Zero would mean everybody orders the population average, which is the thin
+# population this whole section exists to catch. The long tail is measured
+# here rather than on the aggregate popularity curve because that curve's
+# shape is capped by the catalogue -- nine orderable items cannot produce a
+# long tail whatever the customers do -- while this is not.
+palate_divergence = 0.015
+# `usual_order` confidence varies meaningfully: at least this much between the
+# tenth and ninetieth percentile.
+usual_share_spread = 0.40
+# And both ends of it are populated. Both bounds, not one: a population where
+# nobody has a usual cannot demonstrate the one-turn reorder, and one where
+# everybody does cannot demonstrate the honest hedge.
+without_a_usual = 0.10
+with_a_usual = 0.10
+# Basket sizes vary between one bowl and a floor's lunch order.
+basket_size_ratio = 3.0
+# The same item is built differently by different people: this share of lines
+# carry a number of modifiers other than the commonest.
+modifier_variety = 0.25
+# Every store on the roster took at least one order. A store nobody has
+# ordered from is a store the assistant can say nothing about.
+store_coverage = 1.0
+# Traffic is uneven -- the busiest store took at least twice the orders of the
+# quietest. A population with no busy store has no busy store to talk about.
+store_concentration = 2.0
+# A meaningful fraction of customers are lapsed, and a meaningful fraction are
+# new. Measured on silence and on recency rather than on `persona_id`, which
+# is the version of the question the assistant can actually see: nothing
+# downstream reads the archetype label.
+lapsed_share = 0.05
+new_share = 0.05
+# Spend is not clustered around a single mean. The ratio says it is spread and
+# the skew says it LEANS, which is the claim -- a symmetric distribution wide
+# enough clears the ratio on its own.
+spend_ratio = 4.0
+spend_skew = 0.50
+# Every pair of archetypes can be told apart. Cliff's delta on the best
+# measure available to the WORST-separated pair, so five good pairs cannot
+# hide a sixth that is indistinguishable. 0.8 is a large effect by the usual
+# reading; the shipped population scores 1.0, which is complete separation.
+# This is the check the ticket is really about: a population can have a wide
+# spread on every measure above and still be one blob with seven names on it.
+persona_separation = 0.80
+# Every ordered line resolves to a published catalogue row -- the second half
+# of the system design's demo bar, asserted on every generation rather than
+# only under pytest. Exactly 1.0, because one invented menu item is the
+# failure the entire pipeline is arranged to make impossible.
+catalogue_resolution = 1.0
+# Every allergen-disclosure state the ORDERABLE menu carries is ordered by
+# somebody. Catalogue-relative on purpose: whether a NOT_PUBLISHED food exists
+# is Chipotle's decision, and what the generator owes is to order across
+# whatever states exist. A population that only ever ordered items with
+# published allergen data would look healthy on every count above while never
+# exercising the honest "Chipotle does not publish this" answer.
+allergen_state_coverage = 1.0
+
+[texture.at_most]
+# Uneven PLAUSIBLY. `store_concentration` alone is cleared just as well by one
+# store taking every order as by thirty stores with a plausible head, and the
+# first of those is a thin population wearing the shape of a varied one.
+busiest_store_share = 0.35
+
+# --------------------------------------------------------------------------
 # The archetypes. Shares sum to one; the population is apportioned by largest
 # remainder, so five hundred customers split the same way every run.
 # --------------------------------------------------------------------------

@@ -15,9 +15,13 @@ explorer does, the lapsed customer's history stops before everyone else's — so
 that retuning ``population.toml`` moves the numbers without breaking the test
 that the archetypes are still distinguishable.
 
-Proving the population is not thin against a *real* catalogue is issue #28.
-This catalogue has two entrees in it, so variety of *food* is not assertable
-here; variety of behaviour is, and it is the half that lives in this package.
+Variety of *food* is not asserted here, and issue #28 is where it went. This
+catalogue has two entrees in it, so a threshold on how many were ordered would
+be a test of the fixture — ``texture.py`` asks the question in the form that
+survives a small catalogue instead, as coverage of what the catalogue makes
+orderable, and ``test_texture_suite.py`` is its suite. What is here is variety
+of *behaviour*, asserted archetype by archetype, which is the half that was
+always assertable against a nine-item menu.
 """
 
 import statistics

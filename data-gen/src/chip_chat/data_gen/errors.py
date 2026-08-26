@@ -35,6 +35,27 @@ class ThinCatalogError(GeneratorError):
     """
 
 
+class ThinPopulationError(GeneratorError):
+    """The generated population is degenerate: everybody in it behaves the same.
+
+    Trap 1 in the system design, and the one failure in this package that
+    produces no error of its own. A thin population generates, prices, writes
+    and passes referential integrity; it is simply useless, because
+    personalization has nothing to find in it and the demo has nothing to
+    show. PRD section 09 states the consequence as a constraint — behaviour
+    the population does not exhibit cannot be demonstrated, however good the
+    rest of the pipeline is — which is why this is raised rather than warned:
+    a thin population that reached the landing zone would be discovered by
+    somebody reading gold marts a phase later, when it has stopped being cheap
+    to fix.
+
+    Raised by :func:`~chip_chat.data_gen.texture.check_texture`, which runs on
+    every generation. The message names every measure that failed, what it
+    scored and what it needed, because "the population is thin" is not
+    something anyone can act on.
+    """
+
+
 class RewardsTermsError(GeneratorError):
     """The published rewards terms do not state the arithmetic the ledger needs.
 

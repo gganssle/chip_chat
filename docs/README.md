@@ -17,6 +17,7 @@ contributor — human or agent — has them locally. Read them in this order.
 | [chipotle-nutrition-spot-check.md](chipotle-nutrition-spot-check.md) | What the harvested nutrition and allergen data was checked against by hand, and when |
 | [chipotle-policy-spot-check.md](chipotle-policy-spot-check.md) | The same, for the harvested rewards, FAQ, catering and store data |
 | [chipotle-pdf-spot-check.md](chipotle-pdf-spot-check.md) | The same, for the PDF path — including the finding that Chipotle publishes none, and the live Document Intelligence round trip that checks the reader anyway |
+| [synthetic-population-texture.md](synthetic-population-texture.md) | Whether the synthetic population is thin — nineteen measured checks, the distributions behind them, and the customers worth a demo query. Generated, not written |
 | [decisions/](decisions/) | Decision records for questions the planning documents left open |
 
 The system design frames the problem, the PRD defines what to build, and the RFC
@@ -44,6 +45,13 @@ what turned out not to work the way the documentation implies. The lakehouse
 catalogue guide does the same for Unity Catalog: the schema layout and the
 grants, and the two jobs that prove lineage resolves and the read-only principal
 really is refused.
+
+The texture report is evidence of a different kind again, and the only document here
+that is *generated*. Issue #28 asks that "the data is interesting" become visible rather
+than asserted, so `chip_chat.data_gen.texture` measures the population on every
+generation and renders what it measured; `test_texture_suite.py` regenerates the file and
+compares, so a retune that flattened a distribution fails the suite rather than leaving
+the document quietly describing last week's population. Edit it by running it.
 
 The three spot checks are a sixth kind: *evidence*. The unit tests run against fixtures,
 so a green suite proves the harvester is self-consistent rather than that it still agrees

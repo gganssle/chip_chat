@@ -24,6 +24,13 @@ what you want when you are looking at *a* population rather than *the* one.
 ``--config`` replaces the whole file, which is what you want when you are
 retuning it — and the point of issue #25's fourth criterion is that retuning
 is an edit to a file rather than a change to this program.
+
+``--report`` writes down what issue #28's texture checks measured. The checks
+themselves are not optional and there is no flag to skip them: a degenerate
+population stops the run inside
+:func:`~chip_chat.data_gen.generate.generate_population`, before anything is
+written, because a thin population is the one failure in this package that
+produces no error of its own.
 """
 
 import argparse
@@ -42,6 +49,7 @@ from chip_chat.data_gen.errors import GeneratorError
 from chip_chat.data_gen.generate import generate_population
 from chip_chat.data_gen.records import DEFAULT_PREFIX, SyntheticPopulation
 from chip_chat.data_gen.rewards import load_rewards_terms
+from chip_chat.data_gen.texture import Texture, measure_texture, render_report
 from chip_chat.harvest.blobs import LocalBlobStore
 from chip_chat.harvest.sources.chipotle import DEFAULT_POLICY_PREFIX
 
@@ -93,6 +101,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override the seed in the config without editing the file.",
     )
+    parser.add_argument(
+        "--report",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Also write the texture report to this Markdown file. The checks "
+            "run either way -- a degenerate population stops the run whether "
+            "or not the report was asked for. This writes down what they "
+            "measured, which is what you want when the catalogue is a real "
+            "harvest rather than the committed fixture."
+        ),
+    )
     return parser
 
 
@@ -117,6 +138,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         catalog = load_catalog(blobs, args.catalog_prefix)
         terms = load_rewards_terms(blobs, args.policy_prefix)
         population = generate_population(catalog, terms, config)
+        texture = measure_texture(population, catalog, config)
     except (CatalogError, GeneratorError) as error:
         print(f"population generation failed: {error}", file=sys.stderr)
         return 1
@@ -127,8 +149,39 @@ def main(argv: Sequence[str] | None = None) -> int:
         file=sys.stderr,
     )
     _report_fixtures(population, config)
+    _report_texture(texture, population, args.report)
     print(json.dumps(population.manifest(), indent=2, sort_keys=True))
     return 0
+
+
+def _report_texture(
+    texture: Texture, population: SyntheticPopulation, report: Path | None
+) -> None:
+    """Say what the texture checks measured, and write the report if asked.
+
+    Every check has already held by the time this runs —
+    :func:`~chip_chat.data_gen.generate.generate_population` refuses a
+    degenerate population rather than returning one — so this is not a
+    verdict. It is the two numbers whoever just retuned the file is about to
+    want: how many checks the population cleared, and how much of the
+    catalogue it managed to reach. A run against a real harvest that suddenly
+    covers sixty per cent of the menu has not failed anything and has still
+    told you something.
+    """
+    coverage = texture.check("item_coverage")
+    print(
+        f"texture: {len(texture.checks)} checks held; "
+        f"{coverage.measured:.0%} of {texture.orderable_items} orderable "
+        f"things ordered across {texture.orders:,} orders",
+        file=sys.stderr,
+    )
+    if report is None:
+        return
+    report.write_text(
+        render_report(texture, population, "The synthetic population is not thin"),
+        encoding="utf-8",
+    )
+    print(f"wrote the texture report to {report}", file=sys.stderr)
 
 
 def _report_fixtures(population: SyntheticPopulation, config: GeneratorConfig) -> None:
