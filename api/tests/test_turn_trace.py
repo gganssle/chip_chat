@@ -248,7 +248,7 @@ def test_a_photo_turn_holds_image_description_and_skus_in_one_trace(
     model = scripted(
         calls_tool(
             ToolName.MATCH_MEAL_FROM_PHOTO,
-            {"image_ref": str(STUB_PHOTO_REF)},
+            {"blob_ref": str(STUB_PHOTO_REF)},
             prompt_tokens=PROMPT_TOKENS,
             completion_tokens=COMPLETION_TOKENS,
         ),
@@ -285,7 +285,7 @@ def test_a_photo_turn_counts_the_vision_tokens_too(
     model = scripted(
         calls_tool(
             ToolName.MATCH_MEAL_FROM_PHOTO,
-            {"image_ref": str(STUB_PHOTO_REF)},
+            {"blob_ref": str(STUB_PHOTO_REF)},
             prompt_tokens=PROMPT_TOKENS,
             completion_tokens=COMPLETION_TOKENS,
         ),

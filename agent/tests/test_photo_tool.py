@@ -23,8 +23,16 @@ from typing import Any
 
 import pytest
 
+from chip_chat.agent.loop import (
+    RUNTIME_CONTEXT,
+    Conversation,
+    ToolRegistrationError,
+    run_turn,
+    runtime_context,
+)
 from chip_chat.agent.model import ToolInvocation
 from chip_chat.agent.orders import OrderDesk
+from chip_chat.agent.testing import ScriptedModel, answer
 from chip_chat.agent.tools import (
     PHOTO_UNAVAILABLE_MESSAGE,
     TOOLS,
@@ -58,13 +66,13 @@ def lane() -> PhotoLane:
 
 
 def run(
-    lane: PhotoLane | None, desk: OrderDesk, image_ref: str = str(STUB_PHOTO_REF)
+    lane: PhotoLane | None, desk: OrderDesk, blob_ref: str = str(STUB_PHOTO_REF)
 ) -> tuple[Mapping[str, Any], SpanRecorder]:
     """Dispatch the photo tool inside the parents the schema requires."""
     invocation = ToolInvocation(
         call_id="c1",
         name=ToolName.MATCH_MEAL_FROM_PHOTO.value,
-        arguments={"image_ref": image_ref},
+        arguments={"blob_ref": blob_ref},
     )
     with (
         span_recorder("agent") as spans,
@@ -96,7 +104,7 @@ def test_the_photo_tool_takes_a_reference_and_nothing_else(lane: PhotoLane) -> N
         for definition in offered_schemas(lane=lane)
         if definition["function"]["name"] == ToolName.MATCH_MEAL_FROM_PHOTO.value
     )
-    assert set(schema["function"]["parameters"]["properties"]) == {"image_ref"}
+    assert set(schema["function"]["parameters"]["properties"]) == {"blob_ref"}
 
 
 # --- what comes back --------------------------------------------------------
@@ -168,12 +176,18 @@ def test_an_invented_reference_is_refused_before_a_container_is_touched(
     lane: PhotoLane, desk: OrderDesk
 ) -> None:
     """A model that composed a path must fail at the parse, not at the store."""
-    result, _ = run(lane, desk, image_ref="uploads/../functions/host.json")
+    result, _ = run(lane, desk, blob_ref="uploads/../functions/host.json")
     assert result["rejected"] == "NO_PHOTO"
 
 
 def test_an_empty_reference_is_refused(lane: PhotoLane, desk: OrderDesk) -> None:
-    result, _ = run(lane, desk, image_ref="")
+    """The surface checks which arguments a call carries, not what is in them.
+
+    So an empty ``blob_ref`` is a well-formed call and the refusal is the tool
+    body's, at ``BlobRef.parse`` -- which is where every reference arriving from
+    outside this process is checked, and the only place that check belongs.
+    """
+    result, _ = run(lane, desk, blob_ref="")
     assert result["rejected"] == "NO_PHOTO"
 
 
@@ -181,3 +195,60 @@ def test_the_tool_is_unimplemented_when_no_lane_is_wired(desk: OrderDesk) -> Non
     """It should never be called -- it was not offered -- but a refusal is legible."""
     result, _ = run(None, desk)
     assert result["rejected"] == "TOOL_NOT_IMPLEMENTED"
+
+
+# --- the model is told the same list it is offered ---------------------------
+
+
+def test_the_runtime_context_names_the_photo_tool_when_a_lane_is_wired(
+    lane: PhotoLane,
+) -> None:
+    """The definitions and the prose have to agree about what exists."""
+    assert ToolName.MATCH_MEAL_FROM_PHOTO.value in runtime_context(
+        offered_tools(lane=lane)
+    )
+    assert ToolName.MATCH_MEAL_FROM_PHOTO.value not in RUNTIME_CONTEXT
+
+
+def test_a_conversation_opened_without_a_lane_refuses_to_run_with_one(
+    lane: PhotoLane, desk: OrderDesk
+) -> None:
+    """The wiring fault this exists to make loud rather than subtle.
+
+    A conversation opened before a lane was wired carries a runtime context
+    saying the photo tool is not registered. Running it with a lane would offer
+    the model a definition its own instructions say does not exist, and the
+    symptom would be a model politely declining a lane it can in fact reach --
+    which reads as a model problem and is not one.
+    """
+    conversation = Conversation(session_id=SESSION)
+
+    with (
+        span_recorder("agent"),
+        chat_turn(session_id=SESSION, turn_index=0),
+        pytest.raises(ToolRegistrationError, match="match_meal_from_photo"),
+    ):
+        run_turn(
+            conversation,
+            "what is in this photo",
+            model=ScriptedModel(answer("Nothing much.")),
+            desk=desk,
+            lane=lane,
+        )
+
+
+def test_a_conversation_opened_with_a_lane_runs_with_it(
+    lane: PhotoLane, desk: OrderDesk
+) -> None:
+    conversation = Conversation(session_id=SESSION, tools=offered_tools(lane=lane))
+
+    with span_recorder("agent"), chat_turn(session_id=SESSION, turn_index=0):
+        result = run_turn(
+            conversation,
+            "what is in this photo",
+            model=ScriptedModel(answer("A chicken bowl, by the look of it.")),
+            desk=desk,
+            lane=lane,
+        )
+
+    assert result.reply.startswith("A chicken bowl")
