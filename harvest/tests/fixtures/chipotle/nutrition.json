@@ -1,0 +1,787 @@
+{
+  "channel": "web",
+  "region": "us",
+  "topLevelMenu": {
+    "id": "597939c1-a88c-42c6-a057-d4fff1fd65de",
+    "channel": "web",
+    "description": "Chipotle Menu",
+    "groups": [
+      {
+        "sortOrder": 0,
+        "menuItemGroupId": "4dedd7da-3b33-4f63-acc4-ce1da5dfe81a"
+      },
+      {
+        "sortOrder": 1,
+        "menuItemGroupId": "a062f745-2dac-4d39-9437-27f4d047502c"
+      }
+    ]
+  },
+  "groups": [
+    {
+      "id": "a062f745-2dac-4d39-9437-27f4d047502c",
+      "type": "default",
+      "displayName": "Burrito",
+      "menuItemType": "Burrito",
+      "description": "Your choice of freshly grilled meat or sofritas wrapped in a warm flour tortilla with rice, beans, or fajita veggies, and topped with guac, salsa, queso blanco, sour cream or cheese.",
+      "thumbnailImageUrl": "https://www.chipotle.com/content/dam/chipotle/menu/meal-types/burrito/web-desktop/burrito.png",
+      "bannerImageUrl": "https://www.chipotle.com/content/dam/chipotle/menu/meal-types/burrito/web-desktop/burrito.png",
+      "includeAdditionalItemSections": true,
+      "itemSections": [
+        "RiceContentGroup",
+        "BeansContentGroup",
+        "Toppings",
+        "Option",
+        "ChipsSidesContentGroup",
+        "SingleSidesContentGroup",
+        "ExtraProteinSideContentGroup",
+        "Dessert",
+        "AllDrinkContentGroup"
+      ],
+      "isRewardsExclusive": false,
+      "items": [
+        {
+          "menuItemId": "CMG-2",
+          "sortOrder": 10
+        },
+        {
+          "menuItemId": "CMG-5",
+          "sortOrder": 14
+        }
+      ],
+      "tags": []
+    },
+    {
+      "id": "3faaa10d-8a04-48a7-9fe4-732c82346a54",
+      "type": "default",
+      "displayName": "Burrito Bowl",
+      "menuItemType": "Bowl",
+      "description": "Your choice of freshly grilled meat or sofritas served in a delicious bowl with rice, beans, or fajita veggies, and topped with guac, salsa, queso blanco, sour cream or cheese.",
+      "thumbnailImageUrl": "https://www.chipotle.com/content/dam/chipotle/menu/meal-types/burrito-bowl/web-desktop/order.png",
+      "bannerImageUrl": "https://www.chipotle.com/content/dam/chipotle/menu/meal-types/burrito-bowl/web-desktop/order.png",
+      "includeAdditionalItemSections": true,
+      "itemSections": [
+        "RiceContentGroup",
+        "BeansContentGroup",
+        "Toppings",
+        "ChipsSidesContentGroup",
+        "SingleSidesContentGroup",
+        "ExtraProteinSideContentGroup",
+        "Dessert",
+        "AllDrinkContentGroup"
+      ],
+      "isRewardsExclusive": false,
+      "items": [
+        {
+          "menuItemId": "CMG-101",
+          "sortOrder": 7
+        }
+      ],
+      "tags": []
+    }
+  ],
+  "items": {
+    "CMG-1001": {
+      "thumbnailUrl": "https://www.chipotle.com/content/dam/chipotle/menu/menu-items/cmg-1025-large-side-of-guac/web-desktop/order.png",
+      "showCustomizationNameWhenSelected": false,
+      "showCustomizationPrice": false,
+      "isRewardsExclusive": false,
+      "nutrition": {
+        "calc": 2,
+        "calf": 190,
+        "carb": 8,
+        "fibe": 6,
+        "iron": 7,
+        "prot": 2,
+        "satu": 3.5,
+        "sodi": 370,
+        "suga": 1,
+        "tcal": 230,
+        "tfat": 22,
+        "tran": 0,
+        "vita": 7,
+        "vitc": 7
+      },
+      "portion": {
+        "unit": "oz",
+        "value": 4
+      },
+      "tags": [],
+      "customizations": [],
+      "dietaryTags": [
+        "vege",
+        "vega",
+        "pale",
+        "keto"
+      ]
+    },
+    "CMG-1002": {
+      "thumbnailUrl": "https://www.chipotle.com/content/dam/chipotle/menu/menu-items/cmg-1002-chips/web-desktop/chips.png",
+      "showCustomizationNameWhenSelected": false,
+      "showCustomizationPrice": false,
+      "isRewardsExclusive": false,
+      "nutrition": {
+        "calc": 40,
+        "calf": 230,
+        "carb": 73,
+        "fibe": 7,
+        "iron": 17,
+        "prot": 7,
+        "satu": 3.5,
+        "sodi": 390,
+        "suga": 1,
+        "tcal": 540,
+        "tfat": 25,
+        "tran": 0,
+        "vita": 0,
+        "vitc": 0
+      },
+      "portion": {
+        "unit": "oz",
+        "value": 4
+      },
+      "tags": [],
+      "customizations": [],
+      "dietaryTags": [
+        "vege",
+        "vega"
+      ]
+    },
+    "CMG-101": {
+      "thumbnailUrl": "https://www.chipotle.com/content/dam/chipotle/menu/menu-items/cmg-6601-chicken/web-desktop/order.png",
+      "showCustomizationNameWhenSelected": false,
+      "showCustomizationPrice": false,
+      "isRewardsExclusive": false,
+      "nutrition": {
+        "calc": 3,
+        "calf": 60,
+        "carb": 0,
+        "fibe": 0,
+        "iron": 8,
+        "prot": 32,
+        "satu": 3,
+        "sodi": 310,
+        "suga": 0,
+        "tcal": 180,
+        "tfat": 7,
+        "tran": 0,
+        "vita": 0,
+        "vitc": 2
+      },
+      "portion": {
+        "unit": "oz",
+        "value": 4
+      },
+      "tags": [],
+      "customizations": [],
+      "dietaryTags": [
+        "pale",
+        "keto"
+      ]
+    },
+    "CMG-1101": {
+      "thumbnailUrl": "https://www.chipotle.com/content/dam/chipotle/menu/menu-items/cmg-6601-chicken/web-desktop/order.png",
+      "showCustomizationNameWhenSelected": false,
+      "showCustomizationPrice": false,
+      "isRewardsExclusive": false,
+      "nutrition": {
+        "calc": 0,
+        "calf": 0,
+        "carb": 0,
+        "fibe": 0,
+        "iron": 0,
+        "prot": 0,
+        "satu": 0,
+        "sodi": 0,
+        "suga": 0,
+        "tcal": 360,
+        "tfat": 0,
+        "tran": 0,
+        "vita": 0,
+        "vitc": 0
+      },
+      "portion": {
+        "unit": "oz",
+        "value": 0
+      },
+      "tags": [],
+      "customizations": [],
+      "dietaryTags": [
+        "pale",
+        "keto"
+      ]
+    },
+    "CMG-2": {
+      "thumbnailUrl": "https://www.chipotle.com/content/dam/chipotle/menu/menu-items/cmg-6602-steak/web-desktop/order.png",
+      "showCustomizationNameWhenSelected": false,
+      "showCustomizationPrice": false,
+      "isRewardsExclusive": false,
+      "nutrition": {
+        "calc": 2,
+        "calf": 60,
+        "carb": 1,
+        "fibe": 1,
+        "iron": 15,
+        "prot": 21,
+        "satu": 2.5,
+        "sodi": 330,
+        "suga": 0,
+        "tcal": 150,
+        "tfat": 6,
+        "tran": 0,
+        "vita": 10,
+        "vitc": 0
+      },
+      "portion": {
+        "unit": "oz",
+        "value": 4
+      },
+      "tags": [],
+      "customizations": [],
+      "dietaryTags": [
+        "pale",
+        "keto"
+      ]
+    },
+    "CMG-2022": {
+      "thumbnailUrl": "https://www.chipotle.com/content/dam/chipotle/menu/menu-items/cmg-2022-jarritos-guava/web-desktop/order.png",
+      "showCustomizationNameWhenSelected": false,
+      "showCustomizationPrice": false,
+      "isRewardsExclusive": false,
+      "nutrition": {
+        "calc": 0,
+        "calf": 0,
+        "carb": 26,
+        "fibe": 0,
+        "iron": 0,
+        "prot": 0,
+        "satu": 0,
+        "sodi": 5,
+        "suga": 26,
+        "tcal": 110,
+        "tfat": 0,
+        "tran": 0,
+        "vita": 0
+      },
+      "portion": {
+        "unit": "ml",
+        "value": 370
+      },
+      "tags": [],
+      "customizations": [],
+      "dietaryTags": [
+        "vege",
+        "vega"
+      ]
+    },
+    "CMG-5001": {
+      "thumbnailUrl": "https://www.chipotle.com/content/dam/chipotle/menu/menu-items/cmg-5001-white-rice/web-desktop/order.png",
+      "showCustomizationNameWhenSelected": false,
+      "showCustomizationPrice": false,
+      "isRewardsExclusive": false,
+      "nutrition": {
+        "calc": 1,
+        "calf": 35,
+        "carb": 40,
+        "fibe": 1,
+        "iron": 3,
+        "prot": 4,
+        "satu": 0.5,
+        "sodi": 350,
+        "suga": 0,
+        "tcal": 210,
+        "tfat": 4,
+        "tran": 0,
+        "vita": 1,
+        "vitc": 3
+      },
+      "portion": {
+        "unit": "oz",
+        "value": 4
+      },
+      "tags": [],
+      "customizations": [
+        {
+          "customizationId": 4,
+          "sortOrder": 0,
+          "isHidden": true
+        }
+      ],
+      "dietaryTags": [
+        "vege",
+        "vega"
+      ]
+    },
+    "CMG-5051": {
+      "thumbnailUrl": "https://www.chipotle.com/content/dam/chipotle/menu/menu-items/cmg-5051--black-beans/web-desktop/order.png",
+      "showCustomizationNameWhenSelected": false,
+      "showCustomizationPrice": false,
+      "isRewardsExclusive": false,
+      "nutrition": {
+        "calc": 4,
+        "calf": 15,
+        "carb": 22,
+        "fibe": 7,
+        "iron": 10,
+        "prot": 8,
+        "satu": 0,
+        "sodi": 210,
+        "suga": 2,
+        "tcal": 130,
+        "tfat": 1.5,
+        "tran": 0,
+        "vita": 2,
+        "vitc": 2
+      },
+      "portion": {
+        "unit": "oz",
+        "value": 4
+      },
+      "tags": [],
+      "customizations": [
+        {
+          "customizationId": 4,
+          "sortOrder": 0,
+          "isHidden": true
+        }
+      ],
+      "dietaryTags": [
+        "vege",
+        "vega"
+      ]
+    },
+    "CMG-5252": {
+      "thumbnailUrl": "https://www.chipotle.com/content/dam/chipotle/menu/menu-items/cmg-5252-monterey-jack-cheese/web-desktop/order.png",
+      "showCustomizationNameWhenSelected": false,
+      "showCustomizationPrice": false,
+      "isRewardsExclusive": false,
+      "nutrition": {
+        "calc": 20,
+        "calf": 70,
+        "carb": 1,
+        "fibe": 0,
+        "iron": 0,
+        "prot": 6,
+        "satu": 5,
+        "sodi": 190,
+        "suga": 0,
+        "tcal": 110,
+        "tfat": 8,
+        "tran": 0,
+        "vita": 7,
+        "vitc": 0
+      },
+      "portion": {
+        "unit": "oz",
+        "value": 1
+      },
+      "tags": [],
+      "customizations": [],
+      "dietaryTags": [
+        "vege",
+        "keto",
+        "dair"
+      ]
+    },
+    "CMG-4025": {
+      "thumbnailUrl": "https://www.chipotle.com/content/dam/chipotle/menu/menu-items/cmg-5501-flour-tortilla-burrito-size/web-desktop/order.png",
+      "showCustomizationNameWhenSelected": false,
+      "showCustomizationPrice": false,
+      "isRewardsExclusive": false,
+      "nutrition": {
+        "calc": 0,
+        "calf": 80,
+        "carb": 50,
+        "fibe": 3,
+        "iron": 6,
+        "prot": 8,
+        "satu": 0.5,
+        "sodi": 600,
+        "suga": 0,
+        "tcal": 320,
+        "tfat": 9,
+        "tran": 0,
+        "vita": 0,
+        "vitc": 0
+      },
+      "portion": {
+        "unit": "oz",
+        "value": 4
+      },
+      "tags": [],
+      "customizations": [],
+      "dietaryTags": [
+        "vege",
+        "vega",
+        "glut",
+        "sulp"
+      ]
+    },
+    "CMG-5": {
+      "thumbnailUrl": "https://www.chipotle.com/content/dam/chipotle/menu/menu-items/cmg-6605-sofritas/web-desktop/order.png",
+      "showCustomizationNameWhenSelected": false,
+      "showCustomizationPrice": false,
+      "isRewardsExclusive": false,
+      "nutrition": {
+        "calc": 17,
+        "calf": 80,
+        "carb": 9,
+        "fibe": 3,
+        "iron": 17,
+        "prot": 8,
+        "satu": 1.5,
+        "sodi": 560,
+        "suga": 5,
+        "tcal": 150,
+        "tfat": 10,
+        "tran": 0,
+        "vita": 17,
+        "vitc": 23
+      },
+      "portion": {
+        "unit": "oz",
+        "value": 4
+      },
+      "tags": [
+        {
+          "type": "tagline",
+          "value": "Plant-Based Protein"
+        }
+      ],
+      "customizations": [],
+      "dietaryTags": [
+        "vege",
+        "vega",
+        "soy",
+        "sulp"
+      ]
+    },
+    "CMG-5407": {
+      "thumbnailUrl": "https://www.chipotle.com/content/dam/chipotle/menu/menu-items/CMG-5166-Chicken-al-Pastor/web-desktop/order.png",
+      "showCustomizationNameWhenSelected": false,
+      "showCustomizationPrice": false,
+      "isRewardsExclusive": false,
+      "nutrition": {
+        "calc": 4,
+        "calf": 0,
+        "carb": 18,
+        "fibe": 3,
+        "iron": 35,
+        "prot": 113,
+        "satu": 12,
+        "sodi": 4080,
+        "suga": 8,
+        "tcal": 1020,
+        "tfat": 54,
+        "tran": 0,
+        "vita": 2,
+        "vitc": 8
+      },
+      "portion": {
+        "unit": "oz",
+        "value": 20
+      },
+      "tags": [
+        {
+          "type": "promo",
+          "value": "nchide"
+        },
+        {
+          "type": "tagline",
+          "value": "Where Fire Meets Flavor"
+        },
+        {
+          "type": "promo",
+          "value": "limited time"
+        }
+      ],
+      "customizations": [],
+      "dietaryTags": [
+        "pale",
+        "wh30",
+        "sulp"
+      ]
+    }
+  },
+  "itemSections": {
+    "BeansContentGroup": {
+      "name": "BeansContentGroup",
+      "alias": "Beans",
+      "sortOrder": 8,
+      "hasSelectNoneOption": false,
+      "items": [
+        {
+          "menuItemId": "CMG-5051",
+          "sortOrder": 1
+        }
+      ]
+    },
+    "RiceContentGroup": {
+      "name": "RiceContentGroup",
+      "alias": "Rice",
+      "sortOrder": 7,
+      "hasSelectNoneOption": false,
+      "items": [
+        {
+          "menuItemId": "CMG-5001",
+          "sortOrder": 1
+        }
+      ]
+    },
+    "Toppings": {
+      "name": "Toppings",
+      "alias": "Top Things Off",
+      "sortOrder": 12,
+      "hasSelectNoneOption": false,
+      "items": [
+        {
+          "menuItemId": "CMG-1001",
+          "sortOrder": 8
+        },
+        {
+          "menuItemId": "CMG-5252",
+          "sortOrder": 15
+        }
+      ]
+    }
+  },
+  "itemGroups": {
+    "CauliRiceEntree": {
+      "displayName": "Mexican Cauliflower Rice",
+      "defaultItemId": "CMG-1036",
+      "calories": {
+        "min": 60,
+        "max": 60
+      },
+      "displayRangeFormat": false
+    },
+    "FountainSoda": {
+      "displayName": "Fountain Drink",
+      "defaultItemId": "CMG-2001",
+      "calories": {
+        "min": 0,
+        "max": 300
+      },
+      "displayRangeFormat": true
+    },
+    "TractorLemonade": {
+      "displayName": "Organic Lemonade",
+      "defaultItemId": "CMG-2010",
+      "calories": {
+        "min": 170,
+        "max": 250
+      },
+      "displayRangeFormat": true
+    }
+  },
+  "dietaryTagGroups": [
+    {
+      "id": "4c5a70f6-40f5-4a8e-968a-3b69f675ab7f",
+      "groupName": "Plant Based",
+      "badgeText": "V",
+      "badgeColor": "#6e7c1b",
+      "secondaryBadgeColor": "#f9faf6",
+      "selectType": "single",
+      "sortOrder": 0,
+      "isActive": true,
+      "tags": [
+        {
+          "id": "50082d95-e14c-4123-89c4-08331696d77b",
+          "tagName": "Vegetarian",
+          "tagCode": "vege",
+          "preferredBadgeText": "V",
+          "sortOrder": 1,
+          "createdTimestamp": "2021-10-05T04:22:57.9324275Z",
+          "lastModifiedTimestamp": "2021-10-19T04:20:18.3801751Z"
+        },
+        {
+          "id": "1f42ed88-0133-4c94-92bc-e2aaafad7a1b",
+          "tagName": "Vegan",
+          "tagCode": "vega",
+          "preferredBadgeText": "V+",
+          "sortOrder": 2,
+          "createdTimestamp": "2021-10-05T04:22:57.932435Z",
+          "lastModifiedTimestamp": "2021-10-19T04:20:18.3801755Z"
+        }
+      ],
+      "createdTimestamp": "0001-01-01T00:00:00Z",
+      "lastModifiedTimestamp": "2021-10-19T04:20:18.3801703Z"
+    },
+    {
+      "id": "6926af69-df63-4677-b4b0-5d64afa68809",
+      "groupName": "Lifestyle",
+      "badgeText": "L",
+      "badgeColor": "#786259",
+      "secondaryBadgeColor": "#faf9f9",
+      "selectType": "single",
+      "sortOrder": 1,
+      "isActive": true,
+      "tags": [
+        {
+          "id": "31e813d6-15e4-4c14-b82b-0ed4408e7591",
+          "tagName": "Paleo",
+          "tagCode": "pale",
+          "sortOrder": 1,
+          "createdTimestamp": "2021-10-05T04:22:58.0354717Z",
+          "lastModifiedTimestamp": "2021-10-19T04:20:18.3876021Z"
+        },
+        {
+          "id": "ca10f9a5-8979-472c-b7bf-d281a41e4234",
+          "tagName": "Keto",
+          "tagCode": "keto",
+          "sortOrder": 2,
+          "createdTimestamp": "2021-10-05T04:22:58.035473Z",
+          "lastModifiedTimestamp": "2021-10-19T04:20:18.3876024Z"
+        }
+      ],
+      "createdTimestamp": "0001-01-01T00:00:00Z",
+      "lastModifiedTimestamp": "2021-10-19T04:20:18.387599Z"
+    },
+    {
+      "id": "fb18dec3-ce3f-46e0-a9ea-0319da131c61",
+      "groupName": "I'm Avoiding",
+      "badgeText": "!",
+      "badgeColor": "#ad2118",
+      "secondaryBadgeColor": "#fcf6f6",
+      "subheader": "Tagged items contain your selection.",
+      "selectType": "multi",
+      "sortOrder": 2,
+      "isActive": true,
+      "tags": [
+        {
+          "id": "509c8d8a-be95-4e20-96cb-b5f60e9775ae",
+          "tagName": "Gluten",
+          "tagCode": "glut",
+          "sortOrder": 1,
+          "createdTimestamp": "2021-10-05T04:22:58.0467937Z",
+          "lastModifiedTimestamp": "2021-10-19T04:20:18.3936179Z"
+        },
+        {
+          "id": "bb6ca456-3a17-48ad-9453-e2f19b8368ae",
+          "tagName": "Dairy",
+          "tagCode": "dair",
+          "sortOrder": 2,
+          "createdTimestamp": "2021-10-05T04:22:58.0467949Z",
+          "lastModifiedTimestamp": "2021-10-19T04:20:18.3936182Z"
+        },
+        {
+          "id": "6672e7f8-5fff-41c0-8e3e-3e3ccd197f81",
+          "tagName": "Soy",
+          "tagCode": "soy",
+          "sortOrder": 3,
+          "createdTimestamp": "2021-10-05T04:22:58.0467959Z",
+          "lastModifiedTimestamp": "2021-10-19T04:20:18.3936184Z"
+        },
+        {
+          "id": "fe2c269d-e289-4745-9031-2dd1fd89226c",
+          "tagName": "Sulphites",
+          "tagCode": "sulp",
+          "sortOrder": 4,
+          "createdTimestamp": "2021-10-05T04:22:58.046797Z",
+          "lastModifiedTimestamp": "2021-10-19T04:20:18.3936186Z"
+        }
+      ],
+      "createdTimestamp": "0001-01-01T00:00:00Z",
+      "lastModifiedTimestamp": "2021-10-19T04:20:18.3936151Z"
+    }
+  ],
+  "nutritionDetailSections": [
+    {
+      "key": "carb",
+      "name": "Carbohydrates",
+      "unit": "g",
+      "badgeColor": "#d49b1c",
+      "components": [
+        {
+          "key": "fibe",
+          "name": "Dietary Fiber",
+          "unit": "g"
+        },
+        {
+          "key": "suga",
+          "name": "Sugar",
+          "unit": "g"
+        }
+      ],
+      "createdTimestamp": "2022-09-19T18:39:22.3154971Z",
+      "lastModifiedTimestamp": "2022-09-19T20:54:34.0429418Z"
+    },
+    {
+      "key": "prot",
+      "name": "Protein",
+      "unit": "g",
+      "badgeColor": "#829323",
+      "components": [],
+      "createdTimestamp": "2022-09-19T18:39:22.3154971Z",
+      "lastModifiedTimestamp": "2022-09-19T20:54:34.0429418Z"
+    },
+    {
+      "key": "sodi",
+      "name": "Sodium",
+      "unit": "mg",
+      "components": [],
+      "createdTimestamp": "2022-09-19T18:39:22.3154971Z",
+      "lastModifiedTimestamp": "2022-09-19T20:54:34.0429418Z"
+    },
+    {
+      "key": "tcal",
+      "name": "Total Calories",
+      "unit": "cal",
+      "badgeColor": "#000000",
+      "components": [],
+      "createdTimestamp": "2022-09-19T18:39:22.3154971Z",
+      "lastModifiedTimestamp": "2022-09-19T20:54:34.0429418Z"
+    },
+    {
+      "key": "tfat",
+      "name": "Total Fat",
+      "unit": "g",
+      "badgeColor": "#a31c1e",
+      "components": [
+        {
+          "key": "calf",
+          "name": "Calories from Fat",
+          "unit": "cal"
+        },
+        {
+          "key": "satu",
+          "name": "Saturated Fat",
+          "unit": "g"
+        },
+        {
+          "key": "tran",
+          "name": "Trans Fat",
+          "unit": "g"
+        }
+      ],
+      "createdTimestamp": "2022-09-19T18:39:22.3154971Z",
+      "lastModifiedTimestamp": "2022-09-19T20:54:34.0429418Z"
+    },
+    {
+      "name": "Vitamins & Minerals",
+      "components": [
+        {
+          "key": "calc",
+          "name": "Calcium",
+          "unit": "%"
+        },
+        {
+          "key": "iron",
+          "name": "Iron",
+          "unit": "%"
+        },
+        {
+          "key": "vita",
+          "name": "Vitamin A",
+          "unit": "%"
+        },
+        {
+          "key": "vitc",
+          "name": "Vitamin C",
+          "unit": "%"
+        }
+      ],
+      "createdTimestamp": "2022-09-19T18:39:22.3154971Z",
+      "lastModifiedTimestamp": "2022-09-19T20:54:34.0429418Z"
+    }
+  ]
+}

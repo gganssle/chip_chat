@@ -11,6 +11,7 @@ contributor — human or agent — has them locally. Read them in this order.
 | [service-inventory.md](service-inventory.md) | Verified service names, tiers, quotas and prices — and where the three documents above are now wrong |
 | [local-setup.md](local-setup.md) | Getting a machine from clean to a passing `make ci` — CLIs, authentication, and how secrets reach a local process |
 | [local-tracing.md](local-tracing.md) | The development loop with Phoenix: start the stack, send a turn, read the span tree |
+| [chipotle-nutrition-spot-check.md](chipotle-nutrition-spot-check.md) | What the harvested nutrition and allergen data was checked against by hand, and when |
 | [decisions/](decisions/) | Decision records for questions the planning documents left open |
 
 The system design frames the problem, the PRD defines what to build, and the RFC
@@ -28,7 +29,12 @@ plans or checks. The setup guide records what to install, how to authenticate ea
 platform, and which steps are deliberately not done yet. The tracing guide records
 the loop you run every day once it is installed.
 
-The `decisions/` directory is a sixth: one file per question that was open when the
+The nutrition spot check is a sixth kind: *evidence*. The unit tests run against
+fixtures, so a green suite proves the harvester is self-consistent rather than that it
+still agrees with what Chipotle published this afternoon. That file records a hand
+comparison against the live pages, and the date on which it was true.
+
+The `decisions/` directory is a seventh: one file per question that was open when the
 planning documents were written and has since been settled. A decision record carries
 the choice, the rationale, and what it costs — and the document it amends is edited in
 the same commit, so the RFC never disagrees with the record that changed it.

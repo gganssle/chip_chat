@@ -64,6 +64,28 @@ this path is what the ordering flow uses.
 
 ONLINE_MEALS_QUERY = "channelId=web"
 
+NUTRITION_PATH = "/menu-metadata/v1/menu-metadata/nutrition"
+"""The menu metadata with every item's published nutrition attached.
+
+Not advertised either. The same metadata document the ``mmd`` tag's
+``data-ingredients`` sibling serves is published a second time under this
+path with a ``nutrition`` object on every item, and the nutrition calculator
+asks for this one. Its query is the pair the site's own front end computes for
+a US visitor on the web channel.
+"""
+
+NUTRITION_QUERY = "channel=web&region=US"
+
+ALLERGENS_URL = "https://www.chipotle.com/allergens"
+"""The page carrying Chipotle's own allergen caveats.
+
+The chart on it is drawn client-side from :attr:`ServicesConfig.allergens_url`,
+but the prose around the chart is served in the HTML and is published nowhere
+else. That prose is the part issue #20 requires to survive verbatim: it is
+where Chipotle says that the chart does not reflect contact during preparation
+and that absence from it is not a guarantee.
+"""
+
 _CONFIG_TAGS = ("servicesconfig", "mmd")
 
 
@@ -120,6 +142,18 @@ class ServicesConfig:
     def ingredients_url(self) -> str:
         """Absolute URL of the ingredient metadata endpoint."""
         return f"{self.base_url}{self.ingredients_path}"
+
+    @property
+    def allergens_url(self) -> str | None:
+        """Absolute URL of the allergen and diet endpoint, where published."""
+        if self.allergens_path is None:
+            return None
+        return f"{self.base_url}{self.allergens_path}"
+
+    @property
+    def nutrition_url(self) -> str:
+        """Absolute URL of the menu metadata with nutrition attached."""
+        return f"{self.base_url}{NUTRITION_PATH}?{NUTRITION_QUERY}"
 
     def online_menu_url(self, restaurant_id: str) -> str:
         """Return the priced menu URL for one restaurant.

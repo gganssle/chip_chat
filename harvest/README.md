@@ -120,6 +120,59 @@ only when the ingredient is named after it and lists it. Everything else keeps a
 null description. The prose is all still there, in `ingredients` and `meals`,
 correctly keyed to what it actually describes.
 
+### Chipotle's nutrition and allergens — `sources.chipotle`, `--dataset nutrition`
+
+Issue #20. The safety-critical half, kept as a separate dataset because it is
+answering a different kind of question.
+
+```bash
+python -m chip_chat.harvest.sources.chipotle --landing landing --dataset nutrition
+python -m chip_chat.harvest.sources.chipotle --landing landing --dataset all
+```
+
+Five documents: the public page again, the menu metadata *with nutrition* that
+the nutrition calculator reads, the allergen and diet endpoint the `/allergens`
+chart is drawn from, the `/allergens` page itself for the prose around that
+chart, and the restaurant's menu — for its item list, not its prices. Both
+datasets share one cache, so `--dataset all` costs seven documents rather than
+nine.
+
+**Eight tables come out**, under `parsed/chipotle/nutrition/`:
+
+| Table | What it is |
+| --- | --- |
+| `nutrients` | The published nutrient vocabulary: `tcal` is `Total Calories` in `cal`, `calc` is `Calcium` as a `%`. |
+| `item_nutrition` | Every published figure, one row per item per nutrient, with the portion it is for. |
+| `item_group_calories` | Published calorie *ranges* for interchangeable items — the lemonades are "170-250 cal". |
+| `dietary_tags` | The published tag vocabulary, allergens and diets alike, classified as Chipotle classifies them. |
+| `item_allergens` | The three-valued allergen answer, for every orderable item. |
+| `item_diets` | What each document says about each diet, per item, unmerged. |
+| `allergen_chart` | The published chart in its own shape, one row per line. |
+| `caveats` | Chipotle's published prose about what the chart does not cover. |
+
+**An absent allergen is a value, and it is not a negative.** `item_allergens`
+holds `CONTAINS`, `NOT_LISTED` or `NOT_PUBLISHED` — never a boolean — and there
+is a row for every item on the menu crossed with every published allergen, so
+"nothing is published about this" is a row that says so rather than a row that
+is not there. `item_nutrition.value` is `null` for a figure nobody published and
+`0` for a published zero. See
+[`docs/decisions/allergen-absence.md`](../docs/decisions/allergen-absence.md) for the decision
+and what it costs, and
+[`docs/chipotle-nutrition-spot-check.md`](../docs/chipotle-nutrition-spot-check.md) for the hand
+check against the live site.
+
+**A composed entree's published figure is its own ingredient's, not the meal's.**
+`CMG-2` is "Steak Burrito" on the menu and 150 calories of steak in the
+nutrition metadata; the tortilla, rice, beans and toppings are separate items
+that the calculator adds. Reading a component figure as a total is the easiest
+way to publish a confidently wrong calorie count.
+
+**Two published sources are checked against each other rather than merged.** The
+chart and the metadata agree exactly about allergens today, on all twenty-six
+foods both describe, and the parser asserts that on every run — a disagreement
+raises rather than picking a winner. They disagree about Whole30, which is why
+`item_diets` records the document alongside the answer.
+
 ## Testing against it
 
 `chip_chat.harvest.testing` ships `FakeTransport` and `FakeClock`. Use them —

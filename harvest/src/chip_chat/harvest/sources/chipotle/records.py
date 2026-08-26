@@ -26,15 +26,14 @@ binary-float noise on the way through a dataset whose whole job is to
 reproduce byte for byte.
 """
 
-import hashlib
-import json
-from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, fields
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
 from chip_chat.harvest.blobs import BlobStore
+from chip_chat.harvest.sources.chipotle.tables import describe, write_tables
 
 DEFAULT_PARSED_PREFIX = "parsed/chipotle/menu"
 """Where the parsed tables land. Beside ``raw/``, never inside it."""
@@ -381,45 +380,6 @@ class MealPrice:
     harvested_at: datetime
 
 
-def _json_ready(value: Any) -> Any:
-    """Return ``value`` in a form :func:`json.dumps` can write deterministically."""
-    if isinstance(value, Decimal):
-        return str(value)
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, tuple):
-        return list(value)
-    return value
-
-
-def _row(record: Any) -> dict[str, Any]:
-    """Return one dataclass instance as a JSON-ready mapping."""
-    return {
-        field.name: _json_ready(getattr(record, field.name)) for field in fields(record)
-    }
-
-
-def to_jsonl(records: Iterable[Any]) -> bytes:
-    """Serialise records as JSON Lines, one compact object per line.
-
-    Keys are sorted and separators are tight, so two runs over the same cache
-    produce identical bytes and a digest is a meaningful thing to compare.
-
-    Args:
-        records: The dataclass instances to write, in the order wanted.
-
-    Returns:
-        The encoded document, ending in a newline when it is not empty.
-    """
-    lines = [
-        json.dumps(_row(record), sort_keys=True, separators=(",", ":"))
-        for record in records
-    ]
-    if not lines:
-        return b""
-    return ("\n".join(lines) + "\n").encode("utf-8")
-
-
 @dataclass(frozen=True, slots=True)
 class MenuDataset:
     """Everything issue #19 harvests, parsed and flattened.
@@ -488,13 +448,7 @@ class MenuDataset:
         return {
             "restaurant_ids": list(self.restaurant_ids),
             "reference_restaurant_id": self.reference_restaurant_id,
-            "tables": {
-                name: {
-                    "rows": len(rows),
-                    "sha256": hashlib.sha256(to_jsonl(rows)).hexdigest(),
-                }
-                for name, rows in self.tables()
-            },
+            "tables": describe(self.tables()),
         }
 
     def write(
@@ -511,16 +465,4 @@ class MenuDataset:
             Table name to the key it was written at, with the manifest under
             the key ``manifest``.
         """
-        root = prefix.strip("/")
-        written: dict[str, str] = {}
-        for name, rows in self.tables():
-            key = f"{root}/{name}.jsonl"
-            blobs.write(key, to_jsonl(rows))
-            written[name] = key
-        manifest_key = f"{root}/manifest.json"
-        blobs.write(
-            manifest_key,
-            json.dumps(self.manifest(), indent=2, sort_keys=True).encode("utf-8"),
-        )
-        written["manifest"] = manifest_key
-        return written
+        return write_tables(blobs, prefix, self.tables(), self.manifest())

@@ -1,0 +1,118 @@
+{
+  "channel": "web",
+  "region": "us",
+  "allergens": [
+    {
+      "name": "Black Beans",
+      "menuItemId": "CMG-5051",
+      "allergens": [],
+      "diets": [
+        "vege",
+        "vega"
+      ],
+      "sortOrder": 2
+    },
+    {
+      "name": "Chicken",
+      "menuItemId": "CMG-1",
+      "allergens": [],
+      "diets": [
+        "whol",
+        "keto",
+        "pale"
+      ],
+      "sortOrder": 4
+    },
+    {
+      "name": "Crispy Corn Tortilla",
+      "menuItemId": "CMG-1002",
+      "allergens": [],
+      "diets": [
+        "vege",
+        "vega"
+      ],
+      "sortOrder": 8
+    },
+    {
+      "name": "Flour Tortilla (Burrito)",
+      "menuItemId": "CMG-4025",
+      "allergens": [
+        "glut",
+        "sulp"
+      ],
+      "diets": [
+        "vege",
+        "vega"
+      ],
+      "sortOrder": 10
+    },
+    {
+      "name": "Guacamole",
+      "menuItemId": "CMG-1001",
+      "allergens": [],
+      "diets": [
+        "vege",
+        "vega",
+        "whol",
+        "keto",
+        "pale"
+      ],
+      "sortOrder": 13
+    },
+    {
+      "name": "Monterey Jack Cheese",
+      "menuItemId": "CMG-5252",
+      "allergens": [
+        "dair"
+      ],
+      "diets": [
+        "vege",
+        "keto"
+      ],
+      "sortOrder": 14
+    },
+    {
+      "name": "Sofritas",
+      "menuItemId": "CMG-5",
+      "allergens": [
+        "soy",
+        "sulp"
+      ],
+      "diets": [
+        "vege",
+        "vega"
+      ],
+      "sortOrder": 20
+    },
+    {
+      "name": "Steak",
+      "menuItemId": "CMG-2",
+      "allergens": [],
+      "diets": [
+        "keto",
+        "pale"
+      ],
+      "sortOrder": 22
+    },
+    {
+      "name": "Tortilla Chips",
+      "menuItemId": "CMG-1002",
+      "allergens": [],
+      "diets": [
+        "vege",
+        "vega"
+      ],
+      "sortOrder": 5
+    },
+    {
+      "name": "White Rice",
+      "menuItemId": "CMG-5001",
+      "allergens": [],
+      "diets": [
+        "vege",
+        "vega"
+      ],
+      "sortOrder": 7
+    }
+  ]
+}

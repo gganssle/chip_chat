@@ -446,5 +446,20 @@
    "isItemAvailable": true
   }
  ],
- "nonFoodItems": []
+ "nonFoodItems": [
+    {
+      "itemCategory": "Non Food Items",
+      "itemType": "Meal Hardware",
+      "itemId": "CMG-6110",
+      "itemName": "Napkins & Utensils",
+      "posId": 1024,
+      "unitPrice": 0,
+      "unitDeliveryPrice": 0,
+      "unitCount": 1,
+      "maxQuantity": 5,
+      "eligibleForDelivery": true,
+      "isUniversal": false,
+      "isItemAvailable": true
+    }
+  ]
 }

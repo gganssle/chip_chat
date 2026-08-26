@@ -16,7 +16,7 @@ import pytest
 from chip_chat.harvest.blobs import LocalBlobStore
 from chip_chat.harvest.harvester import Harvester
 from chip_chat.harvest.ratelimit import PolitenessGate, RateLimiter
-from chip_chat.harvest.sources.chipotle import harvest_menu
+from chip_chat.harvest.sources.chipotle import harvest_menu, harvest_nutrition
 from chip_chat.harvest.sources.chipotle.__main__ import main
 from chip_chat.harvest.testing import FakeClock
 
@@ -33,6 +33,7 @@ def landing(tmp_path: Path) -> Path:
         gate=PolitenessGate(RateLimiter(2.0, clock), 1),
     )
     harvest_menu(harvester, [site.REFERENCE])
+    harvest_nutrition(harvester, [site.REFERENCE])
     return tmp_path
 
 
@@ -69,3 +70,44 @@ def test_an_unharvested_landing_zone_fails_with_a_useful_message(
 
     assert status == 1
     assert "run the harvest first" in capsys.readouterr().err
+
+
+def test_the_nutrition_dataset_is_built_when_asked_for(
+    landing: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    status = main(["--landing", str(landing), "--offline", "--dataset", "nutrition"])
+
+    assert status == 0
+    manifest = json.loads(capsys.readouterr().out)["nutrition"]
+    assert manifest["allergen_codes"] == ["dair", "glut", "soy", "sulp"]
+    assert manifest["coverage"]["not_published"] > 0
+    parsed = landing / "parsed" / "chipotle" / "nutrition"
+    assert (parsed / "item_allergens.jsonl").is_file()
+    assert (parsed / "caveats.jsonl").is_file()
+    assert (parsed / "manifest.json").is_file()
+
+
+def test_asking_for_both_builds_both(
+    landing: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    status = main(["--landing", str(landing), "--offline", "--dataset", "all"])
+
+    assert status == 0
+    manifests = json.loads(capsys.readouterr().out)
+    assert set(manifests) == {"menu", "nutrition"}
+    assert (landing / "parsed" / "chipotle" / "menu" / "menu_items.jsonl").is_file()
+    assert (
+        landing / "parsed" / "chipotle" / "nutrition" / "item_nutrition.jsonl"
+    ).is_file()
+
+
+def test_two_offline_nutrition_runs_print_the_same_manifest(
+    landing: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    arguments = ["--landing", str(landing), "--offline", "--dataset", "nutrition"]
+    assert main(arguments) == 0
+    first = capsys.readouterr().out
+    assert main(arguments) == 0
+    second = capsys.readouterr().out
+
+    assert first == second
