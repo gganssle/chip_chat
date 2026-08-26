@@ -47,6 +47,7 @@ from chip_chat.api.outcome import (
     Usage,
 )
 from chip_chat.api.ratelimit import SourceRateLimiter
+from chip_chat.api.uploads import UploadLimiter
 from chip_chat.otel import service_name
 
 __all__ = [
@@ -69,6 +70,7 @@ __all__ = [
     "StopReason",
     "SystemClock",
     "TurnBudget",
+    "UploadLimiter",
     "Usage",
     "__version__",
     "any_of",

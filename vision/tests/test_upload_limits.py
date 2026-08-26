@@ -22,9 +22,12 @@ def test_the_defaults_bound_the_read_the_decode_and_the_send() -> None:
     # The one that a byte ceiling cannot express, and the reason there are two.
     assert limits.max_pixels > limits.max_bytes
     assert limits.max_edge == 1024
+    # The third thing a byte ceiling cannot express, in the other direction:
+    # eight mebibytes at one byte a second is under the size limit for months.
+    assert limits.max_seconds == 30.0
 
 
-@pytest.mark.parametrize("field", ["max_bytes", "max_pixels", "max_edge"])
+@pytest.mark.parametrize("field", ["max_bytes", "max_pixels", "max_edge", "max_seconds"])
 @pytest.mark.parametrize("value", [0, -1])
 def test_a_ceiling_that_would_not_bound_anything_is_refused(
     field: str, value: int
@@ -46,10 +49,12 @@ def test_the_environment_overrides_every_ceiling() -> None:
             "CHIP_CHAT_UPLOAD_MAX_PIXELS": "2048",
             "CHIP_CHAT_UPLOAD_MAX_EDGE": "512",
             "CHIP_CHAT_UPLOAD_JPEG_QUALITY": "70",
+            "CHIP_CHAT_UPLOAD_MAX_SECONDS": "5.5",
         }
     )
     assert (limits.max_bytes, limits.max_pixels) == (1024, 2048)
     assert (limits.max_edge, limits.jpeg_quality) == (512, 70)
+    assert limits.max_seconds == 5.5
 
 
 def test_an_empty_variable_means_absent_rather_than_zero() -> None:

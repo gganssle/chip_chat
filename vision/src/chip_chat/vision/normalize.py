@@ -1,6 +1,6 @@
 """Stage 2. Strip the metadata, re-encode the pixels, downscale to what the model reads.
 
-Three jobs, and only one of them is about cost.
+Four jobs, and only one of them is about cost.
 
 **Strip metadata.** Photographs from strangers carry location data we have no
 business holding, and "strip EXIF" is the wrong specification of the job.
@@ -22,12 +22,25 @@ copied -- only the pixels are, and pixels cannot encode a parser bug.
 never upward. A vision model scales the image into its own window before it
 looks at it; sending 4032 x 3024 pays to transmit detail the model discards.
 
+**Decode small in the first place.** The pixel ceiling in
+:mod:`chip_chat.vision.validate` bounds what a header may *declare*, from the
+header, before any memory is allocated -- and an image that passes it is still
+allowed to be fifty megapixels, which is a hundred and fifty megabytes of RGB
+before a single one of those pixels survives the downscale. So the decode is
+asked for at the size we actually want: :meth:`~PIL.Image.Image.draft` lets
+libjpeg do the reduction inside the DCT, and a fifty-megapixel JPEG arrives as
+roughly three, at a fraction of the memory and most of it never touched. It is a
+hint rather than a guarantee -- PNG and WebP have no equivalent and ignore it,
+which is why it is a second line and not the ceiling itself.
+
 .. code-block:: python
 
     image = validate(payload, declared_media_type=content_type)
     photo = normalize(image)          # JPEG bytes, no metadata, <= max_edge
 """
 
+import struct
+import warnings
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Final
@@ -91,12 +104,30 @@ def normalize(
             :attr:`~chip_chat.vision.validate.RejectionReason.CORRUPT` if the
             pixels do not decode. Stage 1 reads the header and this is the first
             thing to read the body, so a file that is well-formed for exactly as
-            long as a header parser looks at it is caught here.
+            long as a header parser looks at it is caught here. With
+            :attr:`~chip_chat.vision.validate.RejectionReason.TOO_MANY_PIXELS`
+            if the decoder itself calls the image a bomb.
     """
     ceilings = limits if limits is not None else UploadLimits()
 
     try:
-        with Image.open(BytesIO(image.data)) as opened:
+        # Pillow's own bomb ceiling only *warns* between its limit and twice it,
+        # and a warning nobody is listening to is a decode that happens. Inside
+        # this block it is an exception instead, and it lands on the same
+        # refusal the header gate would have given. The filter is armed by
+        # `catch_warnings` itself rather than by a statement in the body,
+        # because `Image.open` runs before the body does.
+        with (
+            warnings.catch_warnings(
+                action="error", category=Image.DecompressionBombWarning
+            ),
+            Image.open(BytesIO(image.data)) as opened,
+        ):
+            # Ask the decoder for the size we are going to keep. For a JPEG this
+            # is the difference between allocating the full sensor resolution
+            # and allocating a couple of megapixels; for anything else it is a
+            # no-op, and the header ceiling is what bounds those.
+            opened.draft(None, (ceilings.max_edge, ceilings.max_edge))
             # Orientation is read and applied here, then never written out.
             # Phone cameras record "the sensor was rotated" rather than rotating
             # the pixels, so a stripped-but-untransposed photo is a photo lying
@@ -106,7 +137,11 @@ def normalize(
             working = _downscale(working, ceilings.max_edge)
             pixels = working.tobytes()
             size = working.size
-    except (OSError, ValueError, SyntaxError) as error:
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
+        # Reached only where stage 1's ceiling was configured above Pillow's,
+        # and the same verdict either way: too many pixels to open.
+        raise rejection(RejectionReason.TOO_MANY_PIXELS, ceilings) from error
+    except (OSError, ValueError, SyntaxError, struct.error) as error:
         raise rejection(RejectionReason.CORRUPT, ceilings) from error
 
     # The metadata strip, and the reason it is a strip rather than a deletion:

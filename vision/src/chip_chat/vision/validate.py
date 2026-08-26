@@ -15,7 +15,10 @@ out of an iOS camera roll is ordinary), so rejecting on mismatch would fail real
 visitors while stopping nothing that the byte check does not already stop.
 
 Four gates, in this order, each one cheaper than the next and each one refusing
-before the next has to run:
+before the next has to run. :mod:`chip_chat.vision.reader` is the gate in front
+of all of them: it is what bounds the *read*, so that by the time ``data``
+reaches this module the ceiling below has already been enforced once, while the
+bytes were still arriving.
 
 1. **Size.** Compared against the ceiling before anything looks at the content.
 2. **Magic bytes.** :func:`sniff` reads at most 16 bytes and answers "what is
@@ -31,12 +34,15 @@ Only then does :mod:`chip_chat.vision.normalize` decode anything.
 .. code-block:: python
 
     try:
+        payload = read_upload(body, declared_length=request_content_length)
         image = validate(payload, declared_media_type=request_content_type)
     except UploadRejectedError as refusal:
         return upload_error(refusal.message)   # nothing was written
 """
 
 import enum
+import struct
+import warnings
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Final
@@ -101,6 +107,18 @@ class RejectionReason(enum.Enum):
     """The signature matched but the header does not parse. A truncated or
     hand-edited file, or a signature glued onto something else."""
 
+    DISGUISED_PAYLOAD = "disguised_payload"
+    """The bytes parsed, as a *different* format from the one they signed
+    themselves with. Nothing arrives that way by accident: a camera does not
+    write a HEIC brand onto an AVIF body, and a file that is two formats at once
+    is not a photograph anybody took. See :data:`_NEUTRAL_REFUSAL` for why this
+    one refuses without saying so."""
+
+    TOO_SLOW = "too_slow"
+    """The body did not finish arriving inside
+    :attr:`~chip_chat.vision.limits.UploadLimits.max_seconds`. The ceiling a
+    byte limit cannot express -- see :mod:`chip_chat.vision.reader`."""
+
     UNSAFE_IMAGE = "unsafe_image"
     """Content Safety put a category at or above its threshold. See
     :mod:`chip_chat.vision.moderation`."""
@@ -113,18 +131,21 @@ class RejectionReason(enum.Enum):
 _NEUTRAL_REFUSAL: Final = (
     "I can't use that photo. Tell me what you're after and I'll take it from there."
 )
-"""The one line stage 3 ever says, whichever way it refused.
+"""The line every refusal that looked *inside* the file gives back.
 
 Neutral in the sense RFC-001 section 07 means it: it does not name what was
 detected, does not moralise, and hands an uploader nothing to iterate against.
 
-It is deliberately the *same* sentence for a flagged image and for Content
-Safety being unreachable. Two sentences would be a signal -- an outage that
-announced itself would tell the previous uploader that theirs, specifically, was
-the one that got flagged -- and it would be a signal bought for nothing, since
-the honest thing to ask for in both cases is identical: type what you wanted.
-Which of the two happened is recorded on ``guard.content_safety``, where an
-operator can read it and a visitor cannot.
+It is deliberately the *same* sentence for a flagged image, for Content Safety
+being unreachable, and for a disguised payload. Distinct sentences would be a
+signal -- an outage that announced itself would tell the previous uploader that
+theirs, specifically, was the one that got flagged, and "that file says PNG but
+decodes as something else" tells an attacker their disguise was detected and
+invites a better one. All three are a signal bought for nothing, since the
+honest thing to ask for is identical in every case: type what you wanted.
+
+Which of the three happened is recorded on the span, where an operator can read
+it and a visitor cannot.
 """
 
 _MESSAGES: Final[dict[RejectionReason, str]] = {
@@ -144,21 +165,28 @@ _MESSAGES: Final[dict[RejectionReason, str]] = {
     RejectionReason.CORRUPT: (
         "That photo did not arrive intact. Try attaching it again."
     ),
+    RejectionReason.TOO_SLOW: (
+        "That upload did not finish in time. Try it again, or on a better connection."
+    ),
+    RejectionReason.DISGUISED_PAYLOAD: _NEUTRAL_REFUSAL,
     RejectionReason.UNSAFE_IMAGE: _NEUTRAL_REFUSAL,
     RejectionReason.MODERATION_UNAVAILABLE: _NEUTRAL_REFUSAL,
 }
 """Visitor-facing copy, one line per reason.
 
-The first six are deliberately helpful rather than neutral: none of those
-outcomes says anything about *content*, so there is nothing to be coy about, and
-"something went wrong" in front of a size limit just makes a visitor try the same
-photo four times.
+The dividing line is **content disclosure**, and it is not the same line as
+"is this an abuse case". The first seven are deliberately helpful rather than
+neutral: none of those outcomes says anything about what is *in* the file, so
+there is nothing to be coy about, and "something went wrong" in front of a size
+limit just makes a visitor try the same photo four times.
 
-The last two are stage 3, and they are the exception -- see
-:data:`_NEUTRAL_REFUSAL`.
+The last three are the exception, because each of them is a verdict reached by
+looking inside -- see :data:`_NEUTRAL_REFUSAL`.
 
 Nothing attacker-controlled is interpolated -- no filename, no declared type, no
-byte excerpt -- so no message can be used to reflect content back at a visitor.
+byte excerpt, no sniffed format. The one value any message quotes is
+``max_mb``, which is a server-side constant. A message built from the upload
+would confirm both the detection and the method to whoever sent it.
 """
 
 
@@ -325,28 +353,47 @@ def _header_size(data: bytes, media_type: str, limits: UploadLimits) -> tuple[in
         The declared ``(width, height)``.
 
     Raises:
-        UploadRejectedError: If the header does not parse, disagrees with the
-            signature, or declares more pixels than the ceiling allows.
+        UploadRejectedError: If the header does not parse
+            (:attr:`RejectionReason.CORRUPT`), decodes as a format other than
+            the one it signed itself with
+            (:attr:`RejectionReason.DISGUISED_PAYLOAD`), or declares more pixels
+            than the ceiling allows (:attr:`RejectionReason.TOO_MANY_PIXELS`).
     """
     try:
-        with Image.open(BytesIO(data)) as image:
+        # Pillow warns rather than raises between its own ceiling and twice it,
+        # so the warning is promoted to an exception for the length of the open.
+        # `catch_warnings` arms it on entry, because `Image.open` is evaluated
+        # before any statement inside the block would run.
+        with (
+            warnings.catch_warnings(
+                action="error", category=Image.DecompressionBombWarning
+            ),
+            Image.open(BytesIO(data)) as image,
+        ):
             width, height = image.size
             decoded_format = image.format
-    except Image.DecompressionBombError as error:
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
         # Pillow's own backstop, which fires before ours can when a header
         # claims something absurd. Same verdict, reached earlier.
         raise rejection(RejectionReason.TOO_MANY_PIXELS, limits) from error
-    except (UnidentifiedImageError, OSError, ValueError, SyntaxError) as error:
+    except (
+        UnidentifiedImageError,
+        OSError,
+        ValueError,
+        SyntaxError,
+        struct.error,
+    ) as error:
         # A signature glued onto something else lands here, as does a photo
         # whose upload was cut short.
         raise rejection(RejectionReason.CORRUPT, limits) from error
 
     # The signature and the decoder must agree. They can disagree when a file
     # carries a valid signature for one format and a body that Pillow resolves
-    # as another, which is the polyglot case -- and a file that is two formats
-    # at once is not a photograph anybody took.
+    # as another, which is the polyglot case. That is the one verdict here
+    # reached by reading the content rather than by measuring it, so it refuses
+    # on the neutral line rather than describing what it found.
     if decoded_format != SUPPORTED_MEDIA_TYPES[media_type]:
-        raise rejection(RejectionReason.CORRUPT, limits)
+        raise rejection(RejectionReason.DISGUISED_PAYLOAD, limits)
 
     if width <= 0 or height <= 0:
         raise rejection(RejectionReason.CORRUPT, limits)

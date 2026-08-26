@@ -13,6 +13,9 @@ Ceiling                     Why it exists
                                      40000 and ask for 6 GB of RAM.
 :attr:`~UploadLimits.max_edge`       The model's working resolution. Anything
                                      larger is paid for and thrown away.
+:attr:`~UploadLimits.max_seconds`    Bounds the *read*, which no byte ceiling
+                                     does -- a body delivered one byte a second
+                                     is under every size limit forever.
 =========================== ===================================================
 
 The media-type allowlist is the third: :data:`SUPPORTED_MEDIA_TYPES` is what the
@@ -55,6 +58,17 @@ burrito bowl does not become more legible above a thousand pixels.
 DEFAULT_JPEG_QUALITY = 85
 """High enough that re-encoding is invisible, low enough that the blob is small."""
 
+DEFAULT_MAX_SECONDS = 30.0
+"""How long one upload may spend arriving, from the first read to the last.
+
+The ceiling a byte limit cannot express, in the other direction from
+:data:`DEFAULT_MAX_PIXELS`. Eight mebibytes delivered at one byte a second is
+under :data:`DEFAULT_MAX_BYTES` for ninety-seven days, and a few hundred
+connections doing that is the whole worker pool. Thirty seconds is roughly ten
+times what an 8 MB upload takes on a bad mobile connection, so it refuses the
+attack and not the visitor.
+"""
+
 _ENV_PREFIX = "CHIP_CHAT_"
 
 SUPPORTED_MEDIA_TYPES: Mapping[str, str] = MappingProxyType(
@@ -82,6 +96,13 @@ def _positive_int(env: Mapping[str, str], key: str, default: int) -> int:
     return int(raw)
 
 
+def _positive_float(env: Mapping[str, str], key: str, default: float) -> float:
+    raw = env.get(_ENV_PREFIX + key, "").strip()
+    if not raw:
+        return default
+    return float(raw)
+
+
 @dataclass(frozen=True, slots=True)
 class UploadLimits:
     """Every ceiling the upload path enforces, validated on construction."""
@@ -90,6 +111,7 @@ class UploadLimits:
     max_pixels: int = DEFAULT_MAX_PIXELS
     max_edge: int = DEFAULT_MAX_EDGE
     jpeg_quality: int = DEFAULT_JPEG_QUALITY
+    max_seconds: float = DEFAULT_MAX_SECONDS
 
     def __post_init__(self) -> None:
         """Refuse a configuration that would not actually bound anything.
@@ -98,10 +120,11 @@ class UploadLimits:
             ValueError: If any ceiling is not positive, or the JPEG quality is
                 outside the 1-95 range Pillow treats as meaningful.
         """
-        positive = {
+        positive: dict[str, float] = {
             "max_bytes": self.max_bytes,
             "max_pixels": self.max_pixels,
             "max_edge": self.max_edge,
+            "max_seconds": self.max_seconds,
         }
         for name, value in positive.items():
             if value <= 0:
@@ -117,8 +140,8 @@ class UploadLimits:
         """Build limits from the environment.
 
         Reads ``CHIP_CHAT_UPLOAD_MAX_BYTES``, ``CHIP_CHAT_UPLOAD_MAX_PIXELS``,
-        ``CHIP_CHAT_UPLOAD_MAX_EDGE`` and ``CHIP_CHAT_UPLOAD_JPEG_QUALITY``.
-        Every one is optional.
+        ``CHIP_CHAT_UPLOAD_MAX_EDGE``, ``CHIP_CHAT_UPLOAD_JPEG_QUALITY`` and
+        ``CHIP_CHAT_UPLOAD_MAX_SECONDS``. Every one is optional.
 
         Args:
             env: Environment mapping to read; defaults to :data:`os.environ`.
@@ -136,5 +159,8 @@ class UploadLimits:
             max_edge=_positive_int(source, "UPLOAD_MAX_EDGE", DEFAULT_MAX_EDGE),
             jpeg_quality=_positive_int(
                 source, "UPLOAD_JPEG_QUALITY", DEFAULT_JPEG_QUALITY
+            ),
+            max_seconds=_positive_float(
+                source, "UPLOAD_MAX_SECONDS", DEFAULT_MAX_SECONDS
             ),
         )

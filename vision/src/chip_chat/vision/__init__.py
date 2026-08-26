@@ -6,10 +6,13 @@ model; SKU resolution happens after inference so no model output is trusted as
 a product identifier. What lives here today is stages 1 to 4 -- the whole path
 from a hostile upload to a structured description nothing downstream has to
 trust as a product identifier:
+a product identifier. What lives here today is everything that happens
+before a model is involved at all:
 
 =========== ================================================= ==================
 Stage       What it does                                      Where
 =========== ================================================= ==================
+0 Read      Byte ceiling and deadline, while it arrives       ``reader``
 1 Validate  Size, magic bytes, allowlist, pixel ceiling       ``validate``
 2 Normalize Strip metadata, re-encode, downscale              ``normalize``
 3 Moderate  Content Safety, then the write                    ``moderation``
@@ -23,6 +26,9 @@ are written to be the boring part: no inference, one entry point, and an order
 it cannot be run out of. The fourth is the one that involves a model, and it is
 arranged so that the model's answer cannot become a product name -- see
 :mod:`chip_chat.vision.describe`.
+Those first four are what decides whether a hostile upload ever reaches a model,
+so they are written to be the boring part: no inference, one entry point, and an
+order it cannot be run out of.
 
 .. code-block:: python
 
@@ -32,6 +38,7 @@ arranged so that the model's answer cannot become a product name -- see
         ImageModerator,
         PhotoIntake,
         UploadRejectedError,
+        read_upload_async,
     )
 
     intake = PhotoIntake(
@@ -39,13 +46,18 @@ arranged so that the model's answer cannot become a product name -- see
         moderator=ImageModerator(analyzer=AzureImageAnalyzer.from_env()),
     )
     try:
+        payload = await read_upload_async(body, declared_length=declared)
         photo = intake.accept(payload, declared_media_type=content_type)
     except UploadRejectedError as refusal:
         return upload_error(refusal.message)
     return uploaded(str(photo.blob_ref), photo.retention_notice)
 
-Three properties hold the rest of the design up, and each is easy to undo by
+Four properties hold the rest of the design up, and each is easy to undo by
 accident:
+
+**Nothing is read unbounded.** The ceiling is enforced while the body arrives,
+not after it is in memory, and the read carries a deadline as well as a size.
+See :mod:`chip_chat.vision.reader`.
 
 **The declared content type is never trusted.** It is attacker-controlled. What
 a file is, is decided from its bytes. See :mod:`chip_chat.vision.validate`.
@@ -107,6 +119,13 @@ from chip_chat.vision.moderation import (
     SafetyCategory,
 )
 from chip_chat.vision.normalize import NORMALIZED_MEDIA_TYPE, NormalizedImage, normalize
+from chip_chat.vision.reader import (
+    AsyncByteStream,
+    ByteStream,
+    content_length,
+    read_upload,
+    read_upload_async,
+)
 from chip_chat.vision.retention import (
     RETENTION_CEILING_HOURS,
     RETENTION_NOTICE,
@@ -138,12 +157,14 @@ __all__ = [
     "SEVERITY_LEVELS",
     "SUPPORTED_MEDIA_TYPES",
     "SYSTEM_PROMPT",
+    "AsyncByteStream",
     "AzureBlobStore",
     "AzureImageAnalyzer",
     "AzureVisionModel",
     "BlobReader",
     "BlobRef",
     "BlobStore",
+    "ByteStream",
     "ConfidenceProfile",
     "DescribeError",
     "DescribeUnavailableError",
@@ -172,7 +193,10 @@ __all__ = [
     "__version__",
     "blob_name",
     "confidence_profile",
+    "content_length",
     "normalize",
+    "read_upload",
+    "read_upload_async",
     "service_name",
     "sniff",
     "validate",

@@ -28,6 +28,36 @@ They are evaluated in that order. The reasons are a schema — they land on
 `chip_chat.guard.reason` and Phase 9's evaluations group on them — so they are
 stable tokens rather than sentences.
 
+## Uploads get their own ceiling underneath
+
+Added by [#80](https://github.com/gganssle/chip_chat/issues/80). The layers above
+are sized for typing — twenty requests a minute, because a person cannot type
+faster. An upload is not typing: one accepted photograph is a Content Safety
+call, a blob write with a forty-eight hour retention obligation, and a vision
+completion. Twenty of *those* a minute is not a fast typist, it is an invoice.
+So `uploads.py` counts uploads separately, and counts them twice:
+
+| Ceiling | Default | What it stops |
+| --- | --- | --- |
+| Per session | 5 per 5 min | One conversation uploading in a loop. |
+| Per source address | 10 per 5 min | The same loop with a fresh session per upload, which costs an attacker nothing. |
+
+Both are sliding windows, both refuse with `upload_rate_limit` and the ordinary
+stop state, and **neither refusal says which one it was** — told "your session is
+out", an uploader mints a session. Which ceiling fired is on
+`guard.budget_check`, in `metadata`, where the operator reads it. It is in
+metadata rather than on `chip_chat.budget.tokens_used` because uploads are
+counted in uploads: putting them on the token attributes would make every budget
+dashboard read a photograph as spend.
+
+Uploads count against the **budget** as well as against the rate limits, and the
+two are different defences — the limit bounds how often, the budget bounds how
+much. `TurnBudget.record_upload()` charges `CHIP_CHAT_UPLOAD_TOKEN_CHARGE` at
+acceptance, because the vision call an accepted photograph implies is spend that
+has already been committed to. It is the ledger's reserve-then-settle argument
+one level up: `record_usage` replaces the estimate with what the model really
+billed.
+
 ## Reserve, then settle
 
 The check has to decide *before* the model answers, and what the turn will cost
@@ -59,6 +89,13 @@ with chat_turn(session_id=sid, turn_index=n, message=text) as turn:
         if not budget.allowed:
             turn.record_output(budget.message)
             return stop_state_response(budget.message)  # 200, not an error
+        if photo_attached:
+            # Before the body is read: a refusal here has to cost the socket
+            # and nothing else, which it cannot do once the bytes have arrived.
+            if (stop := guard.upload(session_id=sid, source_address=ip)) is not None:
+                return stop_state_response(stop.message)
+            photo = await intake.accept_stream(upload_file)
+            budget.record_upload()
         reply = agent.run(text)
         budget.record_usage(prompt_tokens=p, completion_tokens=c)
 ```
@@ -85,6 +122,10 @@ Every ceiling is an environment variable, all optional, all defaulted small:
 | `CHIP_CHAT_SESSION_TOKEN_CAP` | `120000` |
 | `CHIP_CHAT_SOURCE_REQUESTS_PER_WINDOW` | `20` |
 | `CHIP_CHAT_SOURCE_WINDOW_SECONDS` | `60` |
+| `CHIP_CHAT_SESSION_UPLOADS_PER_WINDOW` | `5` |
+| `CHIP_CHAT_SOURCE_UPLOADS_PER_WINDOW` | `10` |
+| `CHIP_CHAT_UPLOAD_WINDOW_SECONDS` | `300` |
+| `CHIP_CHAT_UPLOAD_TOKEN_CHARGE` | `1500` |
 | `CHIP_CHAT_TURN_TOKEN_RESERVATION` | `8000` |
 | `CHIP_CHAT_BUDGET_RESET_TIMEZONE` | `UTC` |
 | `CHIP_CHAT_KILL_SWITCH` | unset |
@@ -128,9 +169,9 @@ one being traded for the other.
 ## What is not here yet
 
 The counters are process-local, which is honest for the single-instance
-deployment this demo runs on. `BudgetLedger` and `SourceRateLimiter` keep their
-state behind one lock and one interface so that a shared store has exactly two
-places to land when a second instance exists.
+deployment this demo runs on. `BudgetLedger`, `SourceRateLimiter` and
+`UploadLimiter` keep their state behind one lock and one interface so that a
+shared store has exactly three places to land when a second instance exists.
 
 Issue #85 trips the ceiling against the real deployment. `SpendLimits.from_env`
 is how that is done without a code change.
