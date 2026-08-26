@@ -23,6 +23,7 @@ from openinference.semconv.trace import (
     DocumentAttributes,
     ImageAttributes,
     MessageAttributes,
+    MessageContentAttributes,
     OpenInferenceMimeTypeValues,
     OpenInferenceSpanKindValues,
     SpanAttributes,
@@ -37,6 +38,7 @@ __all__ = [
     "GuardOutcome",
     "ImageAttributes",
     "MessageAttributes",
+    "MessageContentAttributes",
     "OpenInferenceMimeTypeValues",
     "OpenInferenceSpanKindValues",
     "SpanAttributes",
@@ -84,6 +86,25 @@ class ChipChatAttributes:
     the identity stamped on every span. An Arize experiment attributes a score
     change to a specific prompt by grouping on this, so the value has to change
     whenever the text does -- see :func:`chip_chat.agent.prompt.load`.
+    """
+
+    TOKENS_PROMPT: Final = "chip_chat.tokens.prompt"
+    TOKENS_COMPLETION: Final = "chip_chat.tokens.completion"
+    TOKENS_TOTAL: Final = "chip_chat.tokens.total"
+    """Rolled-up token counts for a span that *contains* model calls.
+
+    Deliberately not OpenInference's ``llm.token_count.*``, and the distinction
+    is load-bearing rather than stylistic. Every actual model call carries the
+    OpenInference keys, so "sum ``llm.token_count.*`` across the trace" is
+    exactly the provider's reported usage for the turn -- which is the property
+    #64 asks to be verifiable and :func:`chip_chat.otel.testing.assert_token_counts_sum`
+    verifies. A rollup written under the same keys would double-count every
+    ancestor and quietly make that sum meaningless.
+
+    The rollups exist because Application Insights searches attributes and does
+    not walk trace trees: "what did this conversation cost" and "what does the
+    photo lane cost per call" are one attribute lookup with them, and a
+    tree-walk without them.
     """
 
     GUARD_OUTCOME: Final = "chip_chat.guard.outcome"

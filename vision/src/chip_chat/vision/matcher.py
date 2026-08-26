@@ -119,6 +119,7 @@ from chip_chat.catalog.records import (
 )
 from chip_chat.otel import ToolName, agent_step, matcher_resolve, tool_call
 from chip_chat.vision.describe import DescribedMeal, SlotValue
+from chip_chat.vision.store import PHOTO_REF_ARGUMENT
 
 __all__ = [
     "ENV_PREFIX",
@@ -725,7 +726,7 @@ class MealMatcher:
         Raises:
             CatalogueDriftError: As :meth:`resolve`.
         """
-        arguments = {} if image_ref is None else {"image_ref": image_ref}
+        arguments = {} if image_ref is None else {PHOTO_REF_ARGUMENT: image_ref}
         with (
             agent_step(index=step),
             tool_call(ToolName.MATCH_MEAL_FROM_PHOTO, arguments=arguments),

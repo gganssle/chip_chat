@@ -56,9 +56,12 @@ from chip_chat.catalog.records import (
     Slot,
     VocabularyTerm,
 )
-from chip_chat.otel import ToolName, agent_step, tool_call
+from chip_chat.otel import TokenUsage, ToolName, agent_step, tool_call
+from chip_chat.vision.describe import MealDescriber, VisionAnswer
+from chip_chat.vision.lane import PhotoLane
+from chip_chat.vision.matcher import MealMatcher
 from chip_chat.vision.moderation import ModerationUnavailableError, SafetyCategory
-from chip_chat.vision.store import BlobRef
+from chip_chat.vision.store import PHOTO_REF_ARGUMENT, BlobRef
 from chip_chat.vision.vocabulary import Vocabulary
 
 __all__ = [
@@ -72,6 +75,8 @@ __all__ = [
     "PDF_DOCUMENT",
     "REFERENCE_RESTAURANT",
     "SHELL_SCRIPT",
+    "STUB_PHOTO_REF",
+    "STUB_VISION_USAGE",
     "SVG_WITH_SCRIPT",
     "XMP_LOCATION_MARKER",
     "ZIP_ARCHIVE",
@@ -87,6 +92,7 @@ __all__ = [
     "jpeg_signed_but_not_jpeg",
     "jpeg_with_appended_archive",
     "menu_catalog",
+    "photo_lane",
     "photo_tool_call",
     "photo_with_location",
     "png_declaring",
@@ -560,6 +566,16 @@ def generated_vocabulary(
     )
 
 
+STUB_VISION_USAGE = TokenUsage(prompt_tokens=274, completion_tokens=91)
+"""What :class:`StubVisionModel` says a description cost, by default.
+
+The prompt count is large next to the text because an image is: the photo lane
+is the expensive one, and a fixture that pretended otherwise would make the cost
+dashboard look right in tests and wrong in production. The two numbers are
+distinct and neither is round, so a test asserting on them cannot pass by
+reading the wrong field.
+"""
+
 DESCRIBED_MEAL: Mapping[str, Any] = {
     "is_chipotle_style": True,
     "vessel": {"value": "bowl", "confidence": 0.94},
@@ -604,6 +620,15 @@ class StubVisionModel:
     error: Exception | None = None
     """Raise this instead of answering -- the outage stage 4 must decline on."""
 
+    usage: TokenUsage | None = STUB_VISION_USAGE
+    """What this stub claims the call cost.
+
+    Answers by default, because a real deployment does and a test that never
+    saw a token count could not notice ``vision.describe`` losing it. Set it to
+    ``None`` for the other case -- a provider that reports no usage -- which is
+    equally real and must leave the span honestly bare rather than zeroed.
+    """
+
     calls: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -618,7 +643,7 @@ class StubVisionModel:
         response_format: Mapping[str, Any],
         system_prompt: str,
         user_prompt: str,
-    ) -> str:
+    ) -> VisionAnswer:
         self.calls.append(
             {
                 "image": image,
@@ -630,7 +655,90 @@ class StubVisionModel:
         )
         if self.error is not None:
             raise self.error
-        return self.response or ""
+        return VisionAnswer(content=self.response or "", usage=self.usage)
+
+
+CONFIDENT_MEAL: Mapping[str, Any] = {
+    **DESCRIBED_MEAL,
+    "protein": {"value": "chicken", "confidence": 0.96},
+    "rice": {"value": "white_rice", "confidence": 0.93},
+    "beans": {"value": "black_beans", "confidence": 0.91},
+    "salsas": [{"value": "fresh_tomato_salsa", "confidence": 0.9}],
+    "toppings": [
+        {"value": "cheese", "confidence": 0.92},
+        {"value": "guacamole", "confidence": 0.95},
+    ],
+}
+"""The same meal as :data:`DESCRIBED_MEAL`, believed rather than doubted.
+
+:data:`DESCRIBED_MEAL`'s confidences are spread across the floors on purpose --
+that is what makes the calibration and escalation tests mean something -- which
+also means it resolves to a *question* rather than to a draft. A test about the
+span tree of a resolved photo turn wants the other case, and saying which one it
+wants is better than a fixture that quietly does both jobs badly.
+"""
+
+STUB_PHOTO_REF = BlobRef(container="uploads", name="2026-01-01/a-photograph.jpg")
+"""The photograph :func:`photo_lane` stores, and the ref a test passes back in.
+
+A ``container/name`` key, which is the only form that ever crosses a tool
+boundary -- RFC-001 section 07, and the reason the tool span may record its
+arguments verbatim."""
+
+
+def photo_lane(
+    *,
+    model: "StubVisionModel | None" = None,
+    terms: Mapping[str, Sequence[str]] | None = None,
+    restaurant_id: int | None = None,
+) -> tuple[PhotoLane, InMemoryBlobStore]:
+    """Build a whole photo lane out of doubles, with a photograph already in it.
+
+    Both stages, from one vocabulary and one catalogue built from the same terms
+    -- which matters, because stage 5 checks the build stage 4 was constrained
+    to and two fixtures assembled independently would drift apart and raise.
+
+    Ships here rather than in a ``tests`` directory because the agent's tool and
+    the API's request path both need a lane to drive, and neither can import
+    the other's fixtures.
+
+    Args:
+        model: The stage-4 double. Defaults to one answering
+            :data:`CONFIDENT_MEAL` and reporting :data:`STUB_VISION_USAGE`, so
+            that a lane run end to end resolves to catalogue rows rather than
+            to a clarification -- see :data:`CONFIDENT_MEAL`.
+        terms: The vocabulary and catalogue to build. Defaults to
+            :data:`DEFAULT_TERMS`.
+        restaurant_id: Whose prices to quote. Defaults to the catalogue's
+            reference restaurant.
+
+    Returns:
+        The lane, and the store holding :data:`STUB_PHOTO_REF` -- returned so a
+        test can take the photograph away again and watch the lane decline.
+    """
+    images = InMemoryBlobStore(container=STUB_PHOTO_REF.container)
+    images.put(STUB_PHOTO_REF.name, solid_image(fmt="JPEG"), content_type="image/jpeg")
+    # One build, not two. Stage 5 checks the catalogue build stage 4 was
+    # constrained to, so a vocabulary stamped with the fixture default and a
+    # catalogue that computed its own digest would raise `CatalogueDriftError`
+    # before any of this got as far as a span.
+    catalog = menu_catalog(terms)
+    return (
+        PhotoLane(
+            MealDescriber(
+                model
+                if model is not None
+                else StubVisionModel(response=json.dumps(CONFIDENT_MEAL)),
+                images=images,
+                vocabulary=generated_vocabulary(
+                    terms, content_version=catalog.content_version()
+                ),
+            ),
+            MealMatcher(catalog),
+            restaurant_id=restaurant_id,
+        ),
+        images,
+    )
 
 
 @contextmanager
@@ -654,7 +762,10 @@ def photo_tool_call(ref: BlobRef | str, *, step: int = 0) -> Iterator[None]:
     """
     with (
         agent_step(index=step),
-        tool_call(ToolName.MATCH_MEAL_FROM_PHOTO, arguments={"image_ref": str(ref)}),
+        tool_call(
+            ToolName.MATCH_MEAL_FROM_PHOTO,
+            arguments={PHOTO_REF_ARGUMENT: str(ref)},
+        ),
     ):
         yield
 

@@ -449,6 +449,7 @@ dependencies = [
     { name = "azure-identity" },
     { name = "azure-storage-blob" },
     { name = "chip-chat-otel" },
+    { name = "chip-chat-vision" },
     { name = "openai" },
 ]
 
@@ -457,6 +458,7 @@ requires-dist = [
     { name = "azure-identity", specifier = ">=1.19" },
     { name = "azure-storage-blob", specifier = ">=12.24" },
     { name = "chip-chat-otel", editable = "otel" },
+    { name = "chip-chat-vision", editable = "vision" },
     { name = "openai", specifier = ">=1.60" },
 ]
 
@@ -468,6 +470,7 @@ dependencies = [
     { name = "chip-chat-agent" },
     { name = "chip-chat-catalog" },
     { name = "chip-chat-otel" },
+    { name = "chip-chat-vision" },
     { name = "chip-chat-web" },
     { name = "fastapi" },
     { name = "uvicorn", extra = ["standard"] },
@@ -478,6 +481,7 @@ requires-dist = [
     { name = "chip-chat-agent", editable = "agent" },
     { name = "chip-chat-catalog", editable = "catalog" },
     { name = "chip-chat-otel", editable = "otel" },
+    { name = "chip-chat-vision", editable = "vision" },
     { name = "chip-chat-web", editable = "web" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },

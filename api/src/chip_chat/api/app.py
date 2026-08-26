@@ -53,6 +53,7 @@ from pydantic import BaseModel, Field
 
 from chip_chat.agent import ACCOUNT, AzureChatModel, FoundryConfig
 from chip_chat.agent.loop import PROMPT_VERSION, Conversation
+from chip_chat.agent.tools import offered_tools
 from chip_chat.api.guard import SpendGuard
 from chip_chat.api.killswitch import (
     CachedKillSwitch,
@@ -65,11 +66,14 @@ from chip_chat.api.outcome import Stop
 from chip_chat.api.turns import SpendGate
 from chip_chat.otel import (
     TelemetryConfig,
+    TokenUsage,
+    ToolName,
     chat_turn,
     configure_tracing,
     render_response,
     shutdown_tracing,
 )
+from chip_chat.vision.lane import PhotoLane
 from chip_chat.web import chat_page, stop_page
 
 __all__ = [
@@ -154,15 +158,30 @@ class SessionStore:
         self._lock = threading.Lock()
         self._max = max_sessions
 
-    def get(self, session_id: str) -> Conversation:
-        """Return the conversation for ``session_id``, creating it if new."""
+    def get(
+        self, session_id: str, *, tools: tuple[ToolName, ...] | None = None
+    ) -> Conversation:
+        """Return the conversation for ``session_id``, creating it if new.
+
+        Args:
+            session_id: The conversation to fetch.
+            tools: The tools this deployment has registered, which a new
+                conversation's runtime context names. Read from
+                :func:`~chip_chat.agent.tools.offered_tools` at the call site,
+                because whether the photo lane is answerable is a property of
+                the assembled service and not of this store.
+        """
         with self._lock:
             conversation = self._conversations.get(session_id)
             if conversation is None:
                 if len(self._conversations) >= self._max:
                     # Insertion-ordered, so this is the least recently started.
                     self._conversations.pop(next(iter(self._conversations)))
-                conversation = Conversation(session_id=session_id)
+                conversation = (
+                    Conversation(session_id=session_id)
+                    if tools is None
+                    else Conversation(session_id=session_id, tools=tools)
+                )
                 self._conversations[session_id] = conversation
             return conversation
 
@@ -206,18 +225,35 @@ def default_kill_switch() -> CachedKillSwitch:
     )
 
 
-def build_service() -> Service:
+def build_service(lane: PhotoLane | None = None) -> Service:
     """Assemble the real service from the environment.
 
     Every ceiling comes from :meth:`~chip_chat.api.limits.SpendLimits.from_env`
     and every model deployment from
     :meth:`~chip_chat.agent.foundry.FoundryConfig.from_env`, so changing either
     on the Container App is a restart rather than a build.
+
+    Args:
+        lane: The photo lane. **Nothing supplies one yet, and a deployment
+            therefore does not offer** ``match_meal_from_photo`` -- see
+            :func:`~chip_chat.agent.tools.offered_tools` for why that is the
+            honest state rather than a hole. Two things have to exist first: an
+            upload route, since the tool takes a reference to a photograph the
+            visitor uploaded *on this turn* and there is no route that produces
+            one; and a production catalogue loader, which stage 5 needs and
+            which :class:`~chip_chat.api.drafts.DraftStore` needs too. Both are
+            #62 and #66's, and wiring half of it here would offer the model a
+            tool no visitor could ever hand a reference to. The parameter exists
+            so the seam is named rather than discovered.
+
+    Returns:
+        The assembled service.
     """
     return Service(
         gate=SpendGate(
             SpendGuard(SpendLimits.from_env(), kill_switch=default_kill_switch()),
             lambda: AzureChatModel(FoundryConfig.from_env()),
+            lane=lane,
         )
     )
 
@@ -287,7 +323,9 @@ def create_app(service: Service | None = None) -> FastAPI:
         """Run one turn: guard, then agent, then render."""
         session_id = _session_id(request)
         source_address = _source_address(request)
-        conversation = resolved.sessions.get(session_id)
+        conversation = resolved.sessions.get(
+            session_id, tools=offered_tools(lane=resolved.gate.lane)
+        )
         payload = _run_turn(resolved, conversation, body, source_address)
         response = JSONResponse(payload.model_dump())
         _set_session_cookie(response, session_id, secure=_is_https(request))
@@ -341,6 +379,18 @@ def _run_turn(
             _render(turn, message)
             return ChatReply(reply=message)
 
+        # What the whole turn cost, on the root of its trace. The individual
+        # `llm.completion` spans carry the OpenInference counts and are what a
+        # sum reconciles against the provider; this is the same figure under
+        # `chip_chat.tokens.*` so that Application Insights -- which searches
+        # attributes and does not walk trace trees -- can chart cost per
+        # conversation without one. See `ChipChatAttributes.TOKENS_TOTAL`.
+        turn.record_token_rollup(
+            TokenUsage(
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+            )
+        )
         _render(turn, result.reply)
         return ChatReply(
             reply=result.reply,

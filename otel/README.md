@@ -151,6 +151,46 @@ to a specific prompt, and the digest is what makes *specific* true when someone
 edits the text without bumping the revision. See
 `agent/src/chip_chat/agent/prompt.py`.
 
+### Two token vocabularies, and why
+
+**`llm.token_count.*` belongs to model calls.** Every span the schema types as an
+LLM — `llm.completion` *and* `vision.describe` — records the counts the provider
+reported, through `record_usage`. The counts are carried off the response and
+never estimated: a number this package invented would still add up, and the sum
+would mean nothing.
+
+**`chip_chat.tokens.*` belongs to spans that merely contain model calls** —
+`chat.turn`, `agent.step`, `tool.<tool_name>` — through `record_token_rollup`.
+
+Keeping them apart is load-bearing rather than tidy. Sum `llm.token_count.*`
+across a trace and you get exactly what the providers charged for that turn;
+merge the two and every ancestor is counted a second time, the figure silently
+doubles, and nothing about the dashboard looks wrong.
+
+```python
+spans.assert_token_counts_sum(TokenUsage(prompt_tokens=2_436, completion_tokens=192))
+```
+
+is that property in executable form, and it fails on both halves: an LLM span
+that recorded no counts at all, and counts that are present but disagree with
+what the provider said. `api/tests/test_turn_trace.py` runs it over a real turn.
+
+The rollups exist because Application Insights does not walk trace trees. "What
+did this conversation cost" and "what does the photo lane cost per call" are one
+attribute lookup with them and a tree walk without.
+
+### The photograph on `vision.describe`
+
+The image ref rides twice, deliberately. `chip_chat.vision.image_ref` is what an
+operator greps. OpenInference's message-contents layout —
+`llm.input_messages.0.message.contents.0.message_content.image.image.url` — is
+what makes Phoenix and Arize render the span as a vision call with an image
+attached rather than as an LLM span carrying an opaque string. Searchable and
+legible are different jobs.
+
+A **reference** in both places, never the bytes and never a data URI. RFC-001
+section 07; a trace is not an image store.
+
 ### `demo_id` is not an identity input
 
 `demo_id` is the row-level security key inside Snowflake. On a span it is an
@@ -337,8 +377,11 @@ new endpoint is the observation that says so.
 
 No agent, no tools, no product logic. This is the instrumentation library only --
 `smoke.py` and `boundary.py` are fixtures of the schema and not exceptions to
-that. Its real consumers arrive in #16 and #64; #15 put Phoenix in the dev loop
-around it, and #103 added the second process the schema now spans.
+that. #15 put Phoenix in the dev loop around it, #103 added the second process
+the schema now spans, and #64 wired the whole of it through the real agent --
+which is where the token vocabularies above and the multimodal photo span came
+from, and where `api/tests/test_turn_trace.py` began asserting that the
+application emits this tree rather than that the tree can be emitted.
 
 `boundary.py` is the one file here that will shell out, and only when
 `--agent-command` asks it to: that is how the demo runs the *real* agent

@@ -29,8 +29,15 @@ from chip_chat.agent.hardcoded import ACCOUNT, MENU, SIMULATION_NOTICE, STORE
 from chip_chat.agent.model import ChatModel, ModelReply
 from chip_chat.agent.orders import OrderDesk
 from chip_chat.agent.prompt import load
-from chip_chat.agent.tools import TOOL_SCHEMAS, TOOLS, dispatch
-from chip_chat.otel import Message, ToolName, agent_step, llm_completion
+from chip_chat.agent.tools import TOOLS, dispatch, offered_schemas, offered_tools
+from chip_chat.otel import (
+    Message,
+    TokenUsage,
+    ToolName,
+    agent_step,
+    llm_completion,
+)
+from chip_chat.vision.lane import PhotoLane
 
 __all__ = [
     "CONFIRMATION_NOTE",
@@ -39,8 +46,10 @@ __all__ = [
     "RUNTIME_CONTEXT",
     "SYSTEM_PROMPT",
     "Conversation",
+    "ToolRegistrationError",
     "TurnResult",
     "run_turn",
+    "runtime_context",
 ]
 
 DEFAULT_MAX_STEPS = 5
@@ -92,7 +101,28 @@ An eval experiment swaps the first and holds the second."""
 PROMPT_VERSION = load().version
 """What ``chat.turn`` records. See :mod:`chip_chat.agent.prompt`."""
 
-RUNTIME_CONTEXT = f"""\
+
+def runtime_context(tools: Sequence[ToolName] = TOOLS) -> str:
+    """What is true today, as opposed to how the assistant behaves.
+
+    Deliberately a separate message rather than an f-string spliced into the
+    prompt. Splicing would make the prompt digest a function of the menu and the
+    persona, and a version that changes when a visitor changes is not a version.
+
+    A function rather than a constant because the registered tool list is not
+    the same in every deployment: ``match_meal_from_photo`` is answerable only
+    where a photo lane was wired. Telling the model a tool is registered when
+    nothing can answer it, or withholding one that is, are both worse than
+    either being consistently true -- see
+    :func:`~chip_chat.agent.tools.offered_tools`.
+
+    Args:
+        tools: The tools actually registered for this deployment.
+
+    Returns:
+        The second system message a conversation opens with.
+    """
+    return f"""\
 Facts about this turn. These change; the instructions above do not.
 
 The visitor is signed in as {ACCOUNT.display_name}, a rewards member at the
@@ -106,7 +136,7 @@ exists:
 
 If search_menu_knowledge returns nothing, say the menu is only these items.
 
-The tools registered right now are: {", ".join(name.value for name in TOOLS)}.
+The tools registered right now are: {", ".join(name.value for name in tools)}.
 Any lane above whose tool is not on that list is not available on this turn --
 say so plainly rather than improvising an answer or reaching for another tool.
 There is no retrieval corpus behind this menu yet, so answer menu questions from
@@ -115,11 +145,10 @@ what search_menu_knowledge returns and leave the citations field empty.
 {SIMULATION_NOTICE} Say so whenever an order is placed.
 
 Keep replies to a few sentences. Plain text, no markdown."""
-"""What is true today, as opposed to how the assistant behaves.
 
-Deliberately a separate message rather than an f-string spliced into the prompt.
-Splicing would make the prompt digest a function of the menu and the persona,
-and a version that changes when a visitor changes is not a version."""
+
+RUNTIME_CONTEXT = runtime_context()
+"""The runtime context of a deployment with no photo lane wired."""
 
 
 @dataclass(slots=True)
@@ -134,11 +163,18 @@ class Conversation:
     session_id: str
     messages: list[dict[str, Any]] = field(default_factory=list)
     turn_index: int = 0
+    tools: tuple[ToolName, ...] = TOOLS
+    """The tools registered for this deployment, as the runtime context names
+    them. Set from :func:`~chip_chat.agent.tools.offered_tools`, which is what
+    :func:`run_turn` checks it against -- a conversation told one list while the
+    model is offered another is a wiring fault, and a silent one."""
 
     def __post_init__(self) -> None:
         if not self.messages:
             self.messages.append({"role": "system", "content": SYSTEM_PROMPT})
-            self.messages.append({"role": "system", "content": RUNTIME_CONTEXT})
+            self.messages.append(
+                {"role": "system", "content": runtime_context(self.tools)}
+            )
 
     def next_turn_index(self) -> int:
         """Return this turn's index and move the counter on."""
@@ -168,6 +204,15 @@ class TurnResult:
         return self.prompt_tokens + self.completion_tokens
 
 
+class ToolRegistrationError(RuntimeError):
+    """A turn was run with a tool set the conversation was not opened for.
+
+    Always a programming error: it means the runtime context the model is
+    reading and the tool definitions it is being offered disagree about what
+    exists, which is a discrepancy no prompt can recover from.
+    """
+
+
 _FALLBACK_REPLY = "I got a bit tangled there -- could you ask me that again, more simply?"
 """What the visitor sees when the loop hits its step ceiling.
 
@@ -181,6 +226,7 @@ def run_turn(
     *,
     model: ChatModel,
     desk: OrderDesk,
+    lane: PhotoLane | None = None,
     confirmed_draft_id: str | None = None,
     max_steps: int = DEFAULT_MAX_STEPS,
 ) -> TurnResult:
@@ -193,6 +239,10 @@ def run_turn(
         message: What the visitor said.
         model: The chat model to call.
         desk: The order desk holding this session's drafts.
+        lane: The photo lane, where one is wired. ``None`` means the model is
+            not offered ``match_meal_from_photo`` at all -- see
+            :func:`~chip_chat.agent.tools.offered_tools` for why an unanswerable
+            tool definition is worse than an absent one.
         confirmed_draft_id: A draft the desk has *already* confirmed. The model
             is told, because it cannot see the button. See
             :data:`CONFIRMATION_NOTE` for why telling it is not the same as
@@ -202,7 +252,22 @@ def run_turn(
 
     Returns:
         The reply, the tokens it cost across every round trip, and any card.
+
+    Raises:
+        ToolRegistrationError: If ``conversation`` was opened believing a
+            different set of tools was registered than ``lane`` implies.
     """
+    offered = offered_tools(lane=lane)
+    if tuple(conversation.tools) != offered:
+        # The runtime context is written once, when the conversation opens, and
+        # names the registered tools. A lane wired after that -- or a
+        # conversation built without one and then run with one -- would leave
+        # the model told one thing and offered another, and the symptom would be
+        # a model politely declining a lane it can in fact reach.
+        raise ToolRegistrationError(
+            f"the conversation was opened with {[t.value for t in conversation.tools]} "
+            f"registered, but this turn offers {[t.value for t in offered]}"
+        )
     if confirmed_draft_id:
         conversation.messages.append(
             {
@@ -216,15 +281,26 @@ def run_turn(
     card: Mapping[str, Any] | None = None
     receipt = False
 
+    schemas = offered_schemas(lane=lane)
+
     for step_index in range(max_steps):
         with agent_step(index=step_index) as step:
-            reply = _complete(model, conversation.messages, is_first=step_index == 0)
-            prompt_tokens += reply.prompt_tokens
-            completion_tokens += reply.completion_tokens
+            reply = _complete(
+                model, conversation.messages, schemas, is_first=step_index == 0
+            )
+            # This step's own model call, plus whatever its tools spend on model
+            # calls of their own. A tool that calls a model -- the photo lane
+            # does, stage 4 is a vision completion -- bills tokens as real as
+            # the agent's, and a step total that stopped at the agent's would
+            # make every downstream figure wrong by exactly the lane.
+            spent = _spent(reply)
             conversation.messages.append(_assistant_message(reply))
 
             if not reply.tool_calls:
                 step.record_output(reply.content or "")
+                step.record_token_rollup(spent)
+                prompt_tokens += spent.prompt_tokens
+                completion_tokens += spent.completion_tokens
                 return TurnResult(
                     reply=(reply.content or "").strip() or _FALLBACK_REPLY,
                     prompt_tokens=prompt_tokens,
@@ -235,9 +311,16 @@ def run_turn(
                 )
 
             for invocation in reply.tool_calls:
+                lane_spend: list[TokenUsage] = []
                 result = dispatch(
-                    invocation, session_id=conversation.session_id, desk=desk
+                    invocation,
+                    session_id=conversation.session_id,
+                    desk=desk,
+                    lane=lane,
+                    record_spend=lane_spend.append,
                 )
+                for usage in lane_spend:
+                    spent = spent + usage
                 conversation.messages.append(
                     {
                         "role": "tool",
@@ -251,6 +334,10 @@ def run_turn(
             step.record_output(
                 "called " + ", ".join(call.name for call in reply.tool_calls)
             )
+            # After the tools, so the step's rollup covers its whole subtree.
+            step.record_token_rollup(spent)
+            prompt_tokens += spent.prompt_tokens
+            completion_tokens += spent.completion_tokens
 
     return TurnResult(
         reply=_FALLBACK_REPLY,
@@ -262,8 +349,19 @@ def run_turn(
     )
 
 
+def _spent(reply: ModelReply) -> TokenUsage:
+    """What one round trip's model call cost, as the provider reported it."""
+    return TokenUsage(
+        prompt_tokens=reply.prompt_tokens, completion_tokens=reply.completion_tokens
+    )
+
+
 def _complete(
-    model: ChatModel, messages: Sequence[Mapping[str, Any]], *, is_first: bool
+    model: ChatModel,
+    messages: Sequence[Mapping[str, Any]],
+    schemas: Sequence[Mapping[str, Any]],
+    *,
+    is_first: bool,
 ) -> ModelReply:
     """One ``llm.completion``, with everything the span schema wants on it."""
     with llm_completion(
@@ -273,9 +371,9 @@ def _complete(
             # Once per turn, not once per step: the tool definitions are the
             # same on every round trip, and repeating them would triple the
             # size of a trace to say the same thing three times.
-            recorder.record_tools(TOOL_SCHEMAS)
+            recorder.record_tools(schemas)
         recorder.record_input_messages(_as_messages(messages))
-        reply = model.complete(messages, tools=TOOL_SCHEMAS)
+        reply = model.complete(messages, tools=schemas)
         recorder.record_usage(
             prompt_tokens=reply.prompt_tokens,
             completion_tokens=reply.completion_tokens,

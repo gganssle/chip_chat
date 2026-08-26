@@ -34,7 +34,7 @@ from chip_chat.vision.describe import (
     confidence_profile,
 )
 from chip_chat.vision.normalize import NORMALIZED_MEDIA_TYPE
-from chip_chat.vision.store import BlobRef
+from chip_chat.vision.store import PHOTO_REF_ARGUMENT, BlobRef
 from chip_chat.vision.testing import (
     DESCRIBED_MEAL,
     InMemoryBlobStore,
@@ -570,4 +570,4 @@ def test_the_tool_span_records_the_ref_and_only_the_ref(
     arguments = json.loads(
         str(spans.attributes_of("tool.match_meal_from_photo")["input.value"])
     )
-    assert arguments == {"image_ref": str(REF)}
+    assert arguments == {PHOTO_REF_ARGUMENT: str(REF)}

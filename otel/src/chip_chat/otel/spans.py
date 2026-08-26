@@ -37,7 +37,9 @@ from typing import Any, Final
 
 from openinference.semconv.trace import (
     DocumentAttributes,
+    ImageAttributes,
     MessageAttributes,
+    MessageContentAttributes,
     OpenInferenceMimeTypeValues,
     SpanAttributes,
     ToolAttributes,
@@ -74,6 +76,7 @@ __all__ = [
     "RenderRecorder",
     "RetrieverRecorder",
     "SpanSchemaError",
+    "TokenUsage",
     "ToolRecorder",
     "TurnIdentity",
     "TurnRecorder",
@@ -254,6 +257,48 @@ class Document:
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class TokenUsage:
+    """What one model call cost, as the provider reported it.
+
+    Carried rather than derived. A count this package estimated would still add
+    up, and the sum would mean nothing -- #64 asks that the token counts on the
+    spans reconcile against *the provider's* usage, which only holds if every
+    number came off a response.
+    """
+
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int | None = None
+    """What the provider called the total. ``None`` means "it did not say", and
+    the sum of the other two stands in -- never a silent correction of a total
+    the provider did report, because a provider that counts reasoning or cached
+    tokens separately is reporting a total that is deliberately not the sum."""
+
+    @property
+    def total(self) -> int:
+        """The total to record: the provider's if it gave one, else the sum."""
+        if self.total_tokens is not None:
+            return self.total_tokens
+        return self.prompt_tokens + self.completion_tokens
+
+    def __add__(self, other: "TokenUsage") -> "TokenUsage":
+        """Roll two calls up into one, for a tool or a turn that made several.
+
+        ``total_tokens`` stays ``None`` when neither side reported one, because
+        the sum of two sums is the sum: materialising it would make ``x +
+        TokenUsage(0, 0)`` unequal to ``x`` under dataclass equality, and every
+        test comparing a measured total against a hand-written one would have
+        to spell out a field it did not care about.
+        """
+        neither_reported = self.total_tokens is None and other.total_tokens is None
+        return TokenUsage(
+            prompt_tokens=self.prompt_tokens + other.prompt_tokens,
+            completion_tokens=self.completion_tokens + other.completion_tokens,
+            total_tokens=None if neither_reported else self.total + other.total,
+        )
+
+
 class _Recorder:
     """Shared behaviour: metadata, tags, and marking the span failed."""
 
@@ -274,6 +319,22 @@ class _Recorder:
     def add_tags(self, *tags: str) -> None:
         """Attach OpenInference tags, for filtering traces in Phoenix or Arize."""
         self._span.set_attribute(SpanAttributes.TAG_TAGS, list(tags))
+
+    def record_token_rollup(self, usage: "TokenUsage") -> None:
+        """Record what the model calls *inside* this span cost, in total.
+
+        Under :attr:`~chip_chat.otel.attributes.ChipChatAttributes.TOKENS_TOTAL`
+        and its siblings, never under OpenInference's ``llm.token_count.*``:
+        those belong to the calls themselves, and a rollup sharing their keys
+        would make "sum the LLM spans" count every ancestor as well. See the
+        attribute's docstring for why that distinction is worth a second
+        vocabulary.
+        """
+        self._span.set_attribute(ChipChatAttributes.TOKENS_PROMPT, usage.prompt_tokens)
+        self._span.set_attribute(
+            ChipChatAttributes.TOKENS_COMPLETION, usage.completion_tokens
+        )
+        self._span.set_attribute(ChipChatAttributes.TOKENS_TOTAL, usage.total)
 
     def record_failure(self, error: BaseException | str) -> None:
         """Mark this span failed.
@@ -482,9 +543,74 @@ class CortexAnalystRecorder(_Recorder):
 
 
 class VisionRecorder(_Recorder):
-    """``vision.describe`` -- image reference and structured output."""
+    """``vision.describe`` -- image reference, structured output and tokens.
+
+    An LLM-kind span (see :func:`~chip_chat.otel.schema.span_kind`), so it owes
+    the same two things every other model call owes: what went in, in the form
+    OpenInference reads, and what it cost.
+    """
 
     __slots__ = ()
+
+    def record_image(self, image_ref: str, *, prompt: str | None = None) -> None:
+        """Record the photograph as a multimodal LLM input.
+
+        The image already rides on the span as
+        :attr:`~chip_chat.otel.attributes.ChipChatAttributes.VISION_IMAGE_REF`,
+        which is what an operator greps. This records it *again* under
+        OpenInference's message-contents layout, which is what makes Phoenix and
+        Arize render the span as a vision call with an image attached rather
+        than as an LLM span that happens to carry an opaque string. Both, not
+        one: the first is searchable, the second is legible, and #64 asks for a
+        photo turn a person can read.
+
+        A reference and never the bytes, here as everywhere -- RFC-001 section
+        07, and traces are not an image store.
+
+        Args:
+            image_ref: The blob reference for the normalised image.
+            prompt: The text part of the same message, if the call had one.
+        """
+        base = f"{SpanAttributes.LLM_INPUT_MESSAGES}.0"
+        self._span.set_attribute(f"{base}.{MessageAttributes.MESSAGE_ROLE}", "user")
+        contents = f"{base}.{MessageAttributes.MESSAGE_CONTENTS}"
+        self._span.set_attribute(
+            f"{contents}.0.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "image"
+        )
+        self._span.set_attribute(
+            f"{contents}.0.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}"
+            f".{ImageAttributes.IMAGE_URL}",
+            image_ref,
+        )
+        if prompt is not None:
+            self._span.set_attribute(
+                f"{contents}.1.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "text"
+            )
+            self._span.set_attribute(
+                f"{contents}.1.{MessageContentAttributes.MESSAGE_CONTENT_TEXT}", prompt
+            )
+
+    def record_usage(
+        self,
+        *,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int | None = None,
+    ) -> None:
+        """Record token counts, exactly as :meth:`LlmRecorder.record_usage` does.
+
+        The photo lane is the expensive one -- an image is worth a few hundred
+        prompt tokens -- so a cost dashboard that omitted it would be wrong in
+        the direction that matters most.
+        """
+        self._span.set_attribute(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, prompt_tokens)
+        self._span.set_attribute(
+            SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, completion_tokens
+        )
+        self._span.set_attribute(
+            SpanAttributes.LLM_TOKEN_COUNT_TOTAL,
+            prompt_tokens + completion_tokens if total_tokens is None else total_tokens,
+        )
 
     def record_description(self, description: Mapping[str, Any]) -> None:
         """Record the stage-4 structured output verbatim.

@@ -129,10 +129,12 @@ from chip_chat.vision.describe import (
     DescriptionRejectedError,
     MealDescriber,
     SlotValue,
+    VisionAnswer,
     VisionModel,
     confidence_profile,
 )
 from chip_chat.vision.intake import PhotoIntake, StoredPhoto
+from chip_chat.vision.lane import PhotoLane, PhotoMatch
 from chip_chat.vision.limits import SUPPORTED_MEDIA_TYPES, UploadLimits
 from chip_chat.vision.matcher import (
     NOTHING_SEEN,
@@ -180,6 +182,7 @@ from chip_chat.vision.retention import (
     RETENTION_NOTICE_LONG,
 )
 from chip_chat.vision.store import (
+    PHOTO_REF_ARGUMENT,
     AzureBlobStore,
     BlobReader,
     BlobRef,
@@ -199,6 +202,7 @@ __all__ = [
     "DESCRIBE_UNAVAILABLE_MESSAGE",
     "NORMALIZED_MEDIA_TYPE",
     "NOTHING_SEEN",
+    "PHOTO_REF_ARGUMENT",
     "REQUIRED_SLOTS",
     "RETENTION_CEILING_HOURS",
     "RETENTION_NOTICE",
@@ -236,6 +240,8 @@ __all__ = [
     "NormalizedImage",
     "Outcome",
     "PhotoIntake",
+    "PhotoLane",
+    "PhotoMatch",
     "RejectionReason",
     "Reply",
     "ReplyKind",
@@ -251,6 +257,7 @@ __all__ = [
     "UploadLimits",
     "UploadRejectedError",
     "ValidImage",
+    "VisionAnswer",
     "VisionModel",
     "Vocabulary",
     "VocabularyError",

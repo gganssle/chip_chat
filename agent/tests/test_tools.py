@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from chip_chat.agent.hardcoded import ACCOUNT, MENU
 from chip_chat.agent.model import ToolInvocation
 from chip_chat.agent.orders import OrderDesk
 from chip_chat.agent.tools import TOOL_SCHEMAS, TOOLS, dispatch
@@ -241,3 +242,56 @@ def test_a_session_id_in_the_arguments_is_refused_before_it_is_ignored(
             session_id="sess-attacker",
         )
     assert legal["rejected"] == "DRAFT_NOT_FOUND"
+
+
+# --- get_usual_order ---------------------------------------------------------
+
+
+def test_the_usual_order_comes_back_as_item_ids(desk: OrderDesk) -> None:
+    """ "Reorder my usual" has to become a draft over real rows.
+
+    A model handed only "a chicken burrito bowl with a side of guac" would have
+    to turn prose back into identifiers, and a menu item arrived at by inference
+    is the one thing this architecture is arranged to prevent. So the assertion
+    is on the ids, not on the sentence.
+    """
+    result = dispatch_in_turn(
+        ToolInvocation(call_id="c1", name=ToolName.GET_USUAL_ORDER.value, arguments={}),
+        desk=desk,
+    )
+
+    assert [item["item_id"] for item in result["items"]] == list(ACCOUNT.favourite_items)
+    assert all(item["item_id"] in MENU for item in result["items"])
+    assert result["usual_order"] == ACCOUNT.usual_order
+
+
+def test_the_usual_order_does_not_claim_a_confidence_it_cannot_compute(
+    desk: OrderDesk,
+) -> None:
+    """The surface promises a confidence and says it is sometimes low.
+
+    There is no gold mart behind this yet, so what is reported is the absence of
+    one. A number invented here would be exactly the guess-presented-as-a-habit
+    the tool's own description warns against.
+    """
+    result = dispatch_in_turn(
+        ToolInvocation(call_id="c1", name=ToolName.GET_USUAL_ORDER.value, arguments={}),
+        desk=desk,
+    )
+
+    assert result["confidence"] is None
+    assert "not computed from order" in result["how_it_was_worked_out"]
+
+
+def test_the_usual_order_names_nothing_the_menu_does_not_sell(
+    desk: OrderDesk,
+) -> None:
+    """The account fixture and the menu are two lists; only their overlap ships."""
+    result = dispatch_in_turn(
+        ToolInvocation(call_id="c1", name=ToolName.GET_USUAL_ORDER.value, arguments={}),
+        desk=desk,
+    )
+
+    for item in result["items"]:
+        assert item["name"] == MENU[item["item_id"]].name
+        assert item["unit_price"] == str(MENU[item["item_id"]].unit_price)
