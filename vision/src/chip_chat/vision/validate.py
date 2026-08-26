@@ -101,6 +101,31 @@ class RejectionReason(enum.Enum):
     """The signature matched but the header does not parse. A truncated or
     hand-edited file, or a signature glued onto something else."""
 
+    UNSAFE_IMAGE = "unsafe_image"
+    """Content Safety put a category at or above its threshold. See
+    :mod:`chip_chat.vision.moderation`."""
+
+    MODERATION_UNAVAILABLE = "moderation_unavailable"
+    """Content Safety could not be reached, or did not answer usefully. Stage 3
+    fails closed, so this refuses the upload rather than letting it past."""
+
+
+_NEUTRAL_REFUSAL: Final = (
+    "I can't use that photo. Tell me what you're after and I'll take it from there."
+)
+"""The one line stage 3 ever says, whichever way it refused.
+
+Neutral in the sense RFC-001 section 07 means it: it does not name what was
+detected, does not moralise, and hands an uploader nothing to iterate against.
+
+It is deliberately the *same* sentence for a flagged image and for Content
+Safety being unreachable. Two sentences would be a signal -- an outage that
+announced itself would tell the previous uploader that theirs, specifically, was
+the one that got flagged -- and it would be a signal bought for nothing, since
+the honest thing to ask for in both cases is identical: type what you wanted.
+Which of the two happened is recorded on ``guard.content_safety``, where an
+operator can read it and a visitor cannot.
+"""
 
 _MESSAGES: Final[dict[RejectionReason, str]] = {
     RejectionReason.EMPTY: "That upload arrived empty. Try attaching the photo again.",
@@ -119,13 +144,18 @@ _MESSAGES: Final[dict[RejectionReason, str]] = {
     RejectionReason.CORRUPT: (
         "That photo did not arrive intact. Try attaching it again."
     ),
+    RejectionReason.UNSAFE_IMAGE: _NEUTRAL_REFUSAL,
+    RejectionReason.MODERATION_UNAVAILABLE: _NEUTRAL_REFUSAL,
 }
 """Visitor-facing copy, one line per reason.
 
-Deliberately helpful rather than neutral: none of these outcomes says anything
-about *content*, so there is nothing to be coy about, and "something went wrong"
-in front of a size limit just makes a visitor try the same photo four times.
-Stage 3 (Content Safety, issue #52) is the one whose refusal must stay neutral.
+The first six are deliberately helpful rather than neutral: none of those
+outcomes says anything about *content*, so there is nothing to be coy about, and
+"something went wrong" in front of a size limit just makes a visitor try the same
+photo four times.
+
+The last two are stage 3, and they are the exception -- see
+:data:`_NEUTRAL_REFUSAL`.
 
 Nothing attacker-controlled is interpolated -- no filename, no declared type, no
 byte excerpt -- so no message can be used to reflect content back at a visitor.

@@ -9,6 +9,7 @@ dependencies = [
     "pillow-heif>=0.21",
     "azure-storage-blob>=12.24",
     "azure-identity>=1.19",
+    "azure-ai-contentsafety>=1.0",
 ]
 
 [build-system]

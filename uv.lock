@@ -108,6 +108,19 @@ wheels = [
 ]
 
 [[package]]
+name = "azure-ai-contentsafety"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "azure-core" },
+    { name = "isodate" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/08/e9/c069efade0e4976d96208306f1cf0803838cdb0b60e00a2a96bd20806bff/azure-ai-contentsafety-1.0.0.tar.gz", hash = "sha256:052731bd1419a720fa00910f46bf3428c4e5bd05280da7393d0c8106d46cc6d7", size = 63806, upload-time = "2023-12-12T08:36:25.337Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/36/39/cbb3ff28ad09434a1be7803b2846077bc3b23a8232beb489962fc818fe21/azure_ai_contentsafety-1.0.0-py3-none-any.whl", hash = "sha256:e1c5574a541f9290fdd071d23535e14b1f463af231a6f0ac0f917e125f0463cf", size = 61328, upload-time = "2023-12-12T08:36:27.568Z" },
+]
+
+[[package]]
 name = "azure-core"
 version = "1.41.0"
 source = { registry = "https://pypi.org/simple" }
@@ -542,6 +555,7 @@ name = "chip-chat-vision"
 version = "0.0.0"
 source = { editable = "vision" }
 dependencies = [
+    { name = "azure-ai-contentsafety" },
     { name = "azure-identity" },
     { name = "azure-storage-blob" },
     { name = "chip-chat-otel" },
@@ -551,6 +565,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "azure-ai-contentsafety", specifier = ">=1.0" },
     { name = "azure-identity", specifier = ">=1.19" },
     { name = "azure-storage-blob", specifier = ">=12.24" },
     { name = "chip-chat-otel", editable = "otel" },

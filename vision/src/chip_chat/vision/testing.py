@@ -5,6 +5,10 @@ acceptance criteria on this feature are stated in terms of them, and because the
 FastAPI app (issue #66) will want the same store double for its own route tests
 rather than reinventing one.
 
+:class:`StubImageAnalyzer` is here for the same reason: stage 3 fails closed,
+and "fails closed" is only a claim a test can settle if the test can make
+Content Safety unreachable on demand without reaching Azure to do it.
+
 :func:`photo_with_location` is the interesting one. "EXIF is stripped" is only
 a meaningful assertion if the fixture actually had EXIF to lose, and only a
 *sufficient* assertion if the fixture also had the other places a camera writes
@@ -15,11 +19,13 @@ that finds none of them afterwards has proven something.
 import struct
 import threading
 import zlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from io import BytesIO
 
 from PIL import Image
 
+from chip_chat.vision.moderation import ModerationUnavailableError, SafetyCategory
 from chip_chat.vision.store import BlobRef
 
 __all__ = [
@@ -34,8 +40,10 @@ __all__ = [
     "ZIP_ARCHIVE",
     "InMemoryBlobStore",
     "StoredBlob",
+    "StubImageAnalyzer",
     "photo_with_location",
     "png_declaring",
+    "safe_severities",
     "solid_image",
 ]
 
@@ -114,6 +122,49 @@ class InMemoryBlobStore:
     def __len__(self) -> int:
         with self._lock:
             return len(self._blobs)
+
+
+def safe_severities() -> dict[str, int]:
+    """Every category at zero -- what Content Safety says about a burrito bowl."""
+    return {category.value: 0 for category in SafetyCategory}
+
+
+class StubImageAnalyzer:
+    """An :class:`~chip_chat.vision.moderation.ImageAnalyzer` that answers from a script.
+
+    Records what it was handed, so a test can assert that stage 3 saw the
+    *normalized* bytes rather than what was uploaded -- which is how "moderation
+    runs after normalization" stops being a comment and becomes an assertion.
+    """
+
+    __slots__ = ("_severities", "_unavailable", "calls")
+
+    def __init__(
+        self,
+        severities: Mapping[str, int] | None = None,
+        *,
+        unavailable: bool = False,
+    ) -> None:
+        """Initialise the analyzer.
+
+        Args:
+            severities: What to report, keyed by category name. Defaults to
+                :func:`safe_severities`. Pass a partial mapping to exercise the
+                "the service answered with a hole in it" path.
+            unavailable: Raise
+                :class:`~chip_chat.vision.moderation.ModerationUnavailableError`
+                instead of answering, which is the outage stage 3 must fail
+                closed on.
+        """
+        self._severities = safe_severities() if severities is None else dict(severities)
+        self._unavailable = unavailable
+        self.calls: list[bytes] = []
+
+    def analyze(self, image: bytes) -> Mapping[str, int]:
+        self.calls.append(image)
+        if self._unavailable:
+            raise ModerationUnavailableError("content safety is unreachable")
+        return dict(self._severities)
 
 
 def solid_image(

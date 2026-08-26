@@ -11,6 +11,7 @@ from chip_chat.vision import (
     NORMALIZED_MEDIA_TYPE,
     RETENTION_CEILING_HOURS,
     BlobRef,
+    ImageModerator,
     PhotoIntake,
     UploadLimits,
     UploadRejectedError,
@@ -21,6 +22,7 @@ from chip_chat.vision.testing import (
     XMP_LOCATION_MARKER,
     ZIP_ARCHIVE,
     InMemoryBlobStore,
+    StubImageAnalyzer,
     photo_with_location,
     png_declaring,
     solid_image,
@@ -33,8 +35,18 @@ def store() -> InMemoryBlobStore:
 
 
 @pytest.fixture
-def intake(store: InMemoryBlobStore) -> PhotoIntake:
-    return PhotoIntake(store=store)
+def moderator() -> ImageModerator:
+    """Stage 3, answering "safe" -- what it says about a photograph of lunch.
+
+    Stage 3 refusing is ``test_moderation.py``'s subject; here it is a
+    dependency, and one the intake cannot be built without.
+    """
+    return ImageModerator(analyzer=StubImageAnalyzer())
+
+
+@pytest.fixture
+def intake(store: InMemoryBlobStore, moderator: ImageModerator) -> PhotoIntake:
+    return PhotoIntake(store=store, moderator=moderator)
 
 
 # --- the accepted path -----------------------------------------------------
@@ -91,9 +103,11 @@ def test_two_uploads_of_the_same_photo_get_different_references(
 
 
 def test_a_name_collision_refuses_rather_than_replacing_a_photograph(
-    store: InMemoryBlobStore,
+    store: InMemoryBlobStore, moderator: ImageModerator
 ) -> None:
-    fixed = PhotoIntake(store=store, name_factory=lambda: "2026-08-26/fixed.jpg")
+    fixed = PhotoIntake(
+        store=store, moderator=moderator, name_factory=lambda: "2026-08-26/fixed.jpg"
+    )
     fixed.accept(solid_image())
     with pytest.raises(FileExistsError):
         fixed.accept(solid_image())
@@ -150,8 +164,12 @@ def test_a_refused_upload_writes_nothing(
     assert len(store) == 0, f"{label} was stored"
 
 
-def test_an_oversized_upload_writes_nothing(store: InMemoryBlobStore) -> None:
-    small = PhotoIntake(store=store, limits=UploadLimits(max_bytes=512))
+def test_an_oversized_upload_writes_nothing(
+    store: InMemoryBlobStore, moderator: ImageModerator
+) -> None:
+    small = PhotoIntake(
+        store=store, moderator=moderator, limits=UploadLimits(max_bytes=512)
+    )
     with pytest.raises(UploadRejectedError):
         small.accept(solid_image((400, 400)))
     assert len(store) == 0
@@ -167,9 +185,12 @@ def test_a_photo_that_dies_during_normalization_writes_nothing(
     assert len(store) == 0
 
 
-def test_the_intake_reports_the_ceiling_it_enforces(store: InMemoryBlobStore) -> None:
+def test_the_intake_reports_the_ceiling_it_enforces(
+    store: InMemoryBlobStore, moderator: ImageModerator
+) -> None:
     limits = UploadLimits(max_bytes=1234, max_edge=99)
-    assert PhotoIntake(store=store, limits=limits).limits is limits
+    built = PhotoIntake(store=store, moderator=moderator, limits=limits)
+    assert built.limits is limits
 
 
 # --- references ------------------------------------------------------------
