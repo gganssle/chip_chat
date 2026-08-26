@@ -184,6 +184,9 @@ Cilantro PRD
  E6
  Every screen carries a visible notice that this is an unaffiliated demo and that orders are simulated.
 
+ E7
+ The visitor can edit three things about their persona — display name, home store, and stated preferences — and nothing else. Order history, points balance, and everything derived from them are read-only.
+
 ### Menu knowledge
  K 
 
@@ -198,6 +201,9 @@ Cilantro PRD
 
  K4
  Handles comparative and constrained questions: which option has fewer calories, what is vegetarian, what can be made without dairy according to the published data.
+
+ K5
+ Citations are visible in the response itself rather than behind an interaction: one quiet trailing source line per answer, with the passage and its harvest date available on demand. Allergen and dietary answers cite adjacent to the claim, with the harvest date shown without interaction.
 
 ### Account
  A 
@@ -264,6 +270,9 @@ Cilantro PRD
 
  V6
  Never names a menu item that does not exist.
+
+ V7
+ When a photograph contains more than one meal, says how many it saw and asks which one to build, rather than choosing on the visitor's behalf. One order at a time in V0.
 
 ### Trust & safety
  S 
@@ -375,27 +384,27 @@ $12.40 · matched from your photo
 
 ## Open questions
 
- Genuinely open — each one changes what gets built, and none has an obvious default.
+ All four are now settled. Each was genuinely open — each one changed what got built — and each is recorded in `docs/decisions/` with its rationale and its cost. They are kept here rather than deleted, because the reasoning is the part worth reading.
 
- Q1
+ Q1 — resolved
  
  Does a visitor's state persist between visits? 
- A cookie means Sam comes back tomorrow to the order they placed today, which is a much better story. It also means demo data accumulates and the nightly reset has to become more careful. The alternative — a fresh persona every visit — is simpler and slightly colder.
+ **Yes, via cookie.** A signed cookie maps to a durable `demo_visitors` row, so Sam comes back tomorrow to the order they placed today. The nightly demo reset ages sessions out on last-seen rather than truncating visitor-scoped tables, which is the tension this question predicted. Issue #9.
 
- Q2
+ Q2 — resolved
  
  Can visitors edit their persona, or only switch between fixtures? 
- Editing makes it feel like an account. It also lets a visitor construct a state the gold marts were never computed against, at which point personalization quietly degrades.
+ **Both, but editing is three fields: display name, home store, and stated preferences.** Order history, the loyalty ledger, and every mart derived from them stay read-only. The editable fields live on `demo_visitors`, which the nightly Databricks jobs do not read — so a visitor cannot construct a state the gold marts were computed against, structurally rather than by policy. Requirement E7. `docs/decisions/persona-editing.md`, issue #59.
 
- Q3
+ Q3 — resolved
  
  Do citations show inline or on demand? 
- Inline is more trustworthy and noisier. On demand is cleaner and easier to miss. Given that groundedness is one of the headline metrics, there's an argument that visitors should see the receipts by default.
+ **Inline presence, on-demand detail.** Every answer carrying a food or policy claim shows its source as a quiet trailing line; the passage and harvest date expand when asked for. The citation is a structured field on the response envelope referencing passage ids that retrieval actually returned, not text the model writes — which is what turns the zero-uncited-claims target from a judgement into a rule. Allergen answers cite adjacently with the date visible. Requirement K5. `docs/decisions/citation-presentation.md`, issue #57.
 
- Q4
+ Q4 — resolved
  
  Does V0 handle several meals in one photograph? 
- A photo of a table with four bowls is a plausible thing for someone to send. Supporting it well means a multi-order flow the action model doesn't have yet; not supporting it means detecting the case and saying so.
+ **It detects the case and asks which meal, and builds none of them.** The stage-4 schema returns one slot set plus a count, so on a table of four bowls those slots describe the picture rather than any one meal — building from them would produce a well-formed order nobody is eating. Full multi-order support is most of group ordering, which is already deferred to V1. Requirement V7. `docs/decisions/multi-meal-photos.md`, issue #58.
 
  12
 
