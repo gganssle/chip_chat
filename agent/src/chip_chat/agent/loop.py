@@ -29,8 +29,15 @@ from chip_chat.agent.hardcoded import ACCOUNT, MENU, SIMULATION_NOTICE, STORE
 from chip_chat.agent.model import ChatModel, ModelReply
 from chip_chat.agent.orders import OrderDesk
 from chip_chat.agent.prompt import load
-from chip_chat.agent.tools import TOOL_SCHEMAS, TOOLS, dispatch
-from chip_chat.otel import Message, ToolName, agent_step, llm_completion
+from chip_chat.agent.tools import dispatch, offered_schemas, offered_tools
+from chip_chat.otel import (
+    Message,
+    TokenUsage,
+    ToolName,
+    agent_step,
+    llm_completion,
+)
+from chip_chat.vision.lane import PhotoLane
 
 __all__ = [
     "CONFIRMATION_NOTE",
@@ -181,6 +188,7 @@ def run_turn(
     *,
     model: ChatModel,
     desk: OrderDesk,
+    lane: PhotoLane | None = None,
     confirmed_draft_id: str | None = None,
     max_steps: int = DEFAULT_MAX_STEPS,
 ) -> TurnResult:
@@ -193,6 +201,10 @@ def run_turn(
         message: What the visitor said.
         model: The chat model to call.
         desk: The order desk holding this session's drafts.
+        lane: The photo lane, where one is wired. ``None`` means the model is
+            not offered ``match_meal_from_photo`` at all -- see
+            :func:`~chip_chat.agent.tools.offered_tools` for why an unanswerable
+            tool definition is worse than an absent one.
         confirmed_draft_id: A draft the desk has *already* confirmed. The model
             is told, because it cannot see the button. See
             :data:`CONFIRMATION_NOTE` for why telling it is not the same as
@@ -216,11 +228,24 @@ def run_turn(
     card: Mapping[str, Any] | None = None
     receipt = False
 
+    schemas = offered_schemas(lane=lane)
+
     for step_index in range(max_steps):
         with agent_step(index=step_index) as step:
-            reply = _complete(model, conversation.messages, is_first=step_index == 0)
+            reply = _complete(
+                model, conversation.messages, schemas, is_first=step_index == 0
+            )
             prompt_tokens += reply.prompt_tokens
             completion_tokens += reply.completion_tokens
+            # What this round trip cost, on the span that contains it. The turn
+            # total lives on `chat.turn`; this is the per-step breakdown a
+            # runaway loop shows up in.
+            step.record_token_rollup(
+                TokenUsage(
+                    prompt_tokens=reply.prompt_tokens,
+                    completion_tokens=reply.completion_tokens,
+                )
+            )
             conversation.messages.append(_assistant_message(reply))
 
             if not reply.tool_calls:
@@ -236,7 +261,10 @@ def run_turn(
 
             for invocation in reply.tool_calls:
                 result = dispatch(
-                    invocation, session_id=conversation.session_id, desk=desk
+                    invocation,
+                    session_id=conversation.session_id,
+                    desk=desk,
+                    lane=lane,
                 )
                 conversation.messages.append(
                     {
@@ -263,7 +291,11 @@ def run_turn(
 
 
 def _complete(
-    model: ChatModel, messages: Sequence[Mapping[str, Any]], *, is_first: bool
+    model: ChatModel,
+    messages: Sequence[Mapping[str, Any]],
+    schemas: Sequence[Mapping[str, Any]],
+    *,
+    is_first: bool,
 ) -> ModelReply:
     """One ``llm.completion``, with everything the span schema wants on it."""
     with llm_completion(
@@ -273,9 +305,9 @@ def _complete(
             # Once per turn, not once per step: the tool definitions are the
             # same on every round trip, and repeating them would triple the
             # size of a trace to say the same thing three times.
-            recorder.record_tools(TOOL_SCHEMAS)
+            recorder.record_tools(schemas)
         recorder.record_input_messages(_as_messages(messages))
-        reply = model.complete(messages, tools=TOOL_SCHEMAS)
+        reply = model.complete(messages, tools=schemas)
         recorder.record_usage(
             prompt_tokens=reply.prompt_tokens,
             completion_tokens=reply.completion_tokens,

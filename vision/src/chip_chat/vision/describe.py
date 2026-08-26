@@ -67,7 +67,13 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, cast
 
-from chip_chat.otel import ToolName, agent_step, tool_call, vision_describe
+from chip_chat.otel import (
+    TokenUsage,
+    ToolName,
+    agent_step,
+    tool_call,
+    vision_describe,
+)
 from chip_chat.vision.normalize import NORMALIZED_MEDIA_TYPE
 from chip_chat.vision.store import BlobReader, BlobRef
 from chip_chat.vision.vocabulary import SchemaViolationError, Vocabulary
@@ -92,6 +98,7 @@ __all__ = [
     "DescriptionRejectedError",
     "MealDescriber",
     "SlotValue",
+    "VisionAnswer",
     "VisionModel",
     "confidence_profile",
 ]
@@ -322,6 +329,37 @@ class Description:
     content_version: str | None = None
     """The catalogue build whose vocabulary the model was constrained to."""
 
+    usage: TokenUsage | None = None
+    """What the description cost, as the provider reported it.
+
+    Carried on the result and not merely written to the span, because the
+    photo lane rolls its two model calls up onto ``tool.match_meal_from_photo``
+    and a caller that had to read the number back off a span to do that would
+    be reading its own telemetry as an API. ``None`` where the provider
+    reported no usage."""
+
+
+@dataclass(frozen=True, slots=True)
+class VisionAnswer:
+    """What one vision round trip returned, including what it cost.
+
+    The counterpart of :class:`chip_chat.agent.model.ModelReply`, and it exists
+    for the same reason: ``vision.describe`` is an LLM span and owes a token
+    count, and a count this package estimated would be a number that adds up
+    without meaning anything. So the usage travels with the content, off the
+    response, or it does not travel at all.
+    """
+
+    content: str
+    """The response text, still unparsed."""
+
+    usage: TokenUsage | None = None
+    """What the provider said the call cost. ``None`` where it said nothing --
+    a deployment that omits ``usage``, or a stub that has no opinion. The span
+    then carries no counts, which
+    :meth:`~chip_chat.otel.testing.SpanRecorder.llm_token_usage` reports as the
+    hole it is rather than filling in."""
+
 
 class VisionModel(Protocol):
     """The one call stage 4 makes to a vision deployment."""
@@ -339,8 +377,8 @@ class VisionModel(Protocol):
         response_format: Mapping[str, Any],
         system_prompt: str,
         user_prompt: str,
-    ) -> str:
-        """Return the model's raw response text.
+    ) -> VisionAnswer:
+        """Return the model's raw response text, and what it cost.
 
         Args:
             image: The stored JPEG bytes -- the ones Content Safety screened.
@@ -354,7 +392,8 @@ class VisionModel(Protocol):
             user_prompt: The turn's single user message.
 
         Returns:
-            The response content, still unparsed.
+            The :class:`VisionAnswer`: the response content, still unparsed, and
+            the token counts the provider reported for it.
 
         Raises:
             DescribeUnavailableError: If the deployment could not be reached or
@@ -425,21 +464,31 @@ class MealDescriber:
         with vision_describe(
             image_ref=str(ref), model=self._model.deployment
         ) as recorder:
+            # The photograph as OpenInference reads a multimodal input, so the
+            # trace shows the image the description came from rather than
+            # obliging a reader to correlate two spans by a blob key.
+            recorder.record_image(str(ref), prompt=_USER_PROMPT)
             if self._vocabulary.content_version is not None:
                 recorder.set_metadata(
                     catalogue_content_version=self._vocabulary.content_version
                 )
             try:
-                payload = self._answer(ref)
+                payload, usage = self._answer(ref)
             except DescribeError as error:
                 recorder.record_failure(error)
                 raise
+            if usage is not None:
+                recorder.record_usage(
+                    prompt_tokens=usage.prompt_tokens,
+                    completion_tokens=usage.completion_tokens,
+                    total_tokens=usage.total_tokens,
+                )
             # Recorded verbatim, notes included: a trace is where an operator
             # reads what the model actually said. That is not a downstream
             # parser, which is what the ban on reading `notes` is about.
             recorder.record_description(payload)
 
-        return _description(payload, ref, self._vocabulary.content_version)
+        return _description(payload, ref, self._vocabulary.content_version, usage)
 
     def describe_as_tool(self, ref: BlobRef, *, step: int = 0) -> Description:
         """Describe one photograph, opening the spans above it as well.
@@ -474,8 +523,14 @@ class MealDescriber:
         ):
             return self.describe(ref)
 
-    def _answer(self, ref: BlobRef) -> dict[str, Any]:
-        """Read the image, ask the model, and check what came back."""
+    def _answer(self, ref: BlobRef) -> tuple[dict[str, Any], TokenUsage | None]:
+        """Read the image, ask the model, and check what came back.
+
+        Returns:
+            The validated payload and what the provider said the call cost --
+            the second half travelling back so ``vision.describe`` can record a
+            token count it did not invent.
+        """
         try:
             image = self._images.read(ref)
         except (OSError, KeyError, ValueError) as error:
@@ -485,7 +540,7 @@ class MealDescriber:
             # rather than a failing turn.
             raise DescribeUnavailableError(f"could not read {ref}: {error}") from error
 
-        content = self._model.describe(
+        answer = self._model.describe(
             image=image,
             media_type=NORMALIZED_MEDIA_TYPE,
             response_format=self._vocabulary.response_format(),
@@ -494,7 +549,7 @@ class MealDescriber:
         )
 
         try:
-            parsed = json.loads(content)
+            parsed = json.loads(answer.content)
         except json.JSONDecodeError as error:
             # Structured output should make this unreachable, which is exactly
             # why it is checked: the day it is reachable is the day something
@@ -505,13 +560,37 @@ class MealDescriber:
             ) from error
 
         try:
-            return self._vocabulary.validate(parsed)
+            return self._vocabulary.validate(parsed), answer.usage
         except SchemaViolationError as violation:
             raise DescriptionRejectedError(violation) from violation
 
 
+def _usage(reported: object) -> TokenUsage | None:
+    """Read the provider's usage block, or report that there was not one.
+
+    Duck-typed rather than imported: the OpenAI types are a ``TYPE_CHECKING``
+    import in this module and the point of the function is that a response
+    without usage is a legitimate answer. Missing counts become ``None`` and
+    the span carries none, which is honest; they never become zeroes, which
+    would be a turn that looks free.
+    """
+    prompt = getattr(reported, "prompt_tokens", None)
+    completion = getattr(reported, "completion_tokens", None)
+    if not isinstance(prompt, int) or not isinstance(completion, int):
+        return None
+    total = getattr(reported, "total_tokens", None)
+    return TokenUsage(
+        prompt_tokens=prompt,
+        completion_tokens=completion,
+        total_tokens=total if isinstance(total, int) else None,
+    )
+
+
 def _description(
-    payload: Mapping[str, Any], ref: BlobRef, content_version: str | None
+    payload: Mapping[str, Any],
+    ref: BlobRef,
+    content_version: str | None,
+    usage: TokenUsage | None = None,
 ) -> Description:
     """Turn a validated payload into the two objects the caller gets.
 
@@ -534,6 +613,7 @@ def _description(
         notes=notes if isinstance(notes, str) else "",
         image_ref=ref,
         content_version=content_version,
+        usage=usage,
     )
 
 
@@ -721,7 +801,7 @@ class AzureVisionModel:
         response_format: Mapping[str, Any],
         system_prompt: str,
         user_prompt: str,
-    ) -> str:
+    ) -> VisionAnswer:
         from openai import OpenAIError
 
         encoded = base64.b64encode(image).decode("ascii")
@@ -770,4 +850,4 @@ class AzureVisionModel:
             raise DescribeUnavailableError(
                 f"the vision deployment returned no content ({reason})"
             )
-        return content
+        return VisionAnswer(content=content, usage=_usage(completion.usage))

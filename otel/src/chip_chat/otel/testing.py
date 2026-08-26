@@ -31,7 +31,13 @@ from opentelemetry.sdk.trace.export import (
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.util.types import AttributeValue
 
+from chip_chat.otel.attributes import (
+    ChipChatAttributes,
+    OpenInferenceSpanKindValues,
+    SpanAttributes,
+)
 from chip_chat.otel.config import TelemetryConfig
+from chip_chat.otel.spans import TokenUsage
 from chip_chat.otel.tracing import build_tracer_provider, use_tracer_provider
 
 __all__ = ["SpanRecorder", "SpanTreeNode", "span_recorder"]
@@ -119,6 +125,104 @@ class SpanRecorder:
             if span.context is not None
         )
 
+    def llm_spans(self) -> tuple[ReadableSpan, ...]:
+        """Every span OpenInference would read as a model call.
+
+        Selected by ``openinference.span.kind`` rather than by name, so a model
+        call added to the schema later is covered without anybody remembering to
+        add it here. ``vision.describe`` is one of these -- it is an LLM span,
+        and the reason this is a kind check and not a list of two names.
+        """
+        return tuple(
+            span
+            for span in self.finished_spans()
+            if (span.attributes or {}).get(SpanAttributes.OPENINFERENCE_SPAN_KIND)
+            == OpenInferenceSpanKindValues.LLM.value
+        )
+
+    def llm_token_usage(self) -> TokenUsage:
+        """Sum the OpenInference token counts across every model call recorded.
+
+        Raises:
+            AssertionError: If a model call carries no counts. An LLM span
+                without them is the failure this exists to catch: it is a hole
+                in the cost dashboard that looks exactly like a cheap turn.
+        """
+        total = TokenUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+        for span in self.llm_spans():
+            attributes = span.attributes or {}
+            missing = [
+                key
+                for key in (
+                    SpanAttributes.LLM_TOKEN_COUNT_PROMPT,
+                    SpanAttributes.LLM_TOKEN_COUNT_COMPLETION,
+                    SpanAttributes.LLM_TOKEN_COUNT_TOTAL,
+                )
+                if key not in attributes
+            ]
+            if missing:
+                raise AssertionError(
+                    f"{span.name} is an LLM span with no token counts: "
+                    f"missing {', '.join(missing)}"
+                )
+            total = total + TokenUsage(
+                prompt_tokens=_count(attributes, SpanAttributes.LLM_TOKEN_COUNT_PROMPT),
+                completion_tokens=_count(
+                    attributes, SpanAttributes.LLM_TOKEN_COUNT_COMPLETION
+                ),
+                total_tokens=_count(attributes, SpanAttributes.LLM_TOKEN_COUNT_TOTAL),
+            )
+        return total
+
+    def assert_token_counts_sum(self, reported: TokenUsage) -> None:
+        """Assert the recording's model-call tokens equal ``reported``.
+
+        This is #64's third acceptance criterion in executable form: *token
+        counts present on every LLM span, verified to sum to the provider's
+        reported usage*. Both halves are checked -- :meth:`llm_token_usage`
+        raises on a model call that recorded none, and the comparison here
+        catches counts that are present but wrong.
+
+        Where the turn's root recorded a rollup
+        (:meth:`~chip_chat.otel.spans._Recorder.record_token_rollup`), that is
+        checked against the same figure, because a rollup that disagreed with
+        the spans beneath it is worse than no rollup: the two dashboards built
+        on them would disagree and neither would be obviously wrong.
+
+        Args:
+            reported: What the providers said the turn cost.
+
+        Raises:
+            AssertionError: On any disagreement.
+        """
+        measured = self.llm_token_usage()
+        if (
+            measured.prompt_tokens != reported.prompt_tokens
+            or measured.completion_tokens != reported.completion_tokens
+            or measured.total != reported.total
+        ):
+            raise AssertionError(
+                "LLM spans do not sum to the reported usage: "
+                f"spans say prompt={measured.prompt_tokens} "
+                f"completion={measured.completion_tokens} total={measured.total}, "
+                f"providers say prompt={reported.prompt_tokens} "
+                f"completion={reported.completion_tokens} total={reported.total}"
+            )
+        for span in self.finished_spans():
+            attributes = span.attributes or {}
+            if ChipChatAttributes.TOKENS_TOTAL not in attributes:
+                continue
+            if span.parent is not None:
+                # Only the root rolls the whole turn up; a tool's rollup covers
+                # its own subtree and has no business matching the turn total.
+                continue
+            rolled = _count(attributes, ChipChatAttributes.TOKENS_TOTAL)
+            if rolled != reported.total:
+                raise AssertionError(
+                    f"{span.name} rolled up {rolled} tokens but the providers "
+                    f"reported {reported.total}"
+                )
+
     def roots(self) -> tuple[SpanTreeNode, ...]:
         """The recorded spans as trees, parents before children."""
         spans = sorted(self.finished_spans(), key=_start_time)
@@ -178,6 +282,20 @@ class _BorrowedExporter(SpanExporter):
 
     def shutdown(self) -> None:
         return None
+
+
+def _count(attributes: Mapping[str, AttributeValue], key: str) -> int:
+    """Read a token count off a span, refusing anything that is not one.
+
+    Span attributes are a union wide enough to hold a list of floats, so the
+    narrowing has to happen somewhere. Here, once, and loudly: a token count
+    that arrived as a string is a bug in the recorder and not something to
+    coerce quietly on the way to a dashboard.
+    """
+    value = attributes[key]
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise AssertionError(f"{key} is {value!r}, which is not a token count")
+    return value
 
 
 def _span_id(span: ReadableSpan) -> int | None:

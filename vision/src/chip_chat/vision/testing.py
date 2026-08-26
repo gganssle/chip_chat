@@ -56,7 +56,8 @@ from chip_chat.catalog.records import (
     Slot,
     VocabularyTerm,
 )
-from chip_chat.otel import ToolName, agent_step, tool_call
+from chip_chat.otel import TokenUsage, ToolName, agent_step, tool_call
+from chip_chat.vision.describe import VisionAnswer
 from chip_chat.vision.moderation import ModerationUnavailableError, SafetyCategory
 from chip_chat.vision.store import BlobRef
 from chip_chat.vision.vocabulary import Vocabulary
@@ -72,6 +73,7 @@ __all__ = [
     "PDF_DOCUMENT",
     "REFERENCE_RESTAURANT",
     "SHELL_SCRIPT",
+    "STUB_VISION_USAGE",
     "SVG_WITH_SCRIPT",
     "XMP_LOCATION_MARKER",
     "ZIP_ARCHIVE",
@@ -560,6 +562,16 @@ def generated_vocabulary(
     )
 
 
+STUB_VISION_USAGE = TokenUsage(prompt_tokens=274, completion_tokens=91)
+"""What :class:`StubVisionModel` says a description cost, by default.
+
+The prompt count is large next to the text because an image is: the photo lane
+is the expensive one, and a fixture that pretended otherwise would make the cost
+dashboard look right in tests and wrong in production. The two numbers are
+distinct and neither is round, so a test asserting on them cannot pass by
+reading the wrong field.
+"""
+
 DESCRIBED_MEAL: Mapping[str, Any] = {
     "is_chipotle_style": True,
     "vessel": {"value": "bowl", "confidence": 0.94},
@@ -604,6 +616,15 @@ class StubVisionModel:
     error: Exception | None = None
     """Raise this instead of answering -- the outage stage 4 must decline on."""
 
+    usage: TokenUsage | None = STUB_VISION_USAGE
+    """What this stub claims the call cost.
+
+    Answers by default, because a real deployment does and a test that never
+    saw a token count could not notice ``vision.describe`` losing it. Set it to
+    ``None`` for the other case -- a provider that reports no usage -- which is
+    equally real and must leave the span honestly bare rather than zeroed.
+    """
+
     calls: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -618,7 +639,7 @@ class StubVisionModel:
         response_format: Mapping[str, Any],
         system_prompt: str,
         user_prompt: str,
-    ) -> str:
+    ) -> VisionAnswer:
         self.calls.append(
             {
                 "image": image,
@@ -630,7 +651,7 @@ class StubVisionModel:
         )
         if self.error is not None:
             raise self.error
-        return self.response or ""
+        return VisionAnswer(content=self.response or "", usage=self.usage)
 
 
 @contextmanager

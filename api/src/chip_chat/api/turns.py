@@ -47,6 +47,7 @@ from chip_chat.agent.model import ChatModel
 from chip_chat.agent.orders import OrderDesk
 from chip_chat.api.guard import SpendGuard, TurnBudget
 from chip_chat.api.outcome import Stop
+from chip_chat.vision.lane import PhotoLane
 
 __all__ = ["FundedTurn", "SpendGate", "UnfundedTurnError"]
 
@@ -66,15 +67,22 @@ class FundedTurn:
     The constructor is the enforcement. Everything else is bookkeeping.
     """
 
-    __slots__ = ("_budget", "_desk", "_model")
+    __slots__ = ("_budget", "_desk", "_lane", "_model")
 
-    def __init__(self, budget: TurnBudget, model: ChatModel, desk: OrderDesk) -> None:
+    def __init__(
+        self,
+        budget: TurnBudget,
+        model: ChatModel,
+        desk: OrderDesk,
+        lane: PhotoLane | None = None,
+    ) -> None:
         """Bind an allowed budget to the model it paid for.
 
         Args:
             budget: The turn's budget, which must be allowed.
             model: The chat model this turn may call.
             desk: The order desk holding this session's drafts.
+            lane: The photo lane, where one is configured.
 
         Raises:
             UnfundedTurnError: If ``budget`` is not allowed. There is no such
@@ -88,6 +96,7 @@ class FundedTurn:
         self._budget = budget
         self._model = model
         self._desk = desk
+        self._lane = lane
 
     @property
     def tokens_used(self) -> int:
@@ -120,7 +129,13 @@ class FundedTurn:
         """
         if confirm_draft_id:
             self._desk.confirm(conversation.session_id, confirm_draft_id)
-        result = run_turn(conversation, message, model=self._model, desk=self._desk)
+        result = run_turn(
+            conversation,
+            message,
+            model=self._model,
+            desk=self._desk,
+            lane=self._lane,
+        )
         self._budget.record_usage(
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
@@ -145,7 +160,7 @@ class SpendGate:
     still start, serve ``/healthz`` and say what is wrong.
     """
 
-    __slots__ = ("_desk", "_guard", "_model", "_model_factory")
+    __slots__ = ("_desk", "_guard", "_lane", "_model", "_model_factory")
 
     def __init__(
         self,
@@ -153,6 +168,7 @@ class SpendGate:
         model_factory: Callable[[], ChatModel],
         *,
         desk: OrderDesk | None = None,
+        lane: PhotoLane | None = None,
     ) -> None:
         """Assemble the gate.
 
@@ -161,10 +177,14 @@ class SpendGate:
                 without one, which is the point of the class.
             model_factory: Builds the chat model on first use.
             desk: The order desk. Defaults to a fresh one.
+            lane: The photo lane. ``None`` -- the default -- means the agent is
+                never offered ``match_meal_from_photo``, which is the honest
+                state for a deployment with no vision deployment behind it.
         """
         self._guard = guard
         self._model_factory = model_factory
         self._desk = desk if desk is not None else OrderDesk()
+        self._lane = lane
         self._model: ChatModel | None = None
 
     @property
@@ -176,6 +196,11 @@ class SpendGate:
     def desk(self) -> OrderDesk:
         """The order desk. Holds drafts; cannot call a model."""
         return self._desk
+
+    @property
+    def lane(self) -> PhotoLane | None:
+        """The photo lane, or ``None`` where none is configured."""
+        return self._lane
 
     def entry_state(self) -> Stop | None:
         """Whether a visitor may start a conversation at all. Emits no span."""
@@ -208,7 +233,9 @@ class SpendGate:
                 assert budget.stop is not None
                 yield budget.stop
                 return
-            yield FundedTurn(budget, self._model_for_this_turn(), self._desk)
+            yield FundedTurn(
+                budget, self._model_for_this_turn(), self._desk, self._lane
+            )
 
     def _model_for_this_turn(self) -> ChatModel:
         """Build the model on first use and keep it. Private, and stays private.

@@ -65,6 +65,7 @@ from chip_chat.api.outcome import Stop
 from chip_chat.api.turns import SpendGate
 from chip_chat.otel import (
     TelemetryConfig,
+    TokenUsage,
     chat_turn,
     configure_tracing,
     render_response,
@@ -341,6 +342,18 @@ def _run_turn(
             _render(turn, message)
             return ChatReply(reply=message)
 
+        # What the whole turn cost, on the root of its trace. The individual
+        # `llm.completion` spans carry the OpenInference counts and are what a
+        # sum reconciles against the provider; this is the same figure under
+        # `chip_chat.tokens.*` so that Application Insights -- which searches
+        # attributes and does not walk trace trees -- can chart cost per
+        # conversation without one. See `ChipChatAttributes.TOKENS_TOTAL`.
+        turn.record_token_rollup(
+            TokenUsage(
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+            )
+        )
         _render(turn, result.reply)
         return ChatReply(
             reply=result.reply,

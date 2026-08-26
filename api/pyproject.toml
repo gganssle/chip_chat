@@ -8,6 +8,11 @@ dependencies = [
     # The agent this service puts a request path in front of, and the page it
     # serves. Both directions are one-way: neither imports back into api/.
     "chip-chat-agent",
+    # The photo lane the gate hands to the agent. Named here as well as through
+    # `chip-chat-agent` because this package imports `chip_chat.vision.lane`
+    # directly, and a dependency reached only transitively is one a refactor
+    # elsewhere can take away.
+    "chip-chat-vision",
     "chip-chat-web",
     # The draft store prices from the catalogue and validates against it, so
     # `drafts.py` holds a `MenuCatalog`. Nothing else in this package does.
@@ -29,4 +34,5 @@ packages = ["src/chip_chat"]
 chip-chat-agent = { workspace = true }
 chip-chat-catalog = { workspace = true }
 chip-chat-otel = { workspace = true }
+chip-chat-vision = { workspace = true }
 chip-chat-web = { workspace = true }

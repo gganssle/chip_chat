@@ -129,10 +129,12 @@ from chip_chat.vision.describe import (
     DescriptionRejectedError,
     MealDescriber,
     SlotValue,
+    VisionAnswer,
     VisionModel,
     confidence_profile,
 )
 from chip_chat.vision.intake import PhotoIntake, StoredPhoto
+from chip_chat.vision.lane import PhotoLane, PhotoMatch
 from chip_chat.vision.limits import SUPPORTED_MEDIA_TYPES, UploadLimits
 from chip_chat.vision.matcher import (
     NOTHING_SEEN,
@@ -236,6 +238,8 @@ __all__ = [
     "NormalizedImage",
     "Outcome",
     "PhotoIntake",
+    "PhotoLane",
+    "PhotoMatch",
     "RejectionReason",
     "Reply",
     "ReplyKind",
@@ -251,6 +255,7 @@ __all__ = [
     "UploadLimits",
     "UploadRejectedError",
     "ValidImage",
+    "VisionAnswer",
     "VisionModel",
     "Vocabulary",
     "VocabularyError",
