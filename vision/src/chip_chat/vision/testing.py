@@ -658,6 +658,26 @@ class StubVisionModel:
         return VisionAnswer(content=self.response or "", usage=self.usage)
 
 
+CONFIDENT_MEAL: Mapping[str, Any] = {
+    **DESCRIBED_MEAL,
+    "protein": {"value": "chicken", "confidence": 0.96},
+    "rice": {"value": "white_rice", "confidence": 0.93},
+    "beans": {"value": "black_beans", "confidence": 0.91},
+    "salsas": [{"value": "fresh_tomato_salsa", "confidence": 0.9}],
+    "toppings": [
+        {"value": "cheese", "confidence": 0.92},
+        {"value": "guacamole", "confidence": 0.95},
+    ],
+}
+"""The same meal as :data:`DESCRIBED_MEAL`, believed rather than doubted.
+
+:data:`DESCRIBED_MEAL`'s confidences are spread across the floors on purpose --
+that is what makes the calibration and escalation tests mean something -- which
+also means it resolves to a *question* rather than to a draft. A test about the
+span tree of a resolved photo turn wants the other case, and saying which one it
+wants is better than a fixture that quietly does both jobs badly.
+"""
+
 STUB_PHOTO_REF = BlobRef(container="uploads", name="2026-01-01/a-photograph.jpg")
 """The photograph :func:`photo_lane` stores, and the ref a test passes back in.
 
@@ -683,9 +703,10 @@ def photo_lane(
     the other's fixtures.
 
     Args:
-        model: The stage-4 double. Defaults to a fresh :class:`StubVisionModel`,
-            which answers :data:`DESCRIBED_MEAL` and reports
-            :data:`STUB_VISION_USAGE`.
+        model: The stage-4 double. Defaults to one answering
+            :data:`CONFIDENT_MEAL` and reporting :data:`STUB_VISION_USAGE`, so
+            that a lane run end to end resolves to catalogue rows rather than
+            to a clarification -- see :data:`CONFIDENT_MEAL`.
         terms: The vocabulary and catalogue to build. Defaults to
             :data:`DEFAULT_TERMS`.
         restaurant_id: Whose prices to quote. Defaults to the catalogue's
@@ -697,14 +718,23 @@ def photo_lane(
     """
     images = InMemoryBlobStore(container=STUB_PHOTO_REF.container)
     images.put(STUB_PHOTO_REF.name, solid_image(fmt="JPEG"), content_type="image/jpeg")
+    # One build, not two. Stage 5 checks the catalogue build stage 4 was
+    # constrained to, so a vocabulary stamped with the fixture default and a
+    # catalogue that computed its own digest would raise `CatalogueDriftError`
+    # before any of this got as far as a span.
+    catalog = menu_catalog(terms)
     return (
         PhotoLane(
             MealDescriber(
-                model if model is not None else StubVisionModel(),
+                model
+                if model is not None
+                else StubVisionModel(response=json.dumps(CONFIDENT_MEAL)),
                 images=images,
-                vocabulary=generated_vocabulary(terms),
+                vocabulary=generated_vocabulary(
+                    terms, content_version=catalog.content_version()
+                ),
             ),
-            MealMatcher(menu_catalog(terms)),
+            MealMatcher(catalog),
             restaurant_id=restaurant_id,
         ),
         images,

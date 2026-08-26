@@ -26,6 +26,11 @@ the matcher did not resolve, and it is what
 [#55](https://github.com/gganssle/chip_chat/issues/55) adds on top of a
 `Resolution`.
 
+Stages 4 and 5 together are the agent's `match_meal_from_photo` tool, and
+`lane.py` is that composition — one tool span holding both, which is the tree
+RFC-001 §09 draws and not what running the two stages back to back produces.
+See [One tool call, not two](#one-tool-call-not-two).
+
 ## Using it
 
 A library rather than a route, for the same reason the spend cap is one: the
@@ -462,6 +467,45 @@ produce.
 Names are `uploads/<date>/<uuid4>.jpg` — unguessable, and carrying nothing about
 the visitor. No session id, no address, no filename. A container listing is not
 a record of who was where.
+
+### One tool call, not two
+
+`lane.py` composes stages 4 and 5 into the single `tool.match_meal_from_photo`
+that RFC-001 section 09 draws:
+
+```
+tool.match_meal_from_photo
+├─ vision.describe        image ref, structured output, tokens
+└─ matcher.resolve        slot confidences, resolved SKUs
+```
+
+It exists because the alternative is subtly wrong and looks fine.
+`MealDescriber.describe_as_tool` and `MealMatcher.resolve_as_tool` each open
+their *own* `agent.step` and their own tool span — right for a batch evaluation
+over one stage, and wrong for a turn. Run back to back they produce two tool
+calls: the image and the description under one, the resolved SKUs under the
+other. Nothing errors, both traces are well formed, and the trace has quietly
+stopped answering "what did the lane make of this photograph" in one place.
+`PhotoLane.match` runs both inside whichever tool span the caller already
+opened, which is how the agent calls it; `match_as_tool` opens the span for the
+callers that are not the agent, and rolls the lane's tokens onto it.
+
+`vision/tests/test_lane.py` is what fails if that is ever taken apart again, and
+`api/tests/test_turn_trace.py` asserts the same shape through a whole request.
+
+### `vision.describe` is an LLM span, so it owes a token count
+
+The schema types it as one, and the photo lane is the expensive lane — an image
+is worth a few hundred prompt tokens. `VisionModel.describe` therefore returns a
+`VisionAnswer` carrying the provider's usage alongside the content, mirroring
+`chip_chat.agent.model.ModelReply`, and the counts reach the span exactly as
+`llm.completion`'s do. A provider that reports no usage leaves the span bare
+rather than zeroed: a lane that looked free would be worse than one that admits
+it does not know.
+
+The ref also rides as an OpenInference multimodal input, so Phoenix renders the
+span as a vision call with an image attached rather than as an LLM span holding
+an opaque string. Still a reference — see above.
 
 ## The three photographs that are not the happy path
 
