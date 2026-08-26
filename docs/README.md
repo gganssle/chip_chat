@@ -54,7 +54,7 @@ Decided in [issue #6](https://github.com/gganssle/chip_chat/issues/6) and inheri
 by everything built after it.
 
 - **Python 3.13**, managed by [uv](https://docs.astral.sh/uv/). One lockfile at the
-  repository root; each of the eleven directories is a uv workspace member with its
+  repository root; each of the twelve directories is a uv workspace member with its
   own `pyproject.toml`.
 - **ruff** for both formatting and linting. **mypy** for type checking, strict on
   `otel/` and `agent/`. **pytest** for tests.

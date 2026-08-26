@@ -52,6 +52,7 @@ evaluation.
 ```
 infra/        Terraform for all Azure resources
 harvest/      Public menu, nutrition, and policy ingestion
+catalog/      The consolidated menu catalogue: what is orderable
 data-gen/     Seeded synthetic account generator
 databricks/   Unity Catalog medallion pipelines, MLflow recommender
 snowflake/    Schema, RBAC, row access policies, semantic view, stored procs

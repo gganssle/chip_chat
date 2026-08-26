@@ -13,7 +13,7 @@ what makes the SHA-256 in a manifest a number worth comparing.
 import hashlib
 import json
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import fields
+from dataclasses import fields, is_dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -22,13 +22,22 @@ from chip_chat.harvest.blobs import BlobStore
 
 
 def _json_ready(value: Any) -> Any:
-    """Return ``value`` in a form :func:`json.dumps` can write deterministically."""
+    """Return ``value`` in a form :func:`json.dumps` can write deterministically.
+
+    Nested rows are written whole rather than flattened. No table this source
+    produces nests, so its bytes are unaffected; the catalogue of issue #24
+    does — a store's opening hours are seven rows that belong to the store —
+    and splitting them into a side table there would be a schema invented to
+    suit a serialiser.
+    """
     if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, datetime):
         return value.isoformat()
-    if isinstance(value, tuple):
-        return list(value)
+    if isinstance(value, tuple | list):
+        return [_json_ready(item) for item in value]
+    if is_dataclass(value) and not isinstance(value, type):
+        return _row(value)
     return value
 
 

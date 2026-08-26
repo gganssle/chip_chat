@@ -232,8 +232,11 @@ can quote it.
 **A reward's picture is not a reward's item.** Half the tiles use marketing art,
 and an "ENTRÉE" is not the burrito its photograph happens to show, so `rewards`
 keeps the published `image_path` verbatim and derives no `item_id` from it.
-Joining a reward to what it redeems for is issue #24's job, with the whole
-catalogue in hand.
+Issue #24 looked at joining a reward to what it redeems for with the whole
+catalogue in hand, and did not: "ENTRÉE" is a category rather than an item, "SIDE
+TORTILLA" matches no item name, and the `cmg-NNNN` slug in an image path inherits
+the `CMG-1002` ambiguity the nutrition harvest found. Tracked separately as
+`cc-b5a`; see [`docs/decisions/catalog-shape.md`](../docs/decisions/catalog-shape.md).
 
 **The catering API has its own subscription key.** Not the one the www page
 publishes in its `<meta>` tags — that key answers 401 there. It is read the same
@@ -344,6 +347,18 @@ Terraform output, a hostname and not a secret. The credential comes from
 managed identity when deployed. **No key is read and none is stored.** A run that
 finds no PDF never asks for a token at all, so building the other three datasets
 needs no Azure subscription.
+
+## What is built on top of this
+
+The three datasets above are one harvest of one site. `catalog/` consolidates them
+into `menu_catalog` — the single source of truth for what is orderable, which the
+synthetic order generator, the vision matcher and the retrieval chunker all resolve
+against. See [`catalog/README.md`](../catalog/README.md).
+
+```bash
+python -m chip_chat.harvest.sources.chipotle --landing landing --dataset all
+python -m chip_chat.catalog --landing landing --offline
+```
 
 ## Testing against it
 

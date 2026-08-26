@@ -6,6 +6,7 @@ requires-python = ">=3.13"
 dependencies = [
     "chip-chat-agent",
     "chip-chat-api",
+    "chip-chat-catalog",
     "chip-chat-data-gen",
     "chip-chat-databricks",
     "chip-chat-eval",
@@ -36,6 +37,7 @@ package = false
 members = [
     "agent",
     "api",
+    "catalog",
     "data-gen",
     "databricks",
     "eval",
@@ -50,6 +52,7 @@ members = [
 [tool.uv.sources]
 chip-chat-agent = { workspace = true }
 chip-chat-api = { workspace = true }
+chip-chat-catalog = { workspace = true }
 chip-chat-data-gen = { workspace = true }
 chip-chat-databricks = { workspace = true }
 chip-chat-eval = { workspace = true }
@@ -70,6 +73,7 @@ line-length = 90
 src = [
     "agent/src",
     "api/src",
+    "catalog/src",
     "data-gen/src",
     "databricks/src",
     "eval/src",
@@ -122,9 +126,11 @@ explicit_package_bases = true
 mypy_path = [
     # Shared test helpers live beside the tests that use them, and pytest puts
     # that directory on sys.path. Mypy needs telling separately.
+    "catalog/tests",
     "harvest/tests",
     "agent/src",
     "api/src",
+    "catalog/src",
     "data-gen/src",
     "databricks/src",
     "eval/src",
@@ -174,6 +180,7 @@ source_modules = ["chip_chat.otel"]
 forbidden_modules = [
     "chip_chat.agent",
     "chip_chat.api",
+    "chip_chat.catalog",
     "chip_chat.data_gen",
     "chip_chat.databricks",
     "chip_chat.eval",
@@ -193,6 +200,7 @@ addopts = "-ra --strict-markers --strict-config"
 testpaths = [
     "agent/tests",
     "api/tests",
+    "catalog/tests",
     "data-gen/tests",
     "databricks/tests",
     "eval/tests",
