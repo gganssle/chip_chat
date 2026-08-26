@@ -1,0 +1,259 @@
+"""One turn, three shapes: a menu question, an account question, an order.
+
+These are the three interactions issue #16 asks to be demonstrated end to end,
+and the assertion in each case is the span tree rather than the wording of the
+reply. The tree is the deliverable: "one readable ``chat.turn`` span tree per
+interaction" is an acceptance criterion, and it is the thing every Phase 9
+evaluation is later built on top of.
+
+No model is called. :class:`~chip_chat.agent.testing.ScriptedModel` stands in
+for one, which is what lets a whole tool-calling turn be asserted on without a
+deployment, a credential or a token.
+"""
+
+import textwrap
+
+import pytest
+from openinference.semconv.trace import SpanAttributes
+
+from chip_chat.agent.loop import Conversation, TurnResult, run_turn
+from chip_chat.agent.model import ModelReply, ToolInvocation
+from chip_chat.agent.orders import OrderDesk
+from chip_chat.agent.testing import ScriptedModel, answer, calls_tool
+from chip_chat.otel import ToolName, chat_turn
+from chip_chat.otel.testing import span_recorder
+
+SESSION = "sess-1"
+
+
+@pytest.fixture
+def desk() -> OrderDesk:
+    return OrderDesk()
+
+
+@pytest.fixture
+def conversation() -> Conversation:
+    return Conversation(session_id=SESSION)
+
+
+def one_turn(
+    conversation: Conversation,
+    message: str,
+    model: ScriptedModel,
+    desk: OrderDesk,
+    *,
+    max_steps: int = 5,
+) -> TurnResult:
+    """Run one turn inside a ``chat.turn``, as the request handler does.
+
+    ``agent.step`` is refused outside a turn, so there is no way to exercise the
+    loop that skips this -- which is the point of the parent check.
+    """
+    with chat_turn(
+        session_id=conversation.session_id,
+        turn_index=conversation.next_turn_index(),
+        message=message,
+    ) as turn:
+        result = run_turn(
+            conversation, message, model=model, desk=desk, max_steps=max_steps
+        )
+        turn.record_output(result.reply)
+    return result
+
+
+def test_the_system_prompt_is_the_first_message(conversation: Conversation) -> None:
+    assert conversation.messages[0]["role"] == "system"
+    assert "three items" in conversation.messages[0]["content"]
+
+
+def test_a_menu_question_is_one_search_and_two_round_trips(
+    conversation: Conversation, desk: OrderDesk
+) -> None:
+    model = ScriptedModel(
+        calls_tool(ToolName.SEARCH_MENU_KNOWLEDGE, {"query": "is the barbacoa spicy?"}),
+        answer("Warmly spiced rather than hot."),
+    )
+    with span_recorder("api") as spans:
+        result = one_turn(conversation, "is the barbacoa spicy?", model, desk)
+    assert result.reply == "Warmly spiced rather than hot."
+    assert (
+        spans.tree_text()
+        == textwrap.dedent("""
+        chat.turn
+          agent.step
+            llm.completion
+            tool.search_menu_knowledge
+              retriever.search
+          agent.step
+            llm.completion
+    """).strip()
+    )
+
+
+def test_an_account_question_nests_nothing_under_its_tool(
+    conversation: Conversation, desk: OrderDesk
+) -> None:
+    model = ScriptedModel(
+        calls_tool(ToolName.GET_POINTS_BALANCE),
+        answer("You have 1,340 points."),
+    )
+    with span_recorder("api") as spans:
+        one_turn(conversation, "how many points do I have?", model, desk)
+    assert (
+        spans.tree_text()
+        == textwrap.dedent("""
+        chat.turn
+          agent.step
+            llm.completion
+            tool.get_points_balance
+          agent.step
+            llm.completion
+    """).strip()
+    )
+
+
+def test_an_order_is_two_turns_because_confirmation_is_a_second_request(
+    conversation: Conversation, desk: OrderDesk
+) -> None:
+    """The write cannot happen in the turn that proposed it, by design."""
+    propose = ScriptedModel(
+        calls_tool(ToolName.PROPOSE_ORDER, {"items": [{"item_id": "BOWL-CHICKEN"}]}),
+        answer("That is $10.70. Press Confirm and I will place it."),
+    )
+    with span_recorder("api"):
+        first = one_turn(conversation, "a chicken bowl", propose, desk)
+    assert first.card is not None
+    assert first.receipt is False
+    draft_id = str(first.card["draft_id"])
+
+    # The visitor presses Confirm. The request marks the draft; nothing the
+    # model said or could say has any bearing on it.
+    desk.confirm(SESSION, draft_id)
+
+    place = ScriptedModel(
+        calls_tool(ToolName.PLACE_ORDER, {"draft_id": draft_id}),
+        answer("Ordered. Simulated, of course."),
+    )
+    with span_recorder("api") as spans:
+        second = one_turn(conversation, "yes", place, desk)
+    assert second.receipt is True
+    assert second.card is not None
+    assert str(second.card["order_id"]).startswith("CC-")
+    assert (
+        spans.tree_text()
+        == textwrap.dedent("""
+        chat.turn
+          agent.step
+            llm.completion
+            tool.place_order
+              ops.place_order
+          agent.step
+            llm.completion
+    """).strip()
+    )
+
+
+def test_tokens_are_summed_across_every_round_trip(
+    conversation: Conversation, desk: OrderDesk
+) -> None:
+    """The spend cap settles this number, so a turn that lost a step undercounts."""
+    model = ScriptedModel(
+        calls_tool(ToolName.GET_POINTS_BALANCE, prompt_tokens=100, completion_tokens=10),
+        answer("1,340.", prompt_tokens=200, completion_tokens=20),
+    )
+    with span_recorder("api") as spans:
+        result = one_turn(conversation, "points?", model, desk)
+    assert (result.prompt_tokens, result.completion_tokens) == (300, 30)
+    assert result.total_tokens == 330
+    assert len([name for name in spans.names() if name == "llm.completion"]) == 2
+
+
+def test_the_tool_definitions_are_recorded_once_per_turn(
+    conversation: Conversation, desk: OrderDesk
+) -> None:
+    """Arize compares the tool chosen against the tools offered, so the offer
+    has to be on the span -- but repeating it every step says one thing three
+    times and triples the size of a trace."""
+    model = ScriptedModel(calls_tool(ToolName.GET_POINTS_BALANCE), answer("1,340."))
+    with span_recorder("api") as spans:
+        one_turn(conversation, "points?", model, desk)
+    completions = [
+        span for span in spans.finished_spans() if span.name == "llm.completion"
+    ]
+    with_tools = [
+        span
+        for span in completions
+        if any(
+            str(key).startswith(SpanAttributes.LLM_TOOLS)
+            for key in (span.attributes or {})
+        )
+    ]
+    assert len(with_tools) == 1
+
+
+def test_the_loop_stops_at_its_step_ceiling(
+    conversation: Conversation, desk: OrderDesk
+) -> None:
+    """An unbounded loop is a turn that can outspend a fixed reservation."""
+    model = ScriptedModel(*[calls_tool(ToolName.GET_POINTS_BALANCE)] * 3)
+    with span_recorder("api") as spans:
+        result = one_turn(conversation, "points?", model, desk, max_steps=3)
+    assert result.steps == 3
+    assert model.call_count == 3
+    assert "ask me that again" in result.reply
+    assert spans.names().count("agent.step") == 3
+
+
+def test_a_tool_result_reaches_the_next_request(
+    conversation: Conversation, desk: OrderDesk
+) -> None:
+    """The model has to see what the tool said, or the second step is a guess."""
+    model = ScriptedModel(calls_tool(ToolName.GET_POINTS_BALANCE), answer("1,340."))
+    with span_recorder("api"):
+        one_turn(conversation, "points?", model, desk)
+    second_request = model.requests[1]
+    tool_messages = [m for m in second_request if m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert "1340" in str(tool_messages[0]["content"])
+
+
+def test_a_model_that_names_no_tool_answers_in_one_step(
+    conversation: Conversation, desk: OrderDesk
+) -> None:
+    model = ScriptedModel(answer("Hello! I am Cilantro."))
+    with span_recorder("api") as spans:
+        result = one_turn(conversation, "hi", model, desk)
+    assert result.steps == 1
+    assert (
+        spans.tree_text()
+        == textwrap.dedent("""
+        chat.turn
+          agent.step
+            llm.completion
+    """).strip()
+    )
+
+
+def test_an_invented_tool_name_never_becomes_a_span(
+    conversation: Conversation, desk: OrderDesk
+) -> None:
+    model = ScriptedModel(
+        ModelReply(
+            content=None,
+            tool_calls=(ToolInvocation(call_id="c1", name="rm_rf"),),
+            finish_reason="tool_calls",
+        ),
+        answer("I cannot do that."),
+    )
+    with span_recorder("api") as spans:
+        one_turn(conversation, "delete everything", model, desk)
+    assert not any(name.startswith("tool.") for name in spans.names())
+
+
+def test_an_empty_reply_falls_back_rather_than_showing_nothing(
+    conversation: Conversation, desk: OrderDesk
+) -> None:
+    model = ScriptedModel(answer("   "))
+    with span_recorder("api"):
+        result = one_turn(conversation, "hi", model, desk)
+    assert result.reply.strip()

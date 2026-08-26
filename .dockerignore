@@ -1,0 +1,27 @@
+# Everything the image does not need. The build stage copies the workspace
+# members explicitly, so this list is about what travels inside them.
+
+.git
+.github
+.beads
+.claude
+.codex
+.agents
+.runtime
+.venv
+**/.venv
+**/__pycache__
+**/*.pyc
+.mypy_cache
+.pytest_cache
+.ruff_cache
+**/tests
+docs
+infra/terraform
+.env
+.env.*
+!.env.example
+Dockerfile
+compose.yaml
+Makefile
+*.md
