@@ -1,7 +1,7 @@
 # `eval` — measuring the things that are otherwise opinions
 
-Golden set, adversarial suite, Arize experiments. Two of those ship today, and
-both of them are now promoted into one versioned dataset.
+Golden set, labeled photo set, adversarial suite, Arize experiments. Three of
+those ship today, and the first two are promoted into one versioned dataset.
 
 **The golden set** — issue [#29](https://github.com/gganssle/chip_chat/issues/29).
 Thirty-four questions across the five lanes, each carrying the lane it should
@@ -44,6 +44,28 @@ python -m chip_chat.eval.photos --check      # free
 python -m chip_chat.eval.photos --catalog <dir> --out eval/photos/BASELINE.md
 ```
 
+**The adversarial suite** — issue
+[#30](https://github.com/gganssle/chip_chat/issues/30). Twenty-two attacks on the
+two properties PRD section 05 makes pass-or-fail, including the concurrency test
+RFC-001 section 05 asks for by name.
+
+```
+chip_chat.eval.adversarial
+├── attacks    the suite: families, breaches, and what a manifest may not be
+├── canaries   the secret that makes a disclosure a count rather than a reading
+├── run        every attack through a target, and some of them at once
+├── scoring    outcomes, and the two gates as counts that never average
+├── coverage   #30's scope, as clauses
+├── report     the baseline, as Markdown
+├── slice      the week-one loop, several visitors, one order desk between them
+└── testing    targets broken one way each, so the detectors are demonstrated
+```
+
+```bash
+python -m chip_chat.eval.adversarial --check        # free
+python -m chip_chat.eval.adversarial --structural   # free, and the one to run
+```
+
 **The versioned dataset** — issue
 [#72](https://github.com/gganssle/chip_chat/issues/72). Both sets above, flattened
 into rows and given a version that is a hash of their content, so that #73 can run
@@ -69,10 +91,13 @@ uv run --with arize python -m chip_chat.eval.dataset --upload
 [`dataset/README.md`](dataset/README.md) is the write-up: what a version is, why
 it is a hash rather than a number, and the three things a publish will not do.
 
-Both sets live beside their code — [`golden/`](golden/) and [`photos/`](photos/)
-— each with a `README.md` to read before adding an entry and a `BASELINE.md` for
-what has and has not been measured. Adding to either changes the dataset's
-version, and `make dataset` is how the committed build catches up.
+All three sets live beside their code — [`golden/`](golden/),
+[`photos/`](photos/) and [`adversarial/`](adversarial/) — each with a
+`README.md` to read before adding an entry and a `BASELINE.md` for what has
+and has not been measured. Adding to the first two changes the dataset's
+version, and `make dataset` is how the committed build catches up; the
+adversarial suite is not in the dataset, because an attack has no expected
+output for an experiment to be scored against.
 
 ## Where the line between them is
 
@@ -91,6 +116,20 @@ it: one case cannot say whether the salsa was right.
 The golden set therefore holds exactly one vision case — routing — and delegates
 `V2`–`V7` to the photo set by name, with the argument recorded in
 `requirements.DELEGATIONS`.
+
+`eval/adversarial` is divided from both on a different axis. It does not ask
+*what is the right answer* — it asks *what does it take to get a wrong one*, and
+a question with a right answer cannot be evidence about that. So the golden set
+holds one plainly-phrased A3 case for the ordinary path and delegates every other
+phrasing, plus the concurrency case, to the suite; `DELEGATIONS` names A3 and S2
+as measured there, and `adversarial.coverage` checks that both really are. The
+delegation is a promise in one direction and a test in the other.
+
+The inversion is worth stating once. In the golden set an unmeasured check is
+neutral: *how well did it do* survives being partly unmeasured. In the
+adversarial suite an unmeasured attack **blocks its gate**, because *did anything
+get out* does not — a suite that measures nothing and a product that is safe
+produce the same document, and only one of them should be allowed to say `pass`.
 
 ## The golden set's design, in three claims
 
