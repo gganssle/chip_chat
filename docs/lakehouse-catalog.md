@@ -227,7 +227,11 @@ that table-to-table lineage alone would not have shown.
 
 - **No tables.** The `lineage_probe` tables are evidence, not data. #33 has
   since landed bronze from ADLS with Auto Loader — see
-  [bronze-ingestion.md](bronze-ingestion.md) — and #34 builds silver and gold.
+  [bronze-ingestion.md](bronze-ingestion.md) — #34 builds silver, see
+  [silver-conformance.md](silver-conformance.md), and #35 fills
+  `gold_harvested` with the chunk table, see
+  [corpus-chunking.md](corpus-chunking.md). `gold_synthetic` is still empty and
+  is #36's.
 - **No MLflow model registry.** The recommender registered in Unity Catalog is
   later in Phase 3.
 - **No Snowflake publish.** Gold is where this project's two halves meet, and

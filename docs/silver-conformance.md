@@ -382,9 +382,11 @@ nutrition sentence. Four block occurrences, three distinct facts, four citations
   criteria are claims about a live system, and until `silver_verify` has returned
   SUCCESS against `dbw-chip-chat` they are claims about an unrun pipeline.
 - **No chunking.** [#35](https://github.com/gganssle/chip_chat/issues/35) takes
-  `document_blocks` and `document_tables` and structures them for retrieval.
-  Silver's job is to make sure there is nothing in them that should not be
-  chunked, and that every row can cite itself.
+  `document_blocks` and `document_tables` — and four more of the tables here —
+  and structures them for retrieval. It has since landed; see
+  [corpus-chunking.md](corpus-chunking.md). Silver's job is to make sure there is
+  nothing in them that should not be chunked, and that every row can cite
+  itself.
 - **No marts.** [#36](https://github.com/gganssle/chip_chat/issues/36) builds
   `customer_360`, `usual_order`, `item_affinity` and `spend_summary` on top of
   these tables.
