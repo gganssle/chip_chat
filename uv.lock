@@ -533,11 +533,19 @@ name = "chip-chat-eval"
 version = "0.0.0"
 source = { editable = "eval" }
 dependencies = [
+    { name = "chip-chat-catalog" },
+    { name = "chip-chat-harvest" },
     { name = "chip-chat-otel" },
+    { name = "chip-chat-vision" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "chip-chat-otel", editable = "otel" }]
+requires-dist = [
+    { name = "chip-chat-catalog", editable = "catalog" },
+    { name = "chip-chat-harvest", editable = "harvest" },
+    { name = "chip-chat-otel", editable = "otel" },
+    { name = "chip-chat-vision", editable = "vision" },
+]
 
 [[package]]
 name = "chip-chat-harvest"

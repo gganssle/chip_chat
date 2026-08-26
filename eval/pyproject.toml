@@ -3,7 +3,17 @@ name = "chip-chat-eval"
 version = "0.0.0"
 description = "Golden set, adversarial suite, Arize experiments."
 requires-python = ">=3.13"
-dependencies = ["chip-chat-otel"]
+# The labeled photo set runs the real photo lane over real frames, so it holds
+# the vision package rather than a copy of its shapes; the catalogue for the
+# rows stage 5 resolves against, and harvest for the blob store that reads a
+# built catalogue off disk. An eval that re-implemented any of them would be
+# scoring something other than the pipeline.
+dependencies = [
+    "chip-chat-catalog",
+    "chip-chat-harvest",
+    "chip-chat-otel",
+    "chip-chat-vision",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -13,4 +23,7 @@ build-backend = "hatchling.build"
 packages = ["src/chip_chat"]
 
 [tool.uv.sources]
+chip-chat-catalog = { workspace = true }
+chip-chat-harvest = { workspace = true }
 chip-chat-otel = { workspace = true }
+chip-chat-vision = { workspace = true }

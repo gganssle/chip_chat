@@ -334,10 +334,12 @@ appeared, how they spread — and `is_meaningfully_distributed()` puts bounds on
 it. Half the slots at 1.0 is plausible on clear photographs; nearly all of them
 is a model reporting that it answered rather than how sure it was.
 
-The labeled photo set is [#56](https://github.com/gganssle/chip_chat/issues/56)
-and does not exist yet. What ships here is the check plus a test proving it
-catches the shape it is looking for; #56 feeds it real photographs and scores
-the number.
+The scorer that calls it is [#56](https://github.com/gganssle/chip_chat/issues/56)
+and ships in [`eval/photos/`](../eval/README.md): the report has a section for
+this profile, and it is computed over whatever the run described. The
+photographs are still missing — `eval/photos/BASELINE.md` records what that
+leaves unverified — so what is proven here remains the check itself plus a test
+that it catches a describer pinned at 1.0 on every slot.
 
 ### Nothing is named that the catalogue does not publish
 
