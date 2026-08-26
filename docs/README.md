@@ -10,6 +10,7 @@ contributor — human or agent — has them locally. Read them in this order.
 | [rfc-001.md](rfc-001.md) | Components, data model, tool contracts, span schema, decisions |
 | [service-inventory.md](service-inventory.md) | Verified service names, tiers, quotas and prices — and where the three documents above are now wrong |
 | [local-setup.md](local-setup.md) | Getting a machine from clean to a passing `make ci` — CLIs, authentication, and how secrets reach a local process |
+| [decisions/](decisions/) | Decision records for questions the planning documents left open |
 
 The system design frames the problem, the PRD defines what to build, and the RFC
 defines how. When two documents disagree, the table above decides: whichever one
@@ -24,6 +25,11 @@ date at the top of it says how long that is likely to stay true.
 The local setup guide is a fifth kind again: it is a *procedure*, not a plan or a
 check. It records what to install, how to authenticate each platform, and which
 steps are deliberately not done yet.
+
+The `decisions/` directory is a sixth: one file per question that was open when the
+planning documents were written and has since been settled. A decision record carries
+the choice, the rationale, and what it costs — and the document it amends is edited in
+the same commit, so the RFC never disagrees with the record that changed it.
 
 ## Repository conventions
 
