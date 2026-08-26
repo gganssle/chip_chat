@@ -15,6 +15,7 @@ contributor — human or agent — has them locally. Read them in this order.
 | [lakehouse-catalog.md](lakehouse-catalog.md) | The Unity Catalog layout — six medallion schemas, who may write to them, and the two jobs that check both claims against the live workspace |
 | [bronze-ingestion.md](bronze-ingestion.md) | How both streams get out of ADLS and into bronze — the Auto Loader options, what a row carries, where a malformed document goes, and the run that checked all four claims |
 | [silver-conformance.md](silver-conformance.md) | How both streams stop being what arrived and start being what is true — what is deduplicated and on which key, what counts as boilerplate and how its removal is checked, and which violations stop the pipeline |
+| [snowflake-account.md](snowflake-account.md) | The serving layer's account — two X-Small warehouses that suspend in sixty seconds, three roles that are siblings rather than a ladder, and the seven Snowflake behaviours that make a security check pass while proving nothing |
 | [deployment.md](deployment.md) | Getting the chat app onto the public URL — the procedure, and the ten things that surprised the first person to do it |
 | [chipotle-nutrition-spot-check.md](chipotle-nutrition-spot-check.md) | What the harvested nutrition and allergen data was checked against by hand, and when |
 | [chipotle-policy-spot-check.md](chipotle-policy-spot-check.md) | The same, for the harvested rewards, FAQ, catering and store data |
@@ -52,7 +53,11 @@ asks for, and the job that asserts each of them against the live workspace. The
 silver-conformance guide continues it one further, and is the first of them that
 has to argue rather than record — which key a duplicate is collapsed on, what
 counts as boilerplate, and why every expectation in that layer stops the pipeline
-instead of writing a warning nobody reads.
+instead of writing a warning nobody reads. The Snowflake account guide is the
+lakehouse catalogue's opposite number on the serving side, and carries the same
+burden of proof: not that the read role is configured to be read-only, but that
+it was asked to write and refused — and it closes, like the deployment guide,
+with the things that surprised the person who did it first.
 
 The texture report is evidence of a different kind again, and the only document here
 that is *generated*. Issue #28 asks that "the data is interesting" become visible rather

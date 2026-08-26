@@ -236,6 +236,47 @@ dataset: ## Rebuild eval/dataset/DATASET.json after adding a case or a frame
 dataset-upload: ## Create the Arize dataset, or add a version holding the new entries
 	$(UV) run --with arize python -m chip_chat.eval.dataset --upload
 
+# --- The Snowflake serving layer --------------------------------------------
+#
+# Issue #41. Every role, grant and warehouse in `snowflake/sql/`, so the whole
+# account can be rebuilt after the trial expires -- which it will, 30 days or
+# $400 of credits from 2026-08-25, whichever comes first.
+#
+# `snowflake-apply` is safe to run repeatedly: it creates what is missing and
+# re-asserts every warehouse setting, and it never drops anything. The only
+# target that destroys is `snowflake-rebuild`, which drops the database first --
+# that is what makes #41's fourth criterion something you can run rather than
+# something you can assert.
+#
+# `snowflake-verify` is the one target here that spends credits, and about five
+# cents of them: it wakes the serving warehouse and waits to watch it suspend,
+# because #41's first criterion says "verified" rather than "configured".
+# `snowflake-verify-fast` skips that minute and checks the setting instead.
+#
+# None of these are in `make ci`. They need a `snow` connection and a live trial,
+# and a gate that needs a credential and a credit balance is not a gate. What is
+# in CI is `snowflake/tests/`, which holds the SQL to `chip_chat.snowflake.account`
+# for free.
+
+.PHONY: snowflake-plan snowflake-apply snowflake-verify snowflake-verify-fast \
+        snowflake-rebuild
+
+snowflake-plan: ## Print the SQL files an apply would run, in order
+	$(UV) run python -m chip_chat.snowflake.apply --plan
+
+snowflake-apply: ## Create or re-assert every Snowflake object from snowflake/sql
+	$(UV) run python -m chip_chat.snowflake.apply
+
+snowflake-verify: ## Check the live account against issue #41, suspension included
+	$(UV) run python -m chip_chat.snowflake.verify
+
+snowflake-verify-fast: ## The same, minus the minute spent watching it suspend
+	$(UV) run python -m chip_chat.snowflake.verify --no-watch
+
+snowflake-rebuild: ## Tear the account down and build it back -- #41 criterion 4
+	$(UV) run python -m chip_chat.snowflake.apply --reset --yes
+	@$(MAKE) snowflake-verify
+
 # --- Deploying the chat app -------------------------------------------------
 #
 # Terraform owns the estate; a deploy owns the image. compute.tf deliberately

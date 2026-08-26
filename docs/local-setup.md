@@ -27,7 +27,7 @@ things that cost an hour to discover.
 | `az` | 2.89.1 | `brew install azure-cli` | Everything Azure: the subscription, the resource group, Key Vault |
 | `terraform` | 1.15.8 | `brew install hashicorp/tap/terraform` | `infra/` — all Azure resources |
 | `databricks` | 1.13.0 | `brew install databricks/tap/databricks` | `databricks/` — the nightly lakehouse |
-| `snow` | **not installed** | `brew install snowflake-cli` (3.25.0) | `snowflake/` — deliberately deferred, see below |
+| `snow` | 3.25.0 | `brew install snowflake-cli` | `snowflake/` — the serving layer, and every `make snowflake-*` target |
 | `gh` | any recent | `brew install gh` | Issues are the tracker; several `make` and agent flows shell out to it |
 | `docker` | 29.5.2 | Docker Desktop | `make dev` — the local Phoenix container, see [local-tracing.md](local-tracing.md) |
 
@@ -146,28 +146,39 @@ U2M refreshes itself and expires on its own. If a PAT is ever genuinely needed �
 for a job principal, not for a human — it goes in Key Vault, never in
 `~/.databrickscfg` by hand.
 
-### Snowflake — deliberately not installed
+### Snowflake — installed, and the clock is running
 
-`snow` is **not installed on this machine, and that is on purpose.**
-
-The Snowflake trial is a 30-day clock carrying roughly $400 of credits, and
-[issue #40](https://github.com/gganssle/chip_chat/issues/40) holds it until Phase 4
-for one reason: started now, the clock burns through the whole lakehouse build and
-expires somewhere around the vision lane. Day one of the trial should be a
-productive day. Installing the CLI early invites someone to run `snow connection
-add`, which invites starting the trial, so the install waits with the trial.
-
-When Phase 4 arrives, the formula is in homebrew-core (3.25.0 as of this writing):
+This section used to say `snow` was deliberately not installed, because
+[#40](https://github.com/gganssle/chip_chat/issues/40) held the trial until Phase 4.
+The trial started on **2026-08-25** and that gate is closed. What it was protecting
+against is now the live situation: 30 days or roughly $400 of credits, whichever
+comes first, and an idle warehouse spends the second while you watch the first.
 
 ```bash
 brew install snowflake-cli
-snow --version
-snow connection add --connection-name chip-chat   # prompts; see the secrets section
-snow connection test --connection-name chip-chat  # verifies
+snow --version                                  # 3.25.0
+snow connection add --connection-name chipchat  # prompts; see the secrets section
+snow connection test --connection-name chipchat # verifies
 ```
 
-If you are reading this and `snow` is missing, nothing is wrong. Check
-[#40](https://github.com/gganssle/chip_chat/issues/40) before installing it.
+The connection is named `chipchat` and lives in `~/.snowflake/config.toml`, mode
+600. Nothing in the repository holds a Snowflake credential; `.env.example` carries
+the account identifier and the object names and says so.
+
+The account is **AWS us-east-2 (Ohio)**, not Azure East US 2. The region is fixed at
+signup and cannot be changed; the decision to keep it, and what it costs — Cortex
+Analyst runs cross-region from there — is [#104](https://github.com/gganssle/chip_chat/issues/104).
+Azure itself remains `eastus2` and is unaffected.
+
+Everything in the account is built from checked-in SQL:
+
+```bash
+make snowflake-apply         # create or re-assert every object. Safe to repeat
+make snowflake-verify-fast   # check it against issue #41, no credits worth naming
+```
+
+[snowflake-account.md](snowflake-account.md) is the write-up: what is in there, who
+may touch it, and the four things `make snowflake-verify` proves.
 
 ### Arize — no CLI
 
@@ -190,7 +201,9 @@ Concretely:
   instead. The same code works in both places with nothing configured.
 - **Non-Azure credentials** — Snowflake, the Arize API key, the ops API function
   key, a Databricks PAT if one ever exists — are stored as Key Vault secrets and
-  fetched at process start over that same credential.
+  fetched at process start over that same credential. The three Snowflake service
+  users are created without any credential at all; attaching a key pair to one is
+  an operator step, and [snowflake-account.md](snowflake-account.md) has it.
 - **`.env` carries configuration, never credentials.** Copy
   [`.env.example`](../.env.example) to `.env` and fill in resource *names*:
   subscription id, resource group, vault URI. `.env` is gitignored; `.env.example`
@@ -317,7 +330,9 @@ except the two marked otherwise.
 | `terraform version` | v1.15.8, matching `.terraform-version` |
 | `databricks version` | v1.13.0 |
 | `databricks auth describe` | **Fails** — no workspace yet, see above |
-| `snow --version` | **Not found** — deliberate, see [#40](https://github.com/gganssle/chip_chat/issues/40) |
+| `snow --version` | Snowflake CLI version: 3.25.0 |
+| `snow connection test -c chipchat` | A table naming account `hq72718` and role `ACCOUNTADMIN` |
+| `make snowflake-verify-fast` | 24 checks, all passing |
 | `az keyvault secret list --vault-name kv-chip-chat-c8b63a` | Empty, no error |
 | `make setup && make ci` | Green |
 | `docker version` | A `Server:` section — the daemon is running |
