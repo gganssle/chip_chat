@@ -201,17 +201,55 @@ daily ceiling either way.
 check on every request" and "responds within seconds" are both true rather than
 one being traded for the other.
 
+## The draft store — the other thing this package owns
+
+`drafts.py` holds the order drafts, and it is here rather than in `agent/` for
+one reason: **the confirmation rule is only enforceable if the flag it reads
+lives somewhere the model cannot write to.** RFC-001 §06 rejects any draft not
+marked confirmed by a request carrying the visitor's session, so the flag is set
+by `DraftStore.confirm`, which is reached from the request handler — the
+`confirm_draft_id` field that arrives beside the session cookie — and by no tool,
+ever. An agent that decides to skip the confirmation step therefore produces a
+rejected write and an eval failure rather than an order.
+
+| Method | Who calls it | What it is for |
+| --- | --- | --- |
+| `propose` | `propose_order`, i.e. the model | Mint a priced draft. Writes nothing. |
+| `revise` | `propose_order` again | The editable card of PRD T3: a new draft, unconfirmed, and the one it replaces is retired. |
+| `confirm` | the request handler, on the visitor's Confirm | **The launch gate.** No tool reaches it. |
+| `claim` | the ops API, before it writes | §7.1 rule 11 in one place: confirmed, unexpired, and removed as it is handed over, so one draft is at most one order. |
+
+Four properties, each a test in `api/tests/test_drafts.py`:
+
+- **Only real catalogue rows are mintable.** Every `item_id`, every
+  `(item, modifier)` pairing and every portion word is looked up in
+  `menu_catalog` at proposal time. A draft naming a SKU that does not exist is
+  not rejected later — it cannot be minted.
+- **Prices are the catalogue's.** Per restaurant, per order type, modifier
+  deltas included, with the `harvested_at` of the rows used on the card. Money
+  is a column on a restaurant; see `docs/decisions/menu-pricing.md`.
+- **A draft belongs to one visitor.** It is bound to the `demo_id` the app
+  resolved from the session. A well-formed id presented with the wrong one is a
+  `DRAFT_NOT_FOUND` — the same answer as an id that never existed.
+- **Drafts expire.** A quote from a harvest ages; fifteen minutes by default,
+  and the number is `[INVENTED]` as §7.1 rule 11 says.
+
+Rejections are typed and use `docs/action-surface.md` §7.1's own spellings, so
+Phase 9's evaluations group on one vocabulary. Three of that section's rules
+need columns the catalogue does not carry — the per-item `max_quantity` and the
+aggregate-cap weights — so rule 4 is flattened to one entree or five of anything
+else and rule 9 is not enforced here at all. That is `cc-of1`.
+
 ## What is not here yet
 
-The counters are process-local, which is honest for the single-instance
-deployment this demo runs on. `BudgetLedger`, `SourceRateLimiter` and
-`UploadLimiter` keep their state behind one lock and one interface so that a
-shared store has exactly three places to land when a second instance exists.
-deployment this demo runs on — and is why the container runs **one** uvicorn
-worker. A second worker would be a second ledger, and the daily ceiling would
-quietly mean twice what it says. `BudgetLedger` and `SourceRateLimiter` keep their
-state behind one lock and one interface so that a shared store has exactly two
-places to land when a second instance exists.
+Every counter and every draft is process-local, which is honest for the
+single-instance deployment this demo runs on — and is why the container runs
+**one** uvicorn worker. A second worker would be a second ledger, and the daily
+ceiling would quietly mean twice what it says. `BudgetLedger`,
+`SourceRateLimiter`, `UploadLimiter` and `DraftStore` keep their state behind one
+lock and one interface so that a shared store has exactly four places to land
+when a second instance exists. A forgotten draft costs a visitor one
+re-proposal; it is never a draft placed unconfirmed.
 
 Issue #85 trips the ceiling against the real deployment. `SpendLimits.from_env`
 is how that is done without a code change.

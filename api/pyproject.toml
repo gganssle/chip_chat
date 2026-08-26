@@ -9,6 +9,9 @@ dependencies = [
     # serves. Both directions are one-way: neither imports back into api/.
     "chip-chat-agent",
     "chip-chat-web",
+    # The draft store prices from the catalogue and validates against it, so
+    # `drafts.py` holds a `MenuCatalog`. Nothing else in this package does.
+    "chip-chat-catalog",
     "fastapi>=0.115",
     # [standard] brings httptools and uvloop. The container runs one process
     # with a handful of workers; the difference is not academic there.
@@ -24,5 +27,6 @@ packages = ["src/chip_chat"]
 
 [tool.uv.sources]
 chip-chat-agent = { workspace = true }
+chip-chat-catalog = { workspace = true }
 chip-chat-otel = { workspace = true }
 chip-chat-web = { workspace = true }

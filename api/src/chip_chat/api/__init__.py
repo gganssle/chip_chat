@@ -22,6 +22,12 @@ Read :mod:`chip_chat.api.guard` for the four layers and
 :mod:`chip_chat.api.turns` for why there is no second route past them. The one
 property the whole package exists to hold is that a refusal happens *before* a
 model is called, in the request path, synchronously.
+
+:mod:`chip_chat.api.drafts` is here for the same kind of reason. A draft's
+``confirmed`` flag is what RFC-001 section 06's confirmation rule reads, so it
+lives in the app tier where no tool argument and no model output can reach it --
+and the ops API's refusal of an unconfirmed draft is then a fact about the
+system rather than an instruction in a prompt.
 """
 
 from chip_chat.api.app import (
@@ -35,6 +41,16 @@ from chip_chat.api.app import (
     default_kill_switch,
 )
 from chip_chat.api.clock import Clock, SystemClock
+from chip_chat.api.drafts import (
+    DEFAULT_DRAFT_TTL_SECONDS,
+    Draft,
+    DraftLine,
+    DraftRejectedError,
+    DraftStore,
+    OrderType,
+    RejectionCode,
+    Selection,
+)
 from chip_chat.api.guard import SpendGuard, TurnBudget
 from chip_chat.api.killswitch import (
     KILL_SWITCH_VARIABLE,
@@ -60,6 +76,7 @@ from chip_chat.api.uploads import UploadLimiter
 from chip_chat.otel import service_name
 
 __all__ = [
+    "DEFAULT_DRAFT_TTL_SECONDS",
     "KILL_SWITCH_VARIABLE",
     "SERVICE_NAME",
     "SESSION_COOKIE",
@@ -70,12 +87,19 @@ __all__ = [
     "ChatReply",
     "ChatRequest",
     "Clock",
+    "Draft",
+    "DraftLine",
+    "DraftRejectedError",
+    "DraftStore",
     "EnvironmentKillSwitch",
     "FileKillSwitch",
     "FundedTurn",
     "KillSwitch",
     "ManualKillSwitch",
+    "OrderType",
+    "RejectionCode",
     "Reservation",
+    "Selection",
     "Service",
     "SessionStore",
     "SourceRateLimiter",

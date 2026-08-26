@@ -466,6 +466,7 @@ version = "0.0.0"
 source = { editable = "api" }
 dependencies = [
     { name = "chip-chat-agent" },
+    { name = "chip-chat-catalog" },
     { name = "chip-chat-otel" },
     { name = "chip-chat-web" },
     { name = "fastapi" },
@@ -475,6 +476,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "chip-chat-agent", editable = "agent" },
+    { name = "chip-chat-catalog", editable = "catalog" },
     { name = "chip-chat-otel", editable = "otel" },
     { name = "chip-chat-web", editable = "web" },
     { name = "fastapi", specifier = ">=0.115" },
