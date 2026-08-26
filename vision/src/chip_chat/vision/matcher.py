@@ -69,10 +69,29 @@ would produce a draft composed entirely of real catalogue items that nobody in
 the picture is eating.
 
 ``is_chipotle_style`` false: the food in the frame is not the kind this
-restaurant serves, so there is no honest entree for it. What the visitor is told
-in either case is issue #55's; both arrive here as an :class:`Outcome` rather
-than an exception, because a deterministic matcher answering "not this" is an
-ordinary result and not a failure.
+restaurant serves, so there is no honest entree for it. Both arrive here as an
+:class:`Outcome` rather than an exception, because a deterministic matcher
+answering "not this" is an ordinary result and not a failure.
+
+What the visitor is *told* in either case is issue #55's and lives in
+:mod:`chip_chat.vision.reply`. What this module owes that one is the material to
+say it with, because the sentence has menu words in it and this is the component
+allowed to produce those:
+
+* :attr:`Resolution.alternative` -- PRD V4 requires the non-Chipotle path to
+  "offer the closest thing that is available", which is a concrete composition
+  of catalogue rows and therefore a lookup rather than a phrase. It is built
+  here, from the same indexes and under the same rule as a draft: available at
+  this restaurant, or not offered.
+* :attr:`Resolution.seen` -- PRD V3 requires stating what was believed "in the
+  visitor's language", and PRD V5 requires a clarifying question to name the
+  slot it is unsure of. Both need the *published* word for a term rather than
+  the slug the model returned, so every believed slot carries the name off its
+  vocabulary row and :class:`Clarification` carries one too.
+
+:mod:`chip_chat.vision.reply` holds no catalogue and takes none. It cannot name
+an item that did not come off a row, for the same reason the matcher cannot read
+the model's ``notes``: it is never given the thing.
 
 One catalogue, one vocabulary
 -----------------------------
@@ -112,12 +131,22 @@ __all__ = [
     "Outcome",
     "Resolution",
     "ResolvedItem",
+    "SeenSlot",
     "SlotRule",
     "SlotRules",
 ]
 
 ENV_PREFIX: Final = "CHIP_CHAT_MATCHER_"
 """Prefix of every knob :meth:`SlotRules.from_env` reads."""
+
+NOTHING_SEEN: Final = 0.0
+"""The confidence carried by a :attr:`Resolution.alternative` item.
+
+An offer is not an observation. Nothing in the frame was seen as a Chicken Bowl
+-- the frame is a poke bowl -- so there is no model confidence to carry, and
+carrying one would make an offer look like a match on any surface that charts
+the number.
+"""
 
 ENTREE_CATEGORY: Final = "Entree"
 """The published category an orderable entree carries.
@@ -364,7 +393,10 @@ class ResolvedItem:
         item_id: The published catalogue identifier. **A real row, always.**
         name: The published name of that row -- the only place in this lane a
             menu word may come from.
-        confidence: What the model said about the term, above this slot's floor.
+        confidence: What the model said about the term, above this slot's floor
+            -- and :data:`NOTHING_SEEN` on a :attr:`Resolution.alternative`
+            item, where the photograph showed nothing that this row was chosen
+            from. A number the model never produced must not read as one it did.
         modifier_id: For a modifier, the ``<item_id>:<modifier_item_id>`` pair
             that identifies it *on this entree*, since the same ingredient is a
             different modifier on a different parent. ``None`` for the entree.
@@ -390,6 +422,32 @@ class ResolvedItem:
 
 
 @dataclass(frozen=True, slots=True)
+class SeenSlot:
+    """One slot the matcher believed, in the word the catalogue publishes.
+
+    The difference from :class:`ResolvedItem` is what it is *for*. A resolved
+    item is a row on a draft and has an identifier and a price; a seen slot is
+    an observation to read back to the visitor, and a vessel has no identifier
+    of its own to be one. PRD V3 asks for what was believed to be stated "in the
+    visitor's language" before they confirm, and that is every believed slot
+    rather than only the ones that became SKUs.
+
+    Attributes:
+        slot: Which slot it is.
+        term: The vocabulary term the model returned, e.g. ``white_rice``.
+        name: The published name that term was derived from, e.g.
+            ``White Rice``. **Read off the vocabulary row**, which is what makes
+            a sentence built from it unable to name something unpublished.
+        confidence: What the model said, at or above this slot's floor.
+    """
+
+    slot: Slot
+    term: str
+    name: str
+    confidence: float
+
+
+@dataclass(frozen=True, slots=True)
 class Clarification:
     """One required slot that has to be asked about rather than guessed.
 
@@ -398,12 +456,18 @@ class Clarification:
         reason: Why it could not be resolved. See :class:`ClarificationReason`.
         term: What the model returned, where it returned anything. ``None`` for
             :attr:`ClarificationReason.MISSING`.
+        name: The published name of :attr:`term`, where the vocabulary carries
+            one. The question is asked in this word rather than in the slug,
+            because PRD V5's clarifying question is read by a visitor -- and it
+            comes off a catalogue row rather than out of a phrase book, so a
+            question about a term cannot name a thing the menu does not.
         confidence: What it said about that term, where it said anything.
     """
 
     slot: Slot
     reason: ClarificationReason
     term: str | None = None
+    name: str | None = None
     confidence: float | None = None
 
 
@@ -448,6 +512,21 @@ class Resolution:
         meals_visible: What the model counted, carried through so that a caller
             handling :attr:`Outcome.SEVERAL_MEALS` can say how many it saw --
             PRD V7 requires saying the number rather than picking one.
+        seen: Every slot the matcher believed, in published words, in schema
+            order. Populated whenever stage 5 ran -- on
+            :attr:`Outcome.RESOLVED` and on :attr:`Outcome.CLARIFY`, where it is
+            what lets the question say what it *did* make out rather than only
+            what it did not. Empty on the two outcomes stage 5 declines to run
+            on, because nothing was believed on either.
+        alternative: The closest available meal this restaurant sells, on
+            :attr:`Outcome.NOT_ORDERABLE` and empty on every other outcome. The
+            entree first, then one row for each required modifier slot -- the
+            same composition a draft has, and every row a real one. Empty also
+            when the restaurant has no available entree at all, which is a
+            catalogue state rather than a photograph and is why a caller has to
+            handle it. **Not a draft**: it was chosen from the menu rather than
+            resolved from the photograph, so it is not in :meth:`items`, not in
+            :meth:`item_ids`, and not in :meth:`total`.
     """
 
     outcome: Outcome
@@ -458,6 +537,8 @@ class Resolution:
     clarifications: tuple[Clarification, ...] = ()
     discarded: tuple[DiscardedSlot, ...] = ()
     meals_visible: int = 0
+    seen: tuple[SeenSlot, ...] = ()
+    alternative: tuple[ResolvedItem, ...] = ()
 
     @property
     def resolved(self) -> bool:
@@ -513,7 +594,15 @@ class MealMatcher:
     that names a product is the step with no model in it.
     """
 
-    __slots__ = ("_by_item", "_catalog", "_entrees", "_modifiers", "_prices", "_rules")
+    __slots__ = (
+        "_by_item",
+        "_catalog",
+        "_entrees",
+        "_modifiers",
+        "_names",
+        "_prices",
+        "_rules",
+    )
 
     def __init__(
         self,
@@ -538,6 +627,7 @@ class MealMatcher:
         self._entrees = _entree_index(catalog)
         self._modifiers = _modifier_index(catalog.modifiers)
         self._prices = _price_index(catalog)
+        self._names = _name_index(catalog)
         self._by_item = {item.item_id: item for item in catalog.menu_items}
 
     @property
@@ -655,6 +745,15 @@ class MealMatcher:
                 restaurant_id=restaurant,
                 content_version=version,
                 meals_visible=meal.meals_visible,
+                # Only on the not-orderable branch. A frame with four poke bowls
+                # is both outcomes and comes back as the other one, and offering
+                # an alternative there would answer a question -- which meal? --
+                # that PRD V7 requires asking rather than answering.
+                alternative=(
+                    self._alternative(meal, restaurant)
+                    if declined is Outcome.NOT_ORDERABLE
+                    else ()
+                ),
             )
 
         clarifications: list[Clarification] = []
@@ -670,6 +769,7 @@ class MealMatcher:
         # above never sees it -- an absent slot has no value to iterate over.
         clarifications.extend(self._missing(meal))
 
+        seen = self._seen(meal)
         if clarifications or entree is None:
             return Resolution(
                 outcome=Outcome.CLARIFY,
@@ -678,6 +778,7 @@ class MealMatcher:
                 clarifications=tuple(clarifications),
                 discarded=tuple(discarded),
                 meals_visible=meal.meals_visible,
+                seen=seen,
             )
         return Resolution(
             outcome=Outcome.RESOLVED,
@@ -687,6 +788,7 @@ class MealMatcher:
             modifiers=tuple(modifiers),
             discarded=tuple(discarded),
             meals_visible=meal.meals_visible,
+            seen=seen,
         )
 
     def _entree(
@@ -737,6 +839,7 @@ class MealMatcher:
                     slot=asked[0],
                     reason=ClarificationReason.NO_CATALOGUE_ROW,
                     term=asked[1].value,
+                    name=self._published(asked[0], asked[1].value),
                     confidence=asked[1].confidence,
                 )
             )
@@ -771,6 +874,7 @@ class MealMatcher:
                     slot=slot,
                     reason=ClarificationReason.NO_CATALOGUE_ROW,
                     term=value.value,
+                    name=self._published(slot, value.value),
                     confidence=value.confidence,
                 )
             else:
@@ -822,9 +926,184 @@ class MealMatcher:
                 slot=slot,
                 reason=ClarificationReason.LOW_CONFIDENCE,
                 term=value.value,
+                name=self._published(slot, value.value),
                 confidence=value.confidence,
             )
         return None
+
+    # --- what the visitor is told about (issue #55) -------------------------
+
+    def _seen(self, meal: DescribedMeal) -> tuple[SeenSlot, ...]:
+        """Every slot believed at or above its floor, in published words.
+
+        Believed and not resolved: a vessel is half of an entree and never a row
+        of its own, so a description whose protein could not be read has no
+        resolved item to say "it looked like a bowl" with. PRD V3 asks for that
+        sentence anyway, and this is what it is built from.
+
+        A term the vocabulary does not carry is skipped rather than passed
+        through. It cannot arrive from a deployment -- stage 4 validates against
+        the same vocabulary -- but the only word available for one would be the
+        model's own slug, and putting that in front of a visitor is the one
+        thing this lane does not do.
+        """
+        believed: list[SeenSlot] = []
+        for slot, value in _filled(meal):
+            if value.confidence < self._rules.for_slot(slot).floor:
+                continue
+            name = self._published(slot, value.value)
+            if name is None:
+                continue
+            believed.append(
+                SeenSlot(
+                    slot=slot,
+                    term=value.value,
+                    name=name,
+                    confidence=value.confidence,
+                )
+            )
+        return tuple(believed)
+
+    def _alternative(
+        self, meal: DescribedMeal, restaurant: int
+    ) -> tuple[ResolvedItem, ...]:
+        """Compose the closest available meal to what the frame showed.
+
+        PRD V4: *"When the photo is not Chipotle-style food, says so and offers
+        the closest thing that is available."* Three words in that sentence are
+        doing work, and each is a rule here.
+
+        **Closest.** A photograph of a poke bowl is still a photograph of a
+        bowl, and the model fills what slots it can from the catalogue's
+        vocabulary whatever the food turns out to be. Every believed slot is
+        honoured where the menu can honour it, so the offer starts from what the
+        visitor is actually looking at rather than from a house favourite.
+
+        **Available.** An offer is a promise about today, so a row with no price
+        at this restaurant, or one the harvest recorded as out, is not offered.
+        This is the same fail-closed reading
+        :attr:`ResolvedItem.available` takes, applied before the sentence rather
+        than after it.
+
+        **Thing, singular.** The offer is the composition a draft cannot be
+        proposed without -- the entree and each required modifier slot -- and no
+        more. Salsas and toppings the frame may have shown are left off: the
+        confirmation card is editable, and the cheap correction is adding one
+        rather than noticing something nobody offered.
+
+        Ties break toward the cheapest, then toward the lower identifier. Cheap
+        rather than popular because this is a suggestion the visitor did not ask
+        for, and the version of that which costs more is an upsell wearing a
+        helpful sentence.
+        """
+        believed: dict[Slot, SlotValue] = {}
+        for slot in (Slot.VESSEL, Slot.PROTEIN, Slot.RICE, Slot.BEANS):
+            value = _single(meal, slot)
+            if value is not None and value.confidence >= self._rules.for_slot(slot).floor:
+                believed[slot] = value
+
+        entree = self._closest_entree(believed, restaurant)
+        if entree is None:
+            return ()
+        offered = [entree]
+        for slot in self._rules.required:
+            if slot in (Slot.VESSEL, Slot.PROTEIN):
+                continue
+            modifier = self._closest_modifier(
+                entree.item_id, slot, believed.get(slot), restaurant
+            )
+            if modifier is not None:
+                offered.append(modifier)
+        return tuple(offered)
+
+    def _closest_entree(
+        self, believed: Mapping[Slot, SlotValue], restaurant: int
+    ) -> ResolvedItem | None:
+        """Pick the available entree nearest to what was believed.
+
+        The vessel counts for more than the protein, and deliberately: the
+        vessel is the shape of the thing in the frame and it is what "closest"
+        means to somebody looking at their own photograph. A protein is a
+        judgement about what is inside it, which on food this menu does not
+        serve is a judgement about something that has no answer here anyway.
+        """
+        vessel = believed.get(Slot.VESSEL)
+        protein = believed.get(Slot.PROTEIN)
+        best: tuple[tuple[int, Decimal, str], ResolvedItem] | None = None
+        for (vessel_term, protein_term), item in self._entrees.items():
+            price = self._prices.get((restaurant, item.item_id))
+            if price is None or not price[1]:
+                continue
+            closeness = 0
+            if vessel is not None and vessel.value == vessel_term:
+                closeness += 2
+            if protein is not None and protein.value == protein_term:
+                closeness += 1
+            key = (-closeness, price[0], item.item_id)
+            if best is not None and key >= best[0]:
+                continue
+            best = (
+                key,
+                ResolvedItem(
+                    slot=Slot.VESSEL,
+                    term=vessel_term,
+                    item_id=item.item_id,
+                    name=item.name,
+                    confidence=NOTHING_SEEN,
+                    unit_price=price[0],
+                    available=True,
+                ),
+            )
+        return None if best is None else best[1]
+
+    def _closest_modifier(
+        self,
+        item_id: str,
+        slot: Slot,
+        believed: SlotValue | None,
+        restaurant: int,
+    ) -> ResolvedItem | None:
+        """Pick the available modifier this entree offers, nearest what was seen.
+
+        Candidates come from the vocabulary rather than from the modifier table,
+        so the offer can only be composed of things the described-meal
+        vocabulary knows -- which is the same set the model could have named,
+        and therefore the same set the visitor can correct it to.
+        """
+        offered: list[tuple[str, Modifier, Decimal]] = []
+        for row in self._catalog.vocabulary:
+            if row.slot is not slot:
+                continue
+            modifier = self._offered(item_id, slot, row.value)
+            if modifier is None:
+                continue
+            priced = self._prices.get((restaurant, modifier.modifier_item_id))
+            if priced is None or not priced[1]:
+                continue
+            offered.append((row.value, modifier, priced[0]))
+        if not offered:
+            return None
+        chosen = min(offered, key=lambda row: (row[2], row[1].modifier_item_id))
+        if believed is not None:
+            for candidate in offered:
+                if candidate[0] == believed.value:
+                    chosen = candidate
+                    break
+        term, modifier, price = chosen
+        return ResolvedItem(
+            slot=slot,
+            term=term,
+            item_id=modifier.modifier_item_id,
+            name=modifier.name,
+            confidence=NOTHING_SEEN,
+            modifier_id=modifier.modifier_id,
+            unit_price=price,
+            available=True,
+        )
+
+    def _published(self, slot: Slot, term: str) -> str | None:
+        """Return the published name of one vocabulary term, if it has one."""
+        return self._names.get((slot, term))
 
     def _offered(self, item_id: str, slot: Slot, term: str) -> Modifier | None:
         """Return the modifier row this entree offers for ``term`` in ``slot``.
@@ -901,6 +1180,17 @@ def _modifier_index(
     return {
         (modifier.item_id, modifier.modifier_item_id): modifier for modifier in modifiers
     }
+
+
+def _name_index(catalog: MenuCatalog) -> Mapping[tuple[Slot, str], str]:
+    """Map ``(slot, term)`` to the published name the term was derived from.
+
+    The one place a vocabulary term becomes a word a visitor reads. It is an
+    index off ``catalog.vocabulary`` rather than a table in this file for the
+    reason the enums are generated: a spelling written here would be a
+    hand-maintained menu in the file nobody would think to regenerate.
+    """
+    return {(row.slot, row.value): row.name for row in catalog.vocabulary}
 
 
 def _price_index(catalog: MenuCatalog) -> Mapping[tuple[int, str], tuple[Decimal, bool]]:

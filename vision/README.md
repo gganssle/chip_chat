@@ -18,7 +18,13 @@ the step that names one, and it is the step with no model in it.
 | 3 Moderate | Content Safety, then the write | `moderation.py`, `store.py` |
 | 4 Describe | Structured slots, no free text | `describe.py`, `vocabulary.py` |
 | 5 Resolve | Deterministic catalogue match | `matcher.py` |
+| 5 Answer | The sentence the visitor reads | `reply.py` |
 | 6 Propose | Priced, confirmable draft | [#62](https://github.com/gganssle/chip_chat/issues/62) |
+
+`reply.py` shares stage 5's number because it is not a stage. It names no item
+the matcher did not resolve, and it is what
+[#55](https://github.com/gganssle/chip_chat/issues/55) adds on top of a
+`Resolution`.
 
 ## Using it
 
@@ -106,13 +112,22 @@ resolution = matcher.resolve(
     restaurant_id=session.store_id,
     content_version=description.content_version,
 )
-if resolution.resolved:
-    return card(resolution.items(), resolution.total())  # #62 renders it
-return ask(resolution)  # #55 writes it
 ```
 
 `matcher.resolve` is the other child of `tool.<tool_name>`, so the same rule
 applies and `resolve_as_tool()` is the same escape hatch.
+
+What the visitor is *told* about that resolution is one function, and it takes
+the resolution and nothing else:
+
+```python
+from chip_chat.vision import reply_for
+
+answer = reply_for(resolution)
+say(answer.text)  # every menu word in it came off a catalogue row
+if resolution.resolved:
+    card(answer.items, resolution.total())  # #62 renders it
+```
 
 **The vocabulary has to be generated before any of this runs.** It is not
 committed, on purpose:
@@ -422,9 +437,9 @@ produce a draft composed entirely of real catalogue items that nobody in the
 picture is eating. The count travels onto the `Resolution`, because PRD V7
 requires saying how many were seen rather than picking one.
 
-`is_chipotle_style` false is the other refusal — PRD V4. What to offer instead is
-[#55](https://github.com/gganssle/chip_chat/issues/55); declining to build a
-draft out of a poke bowl's slots is this package's.
+`is_chipotle_style` false is the other refusal — PRD V4. Declining to build a
+draft out of a poke bowl's slots is this package's; what the visitor hears
+instead is *The three photographs that are not the happy path*, below.
 
 ### The image never crosses a tool boundary
 
@@ -447,6 +462,142 @@ produce.
 Names are `uploads/<date>/<uuid4>.jpg` — unguessable, and carrying nothing about
 the visitor. No session id, no address, no filename. A container listing is not
 a record of who was where.
+
+## The three photographs that are not the happy path
+
+The happy path is the easy part. [#55](https://github.com/gganssle/chip_chat/issues/55)
+is the other three, and each has a *specified behaviour* rather than a default.
+`reply.py` is where the four outcomes stage 5 can reach become the four things a
+visitor can be told, and `reply_for()` is total over them — a fifth outcome
+added to the matcher without a sentence here is a mypy error rather than a
+photograph that gets no answer.
+
+### The sentence layer holds no catalogue, and that is the whole mechanism
+
+Every food word in every reply arrives on the `Resolution`: as a
+`ResolvedItem.name`, which is a published name, or as a `SeenSlot.name`, which
+is the published name a vocabulary term was derived from. `reply_for()` takes a
+resolution and takes nothing else. It has no catalogue to look anything up in,
+no vocabulary, and no client.
+
+That is PRD V6 — *never names a menu item that does not exist* — arranged rather
+than promised, and it is the same move stage 4 makes with `notes`. A rule saying
+"only interpolate catalogue names here" is obeyed until somebody is in a hurry
+and wants a nicer word for one item. A function with no catalogue in scope
+cannot look one up to be nicer about.
+
+`tests/test_reply.py` settles it the way `test_vocabulary.py` settles the
+model's vocabulary: it builds a different menu, publishing a Tofu Cauldron with
+Purple Rice, and asserts the same code says those words. A name hard-coded
+anywhere below would still be saying "Chicken Bowl".
+
+The slot words are the exception that proves it — *the protein*, *the rice*,
+*what it's served in*. Those name RFC-001 §07's **slots**, which are a fixed
+enum that changes when the schema changes and not when the menu does. `vessel`
+is the one that needed thinking about: the natural question is "was that a bowl
+or a burrito", and both of those are catalogue terms. So the question asks about
+*what it's served in* and lets the visitor supply the word, which is what the
+next turn resolves anyway.
+
+### Not Chipotle food: an offer, not a refusal and not a silent match
+
+PRD V4 asks for two things in one breath, and both halves are load-bearing.
+Dropping the first is a silent best-effort match — the visitor gets a burrito
+bowl and no idea that what they photographed was never on the menu. Dropping the
+second is a bare refusal, which the same requirement rules out in the same
+sentence.
+
+> That isn't something we make. The closest we do is a **Chicken Bowl** with
+> **White Rice** and **Black Beans** — say the word and I'll start there, or tell
+> me what you're after instead.
+
+The offer is composed in `matcher.py`, because composing it is a catalogue
+lookup and this is the component allowed to do those. Three words in the
+requirement are doing work, and each is a rule:
+
+**Closest.** A photograph of a poke bowl is still a photograph of a bowl, and
+the model fills what slots it can from the generated vocabulary whatever the
+food turns out to be. Every *believed* slot is honoured where the menu can
+honour it — a burrito of something we do not serve is offered a burrito. A term
+below its floor steers nothing, because an offer built from a term nobody
+believed is a guess with a nicer name on it. The vessel outranks the protein:
+it is the shape of the thing in the frame, and it is what "closest" means to
+somebody looking at their own photograph.
+
+**Available.** An offer is a promise about today, so a row with no price at this
+restaurant, or one the harvest recorded as out, is not offered. Same fail-closed
+reading as `ResolvedItem.available`, applied before the sentence rather than
+after it.
+
+**Thing, singular.** The offer is the composition a draft cannot be proposed
+without — the entree and each required modifier slot — and no more. Salsas and
+toppings the frame may have shown are left off, because the card is editable and
+the cheap correction is adding one rather than noticing something nobody offered.
+Ties break toward the cheapest, then the lower identifier: this is a suggestion
+the visitor did not ask for, and the version of that which costs more is an
+upsell wearing a helpful sentence.
+
+The offered rows are **not a draft**. They carry `confidence` of `NOTHING_SEEN`,
+because nothing in the frame was seen as a Chicken Bowl — the frame is a poke
+bowl — and a number the model never produced must not read on a dashboard like
+one it did. They are not in `items()`, not in `item_ids()`, and not in
+`total()`.
+
+### Low confidence: a question that names the slot
+
+PRD V5 asks a clarifying question rather than a guess. PRD V3 says what the
+question has to contain — what it believes it saw, in the visitor's language, so
+they can correct it before confirming. Issue #55 is the join of the two, and it
+is specific: **the hedge names the uncertain slot.**
+
+> It looks like a **Bowl** with **White Rice** and **Black Beans**. I'm least
+> sure about *the protein* — I read it as **Chicken**. Is that right?
+
+"I might be wrong about some of this" has the same hedging tone and tells the
+visitor nothing about which answer to check. It is a different behaviour, and
+`tests/test_reply.py` names it as a test rather than leaving it an absence.
+
+Two details that are requirements rather than phrasing:
+
+**Nothing is proposed.** A draft under a question is a guess with a disclaimer
+on it, which is what V5 exists to rule out.
+
+**The lead-in leaves out what is about to be asked about.** A term above its
+floor that resolves to no catalogue row is *both* believed and asked about, and
+a reply that said "I can see Steak" before asking what the protein was would
+read as not having looked at the photograph — the opposite of what V3 is for.
+
+The three clarification reasons are three different questions, and the missing
+one is the only one that groups: *"I couldn't make out the rice or the beans —
+what were they?"* A term the menu does not carry is raised first, because the
+visitor has something specific to replace; a slot that was not seen at all comes
+last, because it carries nothing for them to react to.
+
+### Several meals: the count, and no draft at all
+
+Decided in [#58](https://github.com/gganssle/chip_chat/issues/58) and written
+down in [`decisions/multi-meal-photos.md`](../docs/decisions/multi-meal-photos.md).
+That decision states three properties of this turn as requirements rather than
+as copy suggestions, and each is a test:
+
+> Looks like **about four** meals in that photo — I build one order at a time,
+> so I'd get it wrong if I guessed. Send me a photo of just the one you want, or
+> tell me which it is and I'll build it from there.
+
+**It names the count it saw.** "Several meals" is a category; "about four" is an
+observation the visitor can correct, which is what V3 asks for. The hedge starts
+at three, because two things in a frame is not an estimate and calling it one
+invites a correction nobody needed to make.
+
+**It offers a next step in both available modalities** — a re-crop, or words.
+A bare decline is the failure V4 already rules out for the non-Chipotle case,
+and the same standard applies here.
+
+**It never silently builds.** No card, no draft, no proposal.
+
+A table of four poke bowls is both this case and the last one, and it comes back
+as this one. Offering the closest thing there would answer the question — *which
+meal?* — that V7 requires asking rather than answering.
 
 ## Stage 3: what it refuses, and what it says
 
@@ -614,6 +765,15 @@ for everything else — `menu_catalog()` beside `generated_vocabulary()` in
 `testing.py` — are built from one set of terms on purpose: a vocabulary and a
 catalogue from two different builds is the drift `resolve()` raises on, and a
 fixture pair that could drift would make every assertion in the file conditional.
+
+`tests/test_reply.py` is issue #55's, and every case in it starts from encoded
+JPEG bytes going through the same four gates a stranger's upload does — the
+reference stage 4 is handed is a reference to a photograph that really passed
+moderation, rather than a fixture's promise that it would have. What is stubbed
+is the vision deployment, because a test cannot hold a model's opinion still and
+every assertion there is about what happens *given* an opinion. The thirty
+labelled photographs that score the opinion itself are
+[#56](https://github.com/gganssle/chip_chat/issues/56), which #55 unblocks.
 
 `tests/test_upload_abuse.py` is the adversarial suite from #80, and it asks a
 different question from `test_validate.py`: not "was the verdict right" but
