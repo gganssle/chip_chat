@@ -120,6 +120,9 @@ python_version = "3.13"
 namespace_packages = true
 explicit_package_bases = true
 mypy_path = [
+    # Shared test helpers live beside the tests that use them, and pytest puts
+    # that directory on sys.path. Mypy needs telling separately.
+    "harvest/tests",
     "agent/src",
     "api/src",
     "data-gen/src",

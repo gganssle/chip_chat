@@ -62,6 +62,64 @@ A weekly re-harvest can diff rather than blindly overwrite.
 `InMemoryBlobStore` writes nothing at all; the ADLS Gen2 raw landing zone
 plugs in behind the same four methods without a harvester noticing.
 
+## Sources
+
+Source-specific harvesters live in `chip_chat.harvest.sources`, one subpackage
+per site. Each is split into a fetch step that lands raw bytes and a parse step
+that reads only from the cache, so a parser bug costs a re-run rather than
+another pass over someone else's servers.
+
+### Chipotle's menu — `sources.chipotle`
+
+Issue #19. Items, descriptions, the modifier taxonomy, and prices.
+
+```bash
+python -m chip_chat.harvest.sources.chipotle --landing landing
+python -m chip_chat.harvest.sources.chipotle --landing landing --offline
+```
+
+The first run fetches four documents for one restaurant and parses them. The
+second parses what is cached and cannot fetch anything at all. Run it twice and
+the manifests it prints are identical, which is how issue #19's reproducibility
+criterion is checked rather than asserted.
+
+**The API address is discovered, not hardcoded.** Chipotle's public page hands
+its own front end the services host and subscription key in a pair of `<meta>`
+tags, and this source reads the same two tags. Nothing here holds a copied
+credential that goes stale the day it is rotated; if the page stops publishing
+them, the harvest stops with an error rather than falling back on a remembered
+value.
+
+**Ten tables come out**, written as JSON Lines beside the raw bytes under
+`parsed/chipotle/menu/`, with a `manifest.json` carrying each one's row count
+and SHA-256:
+
+| Table | What it is |
+| --- | --- |
+| `menu_items` | Every item, orderable alone or only as a modifier. A null `category` means the latter. |
+| `item_prices` | Money and availability, one row per item *per restaurant*. |
+| `modifier_groups` | The slots on an item, and how many choices each accepts. |
+| `modifiers` | Which item may go in which slot on which other item. |
+| `portion_options` | Light, Extra, Side, Half — where each is allowed. |
+| `meals` | The preconfigured orders Chipotle names and describes. |
+| `meal_contents` | What each of those is made of. |
+| `meal_prices` | What each restaurant charged for them. |
+| `ingredients` | The published prose about each ingredient. |
+| `item_ingredients` | The published taxonomy: proteins, rice and beans, toppings, sides. |
+
+**Prices are per restaurant, and that is a decision** — Chipotle's own prices
+vary by nearly twenty percent between stores. See
+[`docs/decisions/menu-pricing.md`](../docs/decisions/menu-pricing.md) for what a quoted price means
+and why one reference restaurant is harvested by default.
+
+**Descriptions are joined exactly or not at all.** Chipotle publishes prose
+about ingredients and prose about meals, and none about a Steak Burrito. The
+ingredient corpus links an ingredient to every item that *contains* it — black
+pepper lists the Steak Burrito — so an item takes an ingredient's description
+only when the ingredient is named after it and lists it. Everything else keeps a
+null description. The prose is all still there, in `ingredients` and `meals`,
+correctly keyed to what it actually describes.
+
 ## Testing against it
 
 `chip_chat.harvest.testing` ships `FakeTransport` and `FakeClock`. Use them —

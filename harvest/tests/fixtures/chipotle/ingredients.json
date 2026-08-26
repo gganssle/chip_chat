@@ -1,0 +1,170 @@
+{
+ "channel": "web",
+ "region": "us",
+ "ingredients": [
+  {
+   "backgroundUrlMobile": "/content/dam/chipotle/menu/ingredients/avocado/panel/avocado-3x-mobile.jpg",
+   "backgroundUrlWeb": "/content/dam/chipotle/menu/ingredients/avocado/panel/avocado-desktop-2x1.jpg",
+   "backgroundAltText": "",
+   "factsDescription": "Avocados are the guac to our chips and, dare we say it, pretty dreamy. But they've long been prized and adored - even by the mighty Aztecs. When farmers brought the fruit (yes, it's a fruit) to the U.S., they promptly rebranded it to the name you know today because they found its original one (\"ahuacate\") too difficult to pronounce. As for what that word actually means in the Aztec language, well, let's just say that's what the internet's for.",
+   "factsSubTitle": "Avocadabra",
+   "factsTitle": "FACT",
+   "key": "avoc",
+   "menuItems": [
+    "CMG-1003",
+    "CMG-1015",
+    "CMG-5301"
+   ],
+   "metaDescription": "",
+   "metaTitle": "Avocado",
+   "metaUrl": "/ingredients/avocado/_jcr_content/root/responsivegrid/ingredient.html",
+   "subDescription": "We use only Hass avocados because they're the creamiest, most delicious of all avocado varieties. They're dark green and bumpy on the outside and velvety smooth on the inside, with a high fat content - but the good kind (whew). Every morning we mash the avocados by hand and make batches of guac from scratch.",
+   "thumbnailUrl": "/content/dam/chipotle/menu/ingredients/avocado/grid/avocado.png",
+   "thumbnailUrlAltText": "Avocado",
+   "title": "Avocado"
+  },
+  {
+   "backgroundUrlMobile": "/content/dam/chipotle/menu/ingredients/black-beans/panel/black-beans-mobile-2x.jpg",
+   "backgroundUrlWeb": "/content/dam/chipotle/menu/ingredients/black-beans/panel/black-beans-desktop-2x.jpg",
+   "backgroundAltText": "",
+   "factsDescription": "The legume held so high a place in ancient Rome that four leading family names are variations of it: Fabius (fava), Piso (pea), Lentulus (lentil) and Cicero - one of the greatest orators, politicians and chickpeas of all time.",
+   "factsSubTitle": "Legume-dary",
+   "factsTitle": "FACT",
+   "key": "bbean",
+   "menuItems": [
+    "CMG-5051"
+   ],
+   "metaDescription": "",
+   "metaTitle": "Black Beans",
+   "metaUrl": "/ingredients/blackbeans/_jcr_content/root/responsivegrid/ingredient.html",
+   "subDescription": "Condor, Blackhawk, Domino, Valentine, and Black Magic. No, that's not a group of superheroes - it's actually the delicious list of black bean varieties we serve at Chipotle. Not to be confused with the ever-popular pinto beans we also serve at Chipotle, black beans are the perfect accompaniment to chicken or steak.",
+   "thumbnailUrl": "/content/dam/chipotle/menu/ingredients/black-beans/grid/black-beans.png",
+   "thumbnailUrlAltText": "Black Beans",
+   "title": "Black Beans"
+  },
+  {
+   "backgroundUrlMobile": "/content/dam/chipotle/menu/ingredients/salt/panel/salt-mobile-2x.jpg",
+   "backgroundUrlWeb": "/content/dam/chipotle/menu/ingredients/salt/panel/salt-desktop-2x.jpg",
+   "backgroundAltText": "",
+   "factsDescription": "Upon the observation that food was more easily swallowed when eaten with salt, the expression to take something \"with a grain of salt\" was born. Except it means instead of food, you swallow information. And instead of actual salt, you take the information with a healthy dose of skepticism. At Chipotle, we use far simpler expressions. So when we say to take something with a grain of salt, sprinkled atop a tortilla chip and dipped in guac, that's exactly what we mean.",
+   "factsSubTitle": "Chipotle-isms",
+   "factsTitle": "FACT",
+   "key": "salt",
+   "menuItems": [
+    "CMG-1",
+    "CMG-5101",
+    "CMG-5051",
+    "CMG-1032",
+    "CMG-1033",
+    "CMG-4025",
+    "CMG-5301",
+    "CMG-5001",
+    "CMG-4",
+    "CMG-5252",
+    "CMG-3011",
+    "CMG-3",
+    "CMG-5052",
+    "CMG-5",
+    "CMG-1002",
+    "CMG-5353",
+    "CMG-1003",
+    "CMG-1016",
+    "CMG-1015",
+    "CMG-2",
+    "CMG-5002",
+    "CMG-1005",
+    "CMG-1007",
+    "CMG-1008",
+    "CMG-5201",
+    "CMG-5202",
+    "CMG-5203",
+    "CMG-5204",
+    "CMG-1006"
+   ],
+   "metaDescription": "",
+   "metaTitle": "Salt",
+   "metaUrl": "/ingredients/salt/_jcr_content/root/responsivegrid/ingredient.html",
+   "subDescription": "Just like the food you make at home, salt is in most of our menu items. We use kosher salt to season the food we prepare in our restaurants from scratch, like our guac, cilantro-lime rice, and fresh tomato salsa, and to season the food cooked in our central kitchens, including our Barbacoa, Sofritas, and black beans. As in many professional kitchens, we use kosher salt because its larger, coarser flakes allow for even seasoning. For a closer look, just hold a tortilla chip close to your face. Really close. Then eat it (because it's delicious).",
+   "thumbnailUrl": "/content/dam/chipotle/menu/ingredients/salt/grid/salt.png",
+   "thumbnailUrlAltText": "Salt",
+   "title": "Salt"
+  },
+  {
+   "backgroundUrlMobile": "/content/dam/chipotle/menu/ingredients/white-rice/panel/white-rice-mobile-2x.jpg",
+   "backgroundUrlWeb": "/content/dam/chipotle/menu/ingredients/white-rice/panel/white-rice-desktop-2x.jpg",
+   "backgroundAltText": "",
+   "factsDescription": "With more than 120,000 different strains of grain in the world, it can be hard to keep them all straight. In general, the longer the grain, the firmer and fluffier the rice. Short and medium grains tend to be soft, moist, and sticky. Around here, all you need to know is that we use long-grain white rice.",
+   "factsSubTitle": "The rice formally known as",
+   "factsTitle": "FACT",
+   "key": "wric",
+   "menuItems": [
+    "CMG-5001"
+   ],
+   "metaDescription": "",
+   "metaTitle": "White Rice",
+   "metaUrl": "/ingredients/white-rice/_jcr_content/root/responsivegrid/ingredient.html",
+   "subDescription": "Every morning, we make our cilantro-lime white rice from scratch in each of our restaurants. We steam it with bay leaves to impart their herbal fragrance, then season it with lime and lemon juices and toss it with cilantro for its fresh, slightly tart flavor. It's like a classic white T-shirt - familiar, never goes out of style, and goes well with tomatillo-green chili salsa.",
+   "thumbnailUrl": "/content/dam/chipotle/menu/ingredients/white-rice/grid/white-rice.png",
+   "thumbnailUrlAltText": "White Rice",
+   "title": "White Rice"
+  }
+ ],
+ "ingredientGroups": [
+  {
+   "title": "proteins",
+   "items": [
+    {
+     "id": "CMG-1",
+     "ingredients": [
+      "bkpep",
+      "chic",
+      "cchil",
+      "cumi",
+      "vine",
+      "garl",
+      "oreg",
+      "salt",
+      "soil",
+      "wate"
+     ]
+    }
+   ]
+  },
+  {
+   "title": "rice and beans",
+   "items": [
+    {
+     "id": "CMG-5001",
+     "ingredients": [
+      "bayl",
+      "cila",
+      "leju",
+      "liju",
+      "soil",
+      "salt",
+      "wate",
+      "wric"
+     ]
+    },
+    {
+     "id": "CMG-5051",
+     "ingredients": [
+      "bayl",
+      "bbean",
+      "bkpep",
+      "cchil",
+      "cumi",
+      "garl",
+      "leju",
+      "liju",
+      "yeloni",
+      "oreg",
+      "soil",
+      "salt",
+      "wate"
+     ]
+    }
+   ]
+  }
+ ]
+}

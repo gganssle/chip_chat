@@ -1,0 +1,251 @@
+[
+ {
+  "mealId": "e4200067-da42-490c-81f1-37d26ddd9722",
+  "mealName": "Build-Your-Own Chicken",
+  "mealType": "BuildYourOwn",
+  "description": "Chicken, White Rice, Black Beans, Cheese, Romaine Lettuce, Fresh Tomato Salsa, Tomatillo-Red Chili Salsa, Sour Cream, Guacamole, 1 Large Chips, and 10 Soft Flour Tortillas.",
+  "mealPrice": 59,
+  "mealDeliveryPrice": 77,
+  "marketingCopy": "BuildYourOwn",
+  "gradient": "#627A3F",
+  "sortOrder": 1,
+  "calories": "520 - 1220",
+  "loyaltyCampaign": "",
+  "mealTags": [],
+  "dietaryTags": [
+   "Serves 4-6 people"
+  ],
+  "entree": {
+   "entreeName": "Build-Your-Own Chicken",
+   "itemId": "CMG-5374",
+   "itemName": "Build-Your-Own Chicken",
+   "quantity": 1,
+   "calories": "calories",
+   "unitPrice": 59,
+   "unitDeliveryPrice": 77,
+   "isItemAvailable": true,
+   "contents": [
+    {
+     "itemId": "CMG-5375",
+     "itemName": "White Rice",
+     "quantity": 1,
+     "calories": "calories",
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "customizationId": 0,
+     "customizationName": "",
+     "isItemAvailable": true
+    },
+    {
+     "itemId": "CMG-5376",
+     "itemName": "Black Beans",
+     "quantity": 1,
+     "calories": "calories",
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "customizationId": 0,
+     "customizationName": "",
+     "isItemAvailable": true
+    },
+    {
+     "itemId": "CMG-5378",
+     "itemName": "Cheese",
+     "quantity": 1,
+     "calories": "calories",
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "customizationId": 0,
+     "customizationName": "",
+     "isItemAvailable": true
+    },
+    {
+     "itemId": "CMG-5377",
+     "itemName": "Romaine Lettuce",
+     "quantity": 1,
+     "calories": "calories",
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "customizationId": 0,
+     "customizationName": "",
+     "isItemAvailable": true
+    },
+    {
+     "itemId": "CMG-5380",
+     "itemName": "Large Chips",
+     "quantity": 1,
+     "calories": "calories",
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "customizationId": 0,
+     "customizationName": "",
+     "isItemAvailable": true
+    },
+    {
+     "itemId": "CMG-5381",
+     "itemName": "Large Sour Cream",
+     "quantity": 1,
+     "calories": "calories",
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "customizationId": 0,
+     "customizationName": "",
+     "isItemAvailable": true
+    },
+    {
+     "itemId": "CMG-5379",
+     "itemName": "Soft Flour Tortillas (10)",
+     "quantity": 1,
+     "calories": "calories",
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "customizationId": 0,
+     "customizationName": "",
+     "isItemAvailable": true
+    },
+    {
+     "itemId": "CMG-5383",
+     "itemName": "Large Fresh Tomato Salsa",
+     "quantity": 1,
+     "calories": "calories",
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "customizationId": 0,
+     "customizationName": "",
+     "isItemAvailable": true
+    },
+    {
+     "itemId": "CMG-5382",
+     "itemName": "Large Guacamole",
+     "quantity": 1,
+     "calories": "calories",
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "customizationId": 0,
+     "customizationName": "",
+     "isItemAvailable": true
+    },
+    {
+     "itemId": "CMG-5396",
+     "itemName": "Large Tomatillo-Red Chili Salsa",
+     "quantity": 1,
+     "calories": "calories",
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "customizationId": 0,
+     "customizationName": "",
+     "isItemAvailable": true
+    }
+   ]
+  },
+  "sides": [],
+  "drinks": []
+ },
+ {
+  "mealId": "653abfb2-3b20-4b17-8638-d6a20b2c340c",
+  "mealName": "Josh Hart's High Protein Burrito",
+  "mealType": "HighProtein",
+  "description": "Burrito with White Rice, Double Adobo Chicken, Black Beans, Fresh Tomato Salsa, Roasted Chili-Corn Salsa, Sour Cream, and Cheese",
+  "mealPrice": 15.55,
+  "mealDeliveryPrice": 20.2,
+  "marketingCopy": "Burrito with White Rice, Double Adobo Chicken, Black Beans, Fresh Tomato Salsa, Roasted Chili-Corn Salsa, Sour Cream, and Cheese",
+  "gradient": "",
+  "sortOrder": 1,
+  "calories": "1345",
+  "loyaltyCampaign": "",
+  "mealTags": [],
+  "dietaryTags": [
+   "95g Protein"
+  ],
+  "entree": {
+   "entreeName": "Josh Hart's High Protein Burrito",
+   "itemId": "CMG-1",
+   "itemName": "Chicken Burrito",
+   "quantity": 1,
+   "calories": "1345",
+   "unitPrice": 11.15,
+   "unitDeliveryPrice": 14.5,
+   "isItemAvailable": true,
+   "contents": [
+    {
+     "itemId": "CMG-5051",
+     "itemName": "Black Beans",
+     "quantity": 1,
+     "calories": "",
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "customizationId": 0,
+     "customizationName": "",
+     "isItemAvailable": true
+    },
+    {
+     "itemId": "CMG-5201",
+     "itemName": "Fresh Tomato Salsa",
+     "quantity": 1,
+     "calories": "",
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "customizationId": 0,
+     "customizationName": "",
+     "isItemAvailable": true
+    },
+    {
+     "itemId": "CMG-5202",
+     "itemName": "Roasted Chili-Corn Salsa",
+     "quantity": 1,
+     "calories": "",
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "customizationId": 0,
+     "customizationName": "",
+     "isItemAvailable": true
+    },
+    {
+     "itemId": "CMG-5251",
+     "itemName": "Sour Cream",
+     "quantity": 1,
+     "calories": "",
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "customizationId": 0,
+     "customizationName": "",
+     "isItemAvailable": true
+    },
+    {
+     "itemId": "CMG-5252",
+     "itemName": "Cheese",
+     "quantity": 1,
+     "calories": "",
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "customizationId": 0,
+     "customizationName": "",
+     "isItemAvailable": true
+    },
+    {
+     "itemId": "CMG-1101",
+     "itemName": "Extra Chicken",
+     "quantity": 1,
+     "calories": "",
+     "unitPrice": 4.4,
+     "unitDeliveryPrice": 5.7,
+     "customizationId": 0,
+     "customizationName": "",
+     "isItemAvailable": true
+    },
+    {
+     "itemId": "CMG-5001",
+     "itemName": "White Rice",
+     "quantity": 1,
+     "calories": "",
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "customizationId": 0,
+     "customizationName": "",
+     "isItemAvailable": true
+    }
+   ]
+  },
+  "sides": [],
+  "drinks": []
+ }
+]

@@ -1,0 +1,450 @@
+{
+ "restaurantId": 1200,
+ "entrees": [
+  {
+   "itemCategory": "Entree",
+   "itemType": "Burrito",
+   "itemId": "CMG-2",
+   "itemName": "Steak Burrito",
+   "posId": 1,
+   "primaryFillingName": "Steak",
+   "unitPrice": 11.65,
+   "unitDeliveryPrice": 15.15,
+   "unitCount": 1,
+   "maxQuantity": 1,
+   "eligibleForDelivery": true,
+   "maxContents": -1,
+   "maxCustomizations": -1,
+   "maxOnTheSideCustomizations": 3,
+   "maxExtras": 1,
+   "maxHalfs": 1,
+   "maxExtrasPlusHalfs": 1,
+   "isUniversal": false,
+   "isItemAvailable": true,
+   "contentGroups": [
+    {
+     "contentGroupName": "RiceContentGroup",
+     "minQuantity": 1,
+     "maxQuantity": 1
+    },
+    {
+     "contentGroupName": "BeansContentGroup",
+     "minQuantity": 1,
+     "maxQuantity": 1
+    }
+   ],
+   "contents": [
+    {
+     "itemType": "ExtraPortion",
+     "itemId": "CMG-1101",
+     "itemName": "Extra Chicken",
+     "posId": 31,
+     "unitPrice": 4,
+     "unitDeliveryPrice": 5.2,
+     "unitCount": 1,
+     "eligibleForDelivery": true,
+     "pricingReferenceItemId": "CMG-1",
+     "countTowardsCustomizationMax": 0,
+     "countTowardsContentMax": 1,
+     "contentGroupName": "",
+     "defaultContent": false,
+     "isItemAvailable": true,
+     "customizations": [],
+     "isUniversal": false
+    },
+    {
+     "itemType": "Beans",
+     "itemId": "CMG-5051",
+     "itemName": "Black Beans",
+     "posId": 10002,
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "unitCount": 1,
+     "eligibleForDelivery": true,
+     "pricingReferenceItemId": null,
+     "countTowardsCustomizationMax": 0,
+     "countTowardsContentMax": 1,
+     "contentGroupName": "BeansContentGroup",
+     "defaultContent": false,
+     "isItemAvailable": true,
+     "customizations": [
+      {
+       "id": 1,
+       "name": "Light",
+       "countTowardsCustomizationMax": 1,
+       "countTowardsOnTheSideCustomizationMax": 0,
+       "countTowardsContentMax": 0
+      },
+      {
+       "id": 2,
+       "name": "Extra",
+       "countTowardsCustomizationMax": 1,
+       "countTowardsOnTheSideCustomizationMax": 0,
+       "countTowardsContentMax": 0
+      },
+      {
+       "id": 3,
+       "name": "Side",
+       "countTowardsCustomizationMax": 1,
+       "countTowardsOnTheSideCustomizationMax": 1,
+       "countTowardsContentMax": 0
+      },
+      {
+       "id": 4,
+       "name": "Half",
+       "countTowardsCustomizationMax": 0.5,
+       "countTowardsOnTheSideCustomizationMax": 0,
+       "countTowardsContentMax": -0.5
+      }
+     ],
+     "isUniversal": false
+    },
+    {
+     "itemType": "Toppings",
+     "itemId": "CMG-5252",
+     "itemName": "Cheese",
+     "posId": 10010,
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "unitCount": 1,
+     "eligibleForDelivery": true,
+     "pricingReferenceItemId": null,
+     "countTowardsCustomizationMax": 0,
+     "countTowardsContentMax": 1,
+     "contentGroupName": "",
+     "defaultContent": false,
+     "isItemAvailable": true,
+     "customizations": [
+      {
+       "id": 1,
+       "name": "Light",
+       "countTowardsCustomizationMax": 1,
+       "countTowardsOnTheSideCustomizationMax": 0,
+       "countTowardsContentMax": 0
+      },
+      {
+       "id": 2,
+       "name": "Extra",
+       "countTowardsCustomizationMax": 1,
+       "countTowardsOnTheSideCustomizationMax": 0,
+       "countTowardsContentMax": 0
+      }
+     ],
+     "isUniversal": false
+    },
+    {
+     "itemType": "Toppings",
+     "itemId": "CMG-1001",
+     "itemName": "Guacamole",
+     "posId": 10,
+     "unitPrice": 2.95,
+     "unitDeliveryPrice": 3.85,
+     "unitCount": 1,
+     "eligibleForDelivery": true,
+     "pricingReferenceItemId": null,
+     "countTowardsCustomizationMax": 0,
+     "countTowardsContentMax": 1,
+     "contentGroupName": "",
+     "defaultContent": false,
+     "isItemAvailable": true,
+     "customizations": [
+      {
+       "id": 3,
+       "name": "Side",
+       "countTowardsCustomizationMax": 0,
+       "countTowardsOnTheSideCustomizationMax": 0,
+       "countTowardsContentMax": 0
+      }
+     ],
+     "isUniversal": false
+    },
+    {
+     "itemType": "Rice",
+     "itemId": "CMG-5001",
+     "itemName": "White Rice",
+     "posId": 10001,
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "unitCount": 1,
+     "eligibleForDelivery": true,
+     "pricingReferenceItemId": null,
+     "countTowardsCustomizationMax": 0,
+     "countTowardsContentMax": 1,
+     "contentGroupName": "RiceContentGroup",
+     "defaultContent": false,
+     "isItemAvailable": true,
+     "customizations": [
+      {
+       "id": 1,
+       "name": "Light",
+       "countTowardsCustomizationMax": 1,
+       "countTowardsOnTheSideCustomizationMax": 0,
+       "countTowardsContentMax": 0
+      },
+      {
+       "id": 2,
+       "name": "Extra",
+       "countTowardsCustomizationMax": 1,
+       "countTowardsOnTheSideCustomizationMax": 0,
+       "countTowardsContentMax": 0
+      },
+      {
+       "id": 3,
+       "name": "Side",
+       "countTowardsCustomizationMax": 1,
+       "countTowardsOnTheSideCustomizationMax": 1,
+       "countTowardsContentMax": 0
+      },
+      {
+       "id": 4,
+       "name": "Half",
+       "countTowardsCustomizationMax": 0.5,
+       "countTowardsOnTheSideCustomizationMax": 0,
+       "countTowardsContentMax": -0.5
+      }
+     ],
+     "isUniversal": false
+    }
+   ]
+  },
+  {
+   "itemCategory": "Entree",
+   "itemType": "Bowl",
+   "itemId": "CMG-101",
+   "itemName": "Chicken Bowl",
+   "posId": 66,
+   "primaryFillingName": "Chicken",
+   "unitPrice": 9.65,
+   "unitDeliveryPrice": 12.55,
+   "unitCount": 1,
+   "maxQuantity": 1,
+   "eligibleForDelivery": true,
+   "maxContents": -1,
+   "maxCustomizations": -1,
+   "maxOnTheSideCustomizations": 3,
+   "maxExtras": 1,
+   "maxHalfs": 1,
+   "maxExtrasPlusHalfs": 1,
+   "isUniversal": false,
+   "isItemAvailable": true,
+   "contentGroups": [
+    {
+     "contentGroupName": "RiceContentGroup",
+     "minQuantity": 1,
+     "maxQuantity": 1
+    },
+    {
+     "contentGroupName": "BeansContentGroup",
+     "minQuantity": 1,
+     "maxQuantity": 1
+    }
+   ],
+   "contents": [
+    {
+     "itemType": "ExtraPortion",
+     "itemId": "CMG-1101",
+     "itemName": "Extra Chicken",
+     "posId": 31,
+     "unitPrice": 4,
+     "unitDeliveryPrice": 5.2,
+     "unitCount": 1,
+     "eligibleForDelivery": true,
+     "pricingReferenceItemId": "CMG-101",
+     "countTowardsCustomizationMax": 0,
+     "countTowardsContentMax": 1,
+     "contentGroupName": "",
+     "defaultContent": false,
+     "isItemAvailable": true,
+     "customizations": [],
+     "isUniversal": false
+    },
+    {
+     "itemType": "Beans",
+     "itemId": "CMG-5051",
+     "itemName": "Black Beans",
+     "posId": 10002,
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "unitCount": 1,
+     "eligibleForDelivery": true,
+     "pricingReferenceItemId": null,
+     "countTowardsCustomizationMax": 0,
+     "countTowardsContentMax": 1,
+     "contentGroupName": "BeansContentGroup",
+     "defaultContent": false,
+     "isItemAvailable": true,
+     "customizations": [
+      {
+       "id": 1,
+       "name": "Light",
+       "countTowardsCustomizationMax": 1,
+       "countTowardsOnTheSideCustomizationMax": 0,
+       "countTowardsContentMax": 0
+      },
+      {
+       "id": 2,
+       "name": "Extra",
+       "countTowardsCustomizationMax": 1,
+       "countTowardsOnTheSideCustomizationMax": 0,
+       "countTowardsContentMax": 0
+      },
+      {
+       "id": 3,
+       "name": "Side",
+       "countTowardsCustomizationMax": 1,
+       "countTowardsOnTheSideCustomizationMax": 1,
+       "countTowardsContentMax": 0
+      },
+      {
+       "id": 4,
+       "name": "Half",
+       "countTowardsCustomizationMax": 0.5,
+       "countTowardsOnTheSideCustomizationMax": 0,
+       "countTowardsContentMax": -0.5
+      }
+     ],
+     "isUniversal": false
+    },
+    {
+     "itemType": "Toppings",
+     "itemId": "CMG-5252",
+     "itemName": "Cheese",
+     "posId": 10010,
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "unitCount": 1,
+     "eligibleForDelivery": true,
+     "pricingReferenceItemId": null,
+     "countTowardsCustomizationMax": 0,
+     "countTowardsContentMax": 1,
+     "contentGroupName": "",
+     "defaultContent": false,
+     "isItemAvailable": true,
+     "customizations": [
+      {
+       "id": 1,
+       "name": "Light",
+       "countTowardsCustomizationMax": 1,
+       "countTowardsOnTheSideCustomizationMax": 0,
+       "countTowardsContentMax": 0
+      },
+      {
+       "id": 2,
+       "name": "Extra",
+       "countTowardsCustomizationMax": 1,
+       "countTowardsOnTheSideCustomizationMax": 0,
+       "countTowardsContentMax": 0
+      }
+     ],
+     "isUniversal": false
+    },
+    {
+     "itemType": "Toppings",
+     "itemId": "CMG-1001",
+     "itemName": "Guacamole",
+     "posId": 10,
+     "unitPrice": 2.95,
+     "unitDeliveryPrice": 3.85,
+     "unitCount": 1,
+     "eligibleForDelivery": true,
+     "pricingReferenceItemId": null,
+     "countTowardsCustomizationMax": 0,
+     "countTowardsContentMax": 1,
+     "contentGroupName": "",
+     "defaultContent": false,
+     "isItemAvailable": true,
+     "customizations": [
+      {
+       "id": 3,
+       "name": "Side",
+       "countTowardsCustomizationMax": 0,
+       "countTowardsOnTheSideCustomizationMax": 0,
+       "countTowardsContentMax": 0
+      }
+     ],
+     "isUniversal": false
+    },
+    {
+     "itemType": "Rice",
+     "itemId": "CMG-5001",
+     "itemName": "White Rice",
+     "posId": 10001,
+     "unitPrice": 0,
+     "unitDeliveryPrice": 0,
+     "unitCount": 1,
+     "eligibleForDelivery": true,
+     "pricingReferenceItemId": null,
+     "countTowardsCustomizationMax": 0,
+     "countTowardsContentMax": 1,
+     "contentGroupName": "RiceContentGroup",
+     "defaultContent": false,
+     "isItemAvailable": true,
+     "customizations": [
+      {
+       "id": 1,
+       "name": "Light",
+       "countTowardsCustomizationMax": 1,
+       "countTowardsOnTheSideCustomizationMax": 0,
+       "countTowardsContentMax": 0
+      },
+      {
+       "id": 2,
+       "name": "Extra",
+       "countTowardsCustomizationMax": 1,
+       "countTowardsOnTheSideCustomizationMax": 0,
+       "countTowardsContentMax": 0
+      },
+      {
+       "id": 3,
+       "name": "Side",
+       "countTowardsCustomizationMax": 1,
+       "countTowardsOnTheSideCustomizationMax": 1,
+       "countTowardsContentMax": 0
+      },
+      {
+       "id": 4,
+       "name": "Half",
+       "countTowardsCustomizationMax": 0.5,
+       "countTowardsOnTheSideCustomizationMax": 0,
+       "countTowardsContentMax": -0.5
+      }
+     ],
+     "isUniversal": false
+    }
+   ]
+  }
+ ],
+ "sides": [
+  {
+   "itemCategory": "Side",
+   "itemType": "Chips",
+   "itemId": "CMG-1002",
+   "itemName": "Chips",
+   "posId": 36,
+   "unitPrice": 1.95,
+   "unitDeliveryPrice": 2.55,
+   "unitCount": 1,
+   "maxQuantity": 5,
+   "eligibleForDelivery": true,
+   "isUniversal": false,
+   "isItemAvailable": true
+  }
+ ],
+ "drinks": [
+  {
+   "itemCategory": "Drink",
+   "itemType": "Jarritos",
+   "itemId": "CMG-2022",
+   "itemName": "Jarritos Guava",
+   "posId": 652,
+   "unitPrice": 3.45,
+   "unitDeliveryPrice": 4.5,
+   "unitCount": 1,
+   "maxQuantity": 5,
+   "eligibleForDelivery": true,
+   "isUniversal": false,
+   "isItemAvailable": true
+  }
+ ],
+ "nonFoodItems": []
+}
