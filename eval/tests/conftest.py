@@ -36,6 +36,10 @@ import pytest
 
 from chip_chat.catalog import load_catalog
 from chip_chat.catalog.records import MenuCatalog
+from chip_chat.eval.adversarial.attacks import (
+    DEFAULT_MANIFEST as ADVERSARIAL_MANIFEST,
+)
+from chip_chat.eval.adversarial.attacks import AdversarialSuite
 from chip_chat.eval.dataset.build import Dataset, build_dataset
 from chip_chat.eval.golden.cases import DEFAULT_MANIFEST, GoldenSet
 from chip_chat.eval.photos.__main__ import DEFAULT_MANIFEST as PHOTOS_MANIFEST
@@ -100,3 +104,9 @@ def photos() -> LabeledSet:
 def shipped(golden: GoldenSet, photos: LabeledSet) -> Dataset:
     """The versioned dataset both shipped manifests build."""
     return build_dataset(golden, photos)
+
+
+@pytest.fixture(scope="session")
+def suite() -> AdversarialSuite:
+    """The adversarial suite that ships, loaded from its manifest."""
+    return AdversarialSuite.load(_REPO_ROOT / ADVERSARIAL_MANIFEST)

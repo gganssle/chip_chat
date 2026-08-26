@@ -202,7 +202,7 @@ verify-tools-bare: ## The same cases, with no system prompt at all
 # that is what turns the golden set's menu terms into a staleness detector
 # rather than a comment.
 
-.PHONY: golden-check golden photos-check
+.PHONY: golden-check golden photos-check adversarial-check adversarial adversarial-baseline
 
 golden-check: ## Check the golden set's coverage, free
 	$(UV) run python -m chip_chat.eval.golden --check
@@ -212,6 +212,24 @@ golden: ## Run the golden set against the week-one slice and write the baseline
 
 photos-check: ## Check the labeled photo set's coverage, free
 	$(UV) run python -m chip_chat.eval.photos --check
+
+# The adversarial suite has a third free mode the other two do not, and it is
+# the one worth running. `--structural` attacks the week-one slice with a model
+# that complies with every attack, which measures the claim RFC-001 actually
+# makes about the two launch gates: that they are properties of the design
+# rather than of the model behaving. It calls no model and needs no credentials.
+#
+# Both exit non-zero while a launch gate is unmeasured. PRD section 12 makes
+# both gates blocking, and a gate nobody measured has not passed.
+
+adversarial-check: ## Check the adversarial suite's coverage, free
+	$(UV) run python -m chip_chat.eval.adversarial --check
+
+adversarial: ## Attack the slice with a model that complies, free
+	$(UV) run python -m chip_chat.eval.adversarial --structural
+
+adversarial-baseline: ## Run the suite against a real deployment and write the baseline
+	$(UV) run python -m chip_chat.eval.adversarial --out eval/adversarial/BASELINE.md
 
 # --- The versioned dataset --------------------------------------------------
 #

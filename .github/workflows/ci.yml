@@ -39,6 +39,35 @@ jobs:
       - name: Tests
         run: make test
 
+      # Issue #30's fourth acceptance criterion. Neither step calls a model.
+      #
+      # The first blocks: a suite that is no longer the suite #30 asked for --
+      # a family with no attack, a write tool nothing aims at, a requirement the
+      # golden set delegated here and nobody covered -- is a build failure, or
+      # it stays a gap.
+      #
+      # The second does not block, and the reason is worth reading before
+      # anybody deletes the flag. `make adversarial` exits non-zero while EITHER
+      # launch gate is unmeasured, and the first gate is unmeasurable against
+      # this deployment by construction: one hardcoded account cannot disclose
+      # across visitors. That will stay true until #43 and #44 land the identity
+      # path, so a blocking step here would be red on every pull request for
+      # months and would be switched off within a week.
+      #
+      # What is NOT waived is a breach. `make test` runs the suite against the
+      # slice and against the fixtures, and eval/tests/test_adversarial_slice.py
+      # asserts the write gate is at zero breaches -- so an actual failure fails
+      # the build in the step above this one. This step exists so the report is
+      # in the log where a person reads it, and `continue-on-error` is used
+      # rather than `|| true` so that its non-zero exit stays visible in the UI
+      # instead of being swallowed.
+      - name: Adversarial suite -- is it the suite #30 asked for
+        run: make adversarial-check
+
+      - name: Adversarial suite -- the gates against a compliant model
+        run: make adversarial
+        continue-on-error: true
+
   terraform:
     name: terraform fmt and validate
     runs-on: ubuntu-latest
