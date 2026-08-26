@@ -11,6 +11,7 @@ members = [
     "chip-chat",
     "chip-chat-agent",
     "chip-chat-api",
+    "chip-chat-catalog",
     "chip-chat-data-gen",
     "chip-chat-databricks",
     "chip-chat-eval",
@@ -385,6 +386,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "chip-chat-agent" },
     { name = "chip-chat-api" },
+    { name = "chip-chat-catalog" },
     { name = "chip-chat-data-gen" },
     { name = "chip-chat-databricks" },
     { name = "chip-chat-eval" },
@@ -408,6 +410,7 @@ dev = [
 requires-dist = [
     { name = "chip-chat-agent", editable = "agent" },
     { name = "chip-chat-api", editable = "api" },
+    { name = "chip-chat-catalog", editable = "catalog" },
     { name = "chip-chat-data-gen", editable = "data-gen" },
     { name = "chip-chat-databricks", editable = "databricks" },
     { name = "chip-chat-eval", editable = "eval" },
@@ -456,6 +459,21 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "chip-chat-otel", editable = "otel" }]
+
+[[package]]
+name = "chip-chat-catalog"
+version = "0.0.0"
+source = { editable = "catalog" }
+dependencies = [
+    { name = "chip-chat-harvest" },
+    { name = "chip-chat-otel" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "chip-chat-harvest", editable = "harvest" },
+    { name = "chip-chat-otel", editable = "otel" },
+]
 
 [[package]]
 name = "chip-chat-data-gen"
