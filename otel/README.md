@@ -130,13 +130,26 @@ nothing to say about SQL and these names already exist.
 
 **3. `chip_chat.*`**, for the handful of facts neither standard covers — turn
 index, guard outcomes, budget scope, matcher slot confidences, ops confirmation
-state. All namespaced, so a backend can tell at a glance which attributes are
-portable and which are ours.
+state, and the system prompt version. All namespaced, so a backend can tell at a
+glance which attributes are portable and which are ours.
 
 Every span in a turn carries `session.id`, `chip_chat.turn.index` and (when
 bound) `chip_chat.persona.id` and `chip_chat.demo.id` — not only the root.
 Application Insights searches attributes far more comfortably than it walks trace
 trees, and "it did something weird" arrives with a session id at best.
+
+### `chip_chat.prompt.version`
+
+On `chat.turn` and nowhere else, because it is a property of the turn rather than
+of the identity stamped on every span. Pass it as `chat_turn(...,
+prompt_version=definition.prompt_version)`; the value comes off the prompt that
+was actually loaded, so it cannot drift from the text the model was given.
+
+Its shape is `v1+3f2a1b9c8d7e` — a maintained revision and an unmaintained digest
+of the prompt bytes. An Arize experiment groups on it to attribute a score change
+to a specific prompt, and the digest is what makes *specific* true when someone
+edits the text without bumping the revision. See
+`agent/src/chip_chat/agent/prompt.py`.
 
 ### `demo_id` is not an identity input
 

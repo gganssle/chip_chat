@@ -199,12 +199,23 @@ def test_a_tool_from_a_later_phase_is_refused_by_name(desk: OrderDesk) -> None:
     assert result["rejected"] == "TOOL_NOT_IMPLEMENTED"
 
 
-def test_a_session_id_in_the_arguments_is_ignored(desk: OrderDesk) -> None:
-    """A model that invented an identity argument finds it does nothing."""
+def test_a_session_id_in_the_arguments_is_refused_before_it_is_ignored(
+    desk: OrderDesk,
+) -> None:
+    """A model that invented an identity argument does not get to send it.
+
+    This test used to assert that the extra argument was *ignored*, and the
+    draft not found. Both are still true and the second half below still checks
+    it -- but the call now does not survive :mod:`chip_chat.agent.surface` at
+    all, because ``session_id`` is not an argument ``place_order`` declares.
+    Refusing is stronger than ignoring: ignoring means the field arrived and
+    something chose not to read it, and every later reader has to make the same
+    choice.
+    """
     draft = desk.propose("sess-victim", [{"item_id": "BOWL-CHICKEN"}])
     desk.confirm("sess-victim", draft.draft_id)
     with span_recorder("agent"):
-        result = dispatch_in_turn(
+        smuggled = dispatch_in_turn(
             ToolInvocation(
                 call_id="c1",
                 name=ToolName.PLACE_ORDER.value,
@@ -213,4 +224,20 @@ def test_a_session_id_in_the_arguments_is_ignored(desk: OrderDesk) -> None:
             desk=desk,
             session_id="sess-attacker",
         )
-    assert result["rejected"] == "DRAFT_NOT_FOUND"
+    assert smuggled["rejected"] == "ARGUMENTS_REJECTED"
+    assert "session_id" in str(smuggled["detail"])
+
+    # And with a call the surface does accept, the draft still belongs to
+    # somebody else -- which is the property the identity argument was trying
+    # to talk its way around.
+    with span_recorder("agent"):
+        legal = dispatch_in_turn(
+            ToolInvocation(
+                call_id="c2",
+                name=ToolName.PLACE_ORDER.value,
+                arguments={"draft_id": draft.draft_id},
+            ),
+            desk=desk,
+            session_id="sess-attacker",
+        )
+    assert legal["rejected"] == "DRAFT_NOT_FOUND"

@@ -77,6 +77,15 @@ class ChipChatAttributes:
     AGENT_STEP_INDEX: Final = "chip_chat.agent.step_index"
     """Zero-based index of this model round trip within the turn."""
 
+    PROMPT_VERSION: Final = "chip_chat.prompt.version"
+    """Which system prompt this turn ran under.
+
+    On the root span only, because it is a property of the turn rather than of
+    the identity stamped on every span. An Arize experiment attributes a score
+    change to a specific prompt by grouping on this, so the value has to change
+    whenever the text does -- see :func:`chip_chat.agent.prompt.load`.
+    """
+
     GUARD_OUTCOME: Final = "chip_chat.guard.outcome"
     """``allowed`` or ``blocked``; see :class:`GuardOutcome`."""
 

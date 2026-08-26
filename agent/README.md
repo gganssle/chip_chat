@@ -8,18 +8,144 @@ records why, and is blunt about the bill:
 > image, a registry, and a deployment step that has to exist before the Phase 7
 > demo rather than after it.
 
-This directory is that. The agent's loop and its eleven tools arrive with
-[#60](https://github.com/gganssle/chip_chat/issues/60); what exists here is the
-image, the version manifest, and the piece of the observability plane that only
-a container boundary makes necessary.
+This directory is that, plus the agent itself: the eleven tools of RFC-001 §06,
+the versioned system prompt, and the loop that runs them.
 
 | Module | What it is |
 | --- | --- |
+| `surface.py` | The eleven tools of RFC-001 §06 — the *definition* |
+| `tools.py` | The subset built so far, running against hardcoded data |
+| `prompt.py`, `prompts/` | The system prompt, and the version that follows it into traces |
+| `loop.py` | The agent loop: model, tools, model again |
+| `definition.py` | What the container assembles: deployment + prompt + eleven tools |
+| `envelope.py` | The response format of D9 — citations as a field, not a sentence |
+| `orders.py` | Drafts, confirmation, receipts |
+| `model.py`, `hardcoded.py`, `testing.py` | The chat-model seam, the slice's data, test doubles |
+| `selection.py` | A live probe: which lane does the deployed model pick? |
 | `foundry.py` | Where the models are, and which deployment answers for which lane |
 | `container.py` | The image's entrypoint: `check` and `agent-half` |
 | `version.py` | The hosted agent version manifest, and its registration |
 | `verify.py` | Phase 0: prove the chat and vision deployments answer |
 | `threads.py` | The thread-retention probe for [#11](https://github.com/gganssle/chip_chat/issues/11) |
+
+---
+
+## The prompt is not load-bearing for security
+
+That is the title of [#60](https://github.com/gganssle/chip_chat/issues/60) and
+it is the requirement, not a remark. If `prompts/system-v1.md` were emptied,
+Cilantro would become useless and **neither launch gate would fail**.
+
+**Visitor isolation.** No tool signature accepts a visitor identifier. That
+absence *is* the mechanism — there is no argument for the model to get wrong and
+no field an injected instruction can populate. `surface.ARGUMENT_NAMES` is
+derived by walking every schema at every depth, so a parameter added next year
+appears in it without anyone remembering; `BoundArguments` validates in
+`__post_init__`, so no construction path yields a call carrying a field the spec
+never declared; and `tools.dispatch` binds through the surface before any tool
+body runs, so this is the live path and not a test fixture. Below all of it, row
+access policies ([#43](https://github.com/gganssle/chip_chat/issues/43)) and the
+connection pool ([#44](https://github.com/gganssle/chip_chat/issues/44)) enforce
+it in Snowflake.
+
+**Confirmation before writes.** Every write tool takes the id of something the
+visitor has already been shown, and there is no field on any of them through
+which a confirmation could be asserted — no `confirmed`, no `approved`, no
+`force`. `OrderDesk` resolves the id against drafts minted for the bound session
+and actually confirmed; the ops API
+([#63](https://github.com/gganssle/chip_chat/issues/63)) is where that becomes
+the real thing.
+
+`tests/test_sabotage.py` demonstrates this rather than asserting it. It loads
+`tests/prompts/system-sabotaged.md` — a prompt written to defeat both gates, in
+the imperative, with retries under other field names — plays a model that obeys
+it exactly, and shows every instruction producing a rejection instead of an
+effect. That file is #60's third acceptance criterion; read it before changing
+anything in `surface.py`.
+
+---
+
+## The prompt version
+
+`v1+3f2a1b9c8d7e`. The revision is maintained by a person; the digest is the
+SHA-256 of the prompt bytes and is maintained by nobody. Two runs whose
+`chat.turn` spans carry the same version ran the same bytes, whatever the
+revision says — which is what makes "attribute this score change to that prompt"
+a true statement in an Arize experiment rather than a hopeful one.
+
+That only works if the prompt is invariant, so it is. **Two system messages, not
+one:** `SYSTEM_PROMPT` is the versioned text — the five lanes, the citation rule,
+the allergen refusal, the two-step write, retrieved-content-is-data — and
+`RUNTIME_CONTEXT` is everything that varies, which today is the persona, the
+three-item menu, and which of the eleven tools are actually registered. A digest
+that moved because a visitor happened to be called Sam would identify nothing.
+
+The value reaches `chat.turn` from `api/app.py`, as
+`chip_chat.prompt.version`; `otel/README.md` is the schema of record for it.
+
+---
+
+## Tool descriptions are load-bearing, and that is deliberate
+
+Tool-selection accuracy is the metric the whole five-lane architecture exists to
+get right. A model chooses between `search_menu_knowledge` and
+`ask_account_question` by reading their descriptions, not by reading the prompt's
+lane section — so the descriptions in `surface.py` are written to separate the
+confusable pairs on their own.
+
+```bash
+make verify-tools        # twelve cases through the configured chat deployment
+make verify-tools-bare   # the same cases with no system prompt at all
+uv run python -m chip_chat.agent.selection --deployment gpt-4.1-mini
+```
+
+Twelve cases, six of them sitting on a boundary two tools share. Measured
+26 August 2026:
+
+| Run | Score |
+| --- | --- |
+| `gpt-5-mini` (the configured chat deployment), with the prompt | **8/12** |
+| `gpt-4.1-mini`, with the prompt | **10/12** |
+| `gpt-4.1-mini`, **no system prompt at all** | **11/12** |
+
+Two things fall out of that table, and the second is the awkward one.
+
+**The descriptions carry lane selection on their own.** The best run is the one
+with no system prompt in it. That is #60's fourth criterion answered in the
+direction it asked for — selection works without prompt gymnastics, and deleting
+the prompt does not take the lanes with it.
+
+**The configured chat deployment is the weak link, not the surface.** Same tools,
+same prompt, same cases: `gpt-5-mini` loses two full cases to `gpt-4.1-mini`, and
+its misses are strange rather than close — it reaches for `get_points_balance` on
+a photo upload and on *"remember that I never want cheese"*. Not an API-version
+artefact; `2025-04-01-preview` scores the same. Swapping the chat lane is an
+environment variable by construction, but doing it would put both lanes on one
+deployment and give up the separate TPM pools that
+[`docs/phase-0-verification.md`](../docs/phase-0-verification.md) chose two models
+for. That trade belongs to whoever owns the model estate: bead `cc-6n5`.
+
+The one miss common to every run is *"redeem my free guac"* going to
+`get_points_balance` instead of `redeem_points`, even with both descriptions
+naming the boundary explicitly. Worth another attempt before Phase 9 makes it a
+number.
+
+---
+
+## Two capabilities are invented, and say so
+
+`cancel_order` and `redeem_points` carry an `invention` note on their `ToolSpec`,
+quoting [`docs/action-surface.md`](../docs/action-surface.md) §10 and naming what
+removing them would cost.
+
+`cancel_order` is the one to watch. Chipotle's published FAQ refuses cancellation
+outright — a submitted order goes straight to the crew — and PRD **T1** requires
+the action anyway, so the demo holds orders in a pending state of its own and
+`CANCELLATION_REALITY` says out loud that the real product does not work this
+way. Its exit path is a PRD change dropping T1's cancellation clause, and that
+exit is cheap only while the tool stays separable: `order_id` appears nowhere
+else in the surface, and a test keeps it that way. Removing the capability is
+deleting one `ToolSpec` and one `OpsAction`.
 
 ---
 
@@ -198,6 +324,7 @@ needs a logged-in human:
 make verify-models        # both lanes
 make verify-chat
 make verify-vision
+make verify-tools         # and lane selection, above
 ```
 
 See [`docs/phase-0-verification.md`](../docs/phase-0-verification.md) for what

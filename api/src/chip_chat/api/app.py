@@ -52,7 +52,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from chip_chat.agent import ACCOUNT, AzureChatModel, FoundryConfig
-from chip_chat.agent.loop import Conversation
+from chip_chat.agent.loop import PROMPT_VERSION, Conversation
 from chip_chat.api.guard import SpendGuard
 from chip_chat.api.killswitch import (
     CachedKillSwitch,
@@ -315,6 +315,7 @@ def _run_turn(
             turn_index=conversation.next_turn_index(),
             message=body.message,
             persona_id=ACCOUNT.persona_id,
+            prompt_version=PROMPT_VERSION,
         ) as turn,
         service.gate.turn(session_id=session_id, source_address=source_address) as funded,
     ):

@@ -28,12 +28,15 @@ from typing import Any
 from chip_chat.agent.hardcoded import ACCOUNT, MENU, SIMULATION_NOTICE, STORE
 from chip_chat.agent.model import ChatModel, ModelReply
 from chip_chat.agent.orders import OrderDesk
-from chip_chat.agent.tools import TOOL_SCHEMAS, dispatch
+from chip_chat.agent.prompt import load
+from chip_chat.agent.tools import TOOL_SCHEMAS, TOOLS, dispatch
 from chip_chat.otel import Message, ToolName, agent_step, llm_completion
 
 __all__ = [
     "CONFIRMATION_NOTE",
     "DEFAULT_MAX_STEPS",
+    "PROMPT_VERSION",
+    "RUNTIME_CONTEXT",
     "SYSTEM_PROMPT",
     "Conversation",
     "TurnResult",
@@ -73,28 +76,50 @@ _MENU_LINES = "\n".join(
     f"  {item.item_id} - {item.name} (${item.unit_price})" for item in MENU.values()
 )
 
-SYSTEM_PROMPT = f"""\
-You are Cilantro, a friendly assistant for a fast-casual burrito restaurant.
-This is a proof of concept running on a deliberately tiny hardcoded menu, and
-you never pretend otherwise.
+SYSTEM_PROMPT = load().text
+"""The versioned system prompt, from ``prompts/system-{REVISION}.md``.
+
+Invariant across visitors and across turns, which is what makes
+:data:`PROMPT_VERSION` mean anything: a digest that moved because a visitor
+happened to be called Sam would identify nothing. Everything that *does* vary --
+the account, the store, the menu, which tools are actually registered today --
+is :data:`RUNTIME_CONTEXT`, a second system message.
+
+That split is the reason issue #60 wants this file versioned at all. The prompt
+describes how Cilantro behaves; the context describes what is true right now.
+An eval experiment swaps the first and holds the second."""
+
+PROMPT_VERSION = load().version
+"""What ``chat.turn`` records. See :mod:`chip_chat.agent.prompt`."""
+
+RUNTIME_CONTEXT = f"""\
+Facts about this turn. These change; the instructions above do not.
 
 The visitor is signed in as {ACCOUNT.display_name}, a rewards member at the
-{STORE.name} store. You do not need to ask who they are and you must never ask
-for a name, an email, a phone number or a payment detail.
+{STORE.name} store. You already know who they are, so never ask for a name, an
+email, a phone number or a payment detail.
 
-The menu is exactly three items and nothing else exists:
+This is a proof of concept running on a deliberately tiny hardcoded menu, and
+you never pretend otherwise. The menu is exactly these items and nothing else
+exists:
 {_MENU_LINES}
 
-Rules:
-- Answer menu questions from search_menu_knowledge, never from memory. If the
-  search returns nothing, say the menu is only these three items.
-- Answer account questions from get_points_balance. Never guess a balance.
-- To order: call propose_order, then tell the visitor what is on the card and
-  ask them to press Confirm. Only call place_order once they have; it is
-  refused otherwise, and that refusal is correct rather than a bug to work
-  around.
-- {SIMULATION_NOTICE} Say so whenever an order is placed.
-- Keep replies to a few sentences. Plain text, no markdown."""
+If search_menu_knowledge returns nothing, say the menu is only these items.
+
+The tools registered right now are: {", ".join(name.value for name in TOOLS)}.
+Any lane above whose tool is not on that list is not available on this turn --
+say so plainly rather than improvising an answer or reaching for another tool.
+There is no retrieval corpus behind this menu yet, so answer menu questions from
+what search_menu_knowledge returns and leave the citations field empty.
+
+{SIMULATION_NOTICE} Say so whenever an order is placed.
+
+Keep replies to a few sentences. Plain text, no markdown."""
+"""What is true today, as opposed to how the assistant behaves.
+
+Deliberately a separate message rather than an f-string spliced into the prompt.
+Splicing would make the prompt digest a function of the menu and the persona,
+and a version that changes when a visitor changes is not a version."""
 
 
 @dataclass(slots=True)
@@ -113,6 +138,7 @@ class Conversation:
     def __post_init__(self) -> None:
         if not self.messages:
             self.messages.append({"role": "system", "content": SYSTEM_PROMPT})
+            self.messages.append({"role": "system", "content": RUNTIME_CONTEXT})
 
     def next_turn_index(self) -> int:
         """Return this turn's index and move the counter on."""

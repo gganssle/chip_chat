@@ -31,6 +31,8 @@ from chip_chat.agent.hardcoded import (
 )
 from chip_chat.agent.loop import (
     DEFAULT_MAX_STEPS,
+    PROMPT_VERSION,
+    RUNTIME_CONTEXT,
     SYSTEM_PROMPT,
     Conversation,
     TurnResult,
@@ -59,6 +61,8 @@ __all__ = [
     "COGNITIVE_SERVICES_SCOPE",
     "DEFAULT_MAX_STEPS",
     "MENU",
+    "PROMPT_VERSION",
+    "RUNTIME_CONTEXT",
     "SERVICE_NAME",
     "SIMULATION_NOTICE",
     "STORE",
