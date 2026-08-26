@@ -4,9 +4,25 @@
 # `make setup` takes it from there.
 
 UV ?= uv
+COMPOSE ?= docker compose
+
+# Where the local stack answers, and therefore where `make trace` sends spans.
+# `?=` means an exported OTEL_EXPORTER_OTLP_ENDPOINT wins, which is how you point
+# the same demo at a different backend without editing anything.
+PHOENIX_PORT ?= 6006
+PHOENIX_GRPC_PORT ?= 4317
+PHOENIX_URL ?= http://localhost:$(PHOENIX_PORT)
+OTEL_EXPORTER_OTLP_ENDPOINT ?= $(PHOENIX_URL)
+
+# compose.yaml reads the two ports out of the environment, so they have to be
+# exported rather than merely defined -- otherwise `make dev PHOENIX_PORT=6007`
+# would move the endpoint and leave the container where it was.
+export PHOENIX_PORT
+export PHOENIX_GRPC_PORT
 
 .DEFAULT_GOAL := help
-.PHONY: help setup fmt fmt-check lint typecheck imports test ci clean
+.PHONY: help setup fmt fmt-check lint typecheck imports test ci clean \
+        dev dev-down dev-logs trace
 
 help: ## Show available targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -35,6 +51,23 @@ test: ## Run the unit tests
 	$(UV) run pytest
 
 ci: setup fmt-check lint typecheck imports test ## Everything CI runs
+
+dev: ## Start the local stack and send one instrumented turn through it
+	$(COMPOSE) up -d --wait
+	@$(MAKE) trace
+	@echo
+	@echo "Phoenix is at $(PHOENIX_URL) — open it and read the span tree."
+	@echo "docs/local-tracing.md explains what you are looking at."
+
+dev-down: ## Stop the local stack and discard its traces
+	$(COMPOSE) down
+
+dev-logs: ## Follow the local stack's logs
+	$(COMPOSE) logs -f
+
+trace: ## Send one demo session to OTEL_EXPORTER_OTLP_ENDPOINT
+	OTEL_EXPORTER_OTLP_ENDPOINT=$(OTEL_EXPORTER_OTLP_ENDPOINT) \
+		$(UV) run python -m chip_chat.otel.smoke
 
 clean: ## Remove caches and build artefacts
 	rm -rf .mypy_cache .pytest_cache .ruff_cache

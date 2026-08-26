@@ -77,8 +77,16 @@ Key Vault URI, and the monthly budget guarding it — is recorded in
 ```bash
 make setup      # fresh clone -> working state (needs uv on PATH)
 make ci         # format check, lint, type check, import contracts, tests
+make dev        # start the local stack and send one instrumented turn through it
 make help       # everything else
 ```
+
+`make dev` brings up Phoenix — the agent-observability backend, in a container —
+and sends it a session that exercises every span in the schema, so the trace tree
+is there to read the first time you open <http://localhost:6006>. Tracing is not a
+late deliverable here: it is how you find out why something does not work.
+[`docs/local-tracing.md`](docs/local-tracing.md) explains the loop and how to read
+what you see.
 
 [`docs/local-setup.md`](docs/local-setup.md) takes it from a clean machine: the `az`,
 `terraform` and `databricks` CLIs, how each one authenticates, and the single rule for

@@ -29,6 +29,7 @@ things that cost an hour to discover.
 | `databricks` | 1.13.0 | `brew install databricks/tap/databricks` | `databricks/` — the nightly lakehouse |
 | `snow` | **not installed** | `brew install snowflake-cli` (3.25.0) | `snowflake/` — deliberately deferred, see below |
 | `gh` | any recent | `brew install gh` | Issues are the tracker; several `make` and agent flows shell out to it |
+| `docker` | 29.5.2 | Docker Desktop | `make dev` — the local Phoenix container, see [local-tracing.md](local-tracing.md) |
 
 Python itself is not on that list on purpose. `uv` downloads and pins the
 interpreter named in [`.python-version`](../.python-version) (3.13), so a system
@@ -251,6 +252,17 @@ make test       # just pytest
 make imports    # just the one-way dependency contract on otel/
 ```
 
+With Docker running, `make dev` adds the local observability stack — Phoenix in a
+container, plus one instrumented session sent through it so the UI is not empty:
+
+```bash
+make dev        # up, healthy, and one session sent
+make dev-down   # down, and the traces go with it
+```
+
+The loop, the span tree it produces and what to do when it does not work are in
+[local-tracing.md](local-tracing.md).
+
 ## Hitting the dev environment
 
 There is no application to point at yet — Phase 0 is scaffolding, and the FastAPI
@@ -308,6 +320,8 @@ except the two marked otherwise.
 | `snow --version` | **Not found** — deliberate, see [#40](https://github.com/gganssle/chip_chat/issues/40) |
 | `az keyvault secret list --vault-name kv-chip-chat-c8b63a` | Empty, no error |
 | `make setup && make ci` | Green |
+| `docker version` | A `Server:` section — the daemon is running |
+| `make dev` | Container healthy, three turns sent, tree visible at localhost:6006 |
 
 ## Where the identifiers live
 

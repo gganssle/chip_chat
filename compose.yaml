@@ -1,0 +1,45 @@
+# Chip Chat — the local development stack.
+#
+# One service today: Phoenix, the agent-observability backend the OTLP exporter
+# in `otel/` points at while developing. `make dev` brings it up, waits for it to
+# answer, and sends one instrumented turn through it; `make dev-down` removes it.
+#
+# Phoenix is not configured *into* the application anywhere. The exporter reads
+# `OTEL_EXPORTER_OTLP_ENDPOINT` and has never heard of this file — decision D6
+# says the agent-observability vendor is a configuration value, and issue #78
+# has to be able to prove later that repointing at Arize AX was a config change
+# and nothing else. See docs/local-tracing.md.
+
+name: chip-chat
+
+services:
+  phoenix:
+    # Pinned, like every other tool version in this repository: a dev loop that
+    # changes underneath you is not a dev loop. Bump deliberately.
+    image: arizephoenix/phoenix:version-20.3.0
+    container_name: chip-chat-phoenix
+    restart: unless-stopped
+    ports:
+      # UI, and OTLP over HTTP on the same port at /v1/traces.
+      - "${PHOENIX_PORT:-6006}:6006"
+      # OTLP over gRPC, for anything that would rather speak it. The exporter in
+      # otel/ uses HTTP; this is published so a collector or SDK that defaults to
+      # gRPC does not have to be argued with.
+      - "${PHOENIX_GRPC_PORT:-4317}:4317"
+    environment:
+      # Phoenix keeps its SQLite database under the working directory. There is
+      # deliberately no volume: issue #15 says traces need not survive a restart,
+      # because this is a dev loop and not a store. `docker compose down` is the
+      # supported way to get a clean slate.
+      PHOENIX_WORKING_DIR: /tmp/phoenix
+    healthcheck:
+      # The image ships Python and no curl, so the check is written in Python.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:6006/healthz').read()"
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s

@@ -107,6 +107,9 @@ ban-relative-imports = "all"
 # tree. Flattening the `with` blocks would hide the very shape under test, and
 # where a `pytest.raises` sits between two helpers it would change the meaning.
 "otel/tests/*" = ["S101", "SIM117"]
+# smoke.py is written as the span tree it emits, for the same reason. Combining
+# its `with` statements would flatten the one thing the file exists to show.
+"otel/src/chip_chat/otel/smoke.py" = ["SIM117"]
 
 # ---------------------------------------------------------------------------
 # mypy — strict on otel/ and agent/, checked everywhere.

@@ -197,8 +197,9 @@ from chip_chat.otel import TelemetryConfig, configure_tracing
 configure_tracing(TelemetryConfig.from_env("api"))
 ```
 
-Local development points `OTEL_EXPORTER_OTLP_ENDPOINT` at a Phoenix container;
-that is issue #15's job, and this package is already ready for it.
+Local development points `OTEL_EXPORTER_OTLP_ENDPOINT` at a Phoenix container.
+`make dev` brings it up and sends a session through it;
+[`docs/local-tracing.md`](../docs/local-tracing.md) is the loop.
 
 ## Testing your own spans
 
@@ -223,7 +224,27 @@ assert spans.attributes_of("llm.completion")["llm.token_count.total"] == 876
 `tree_text()` is the assertion that fails when somebody renames a span, which is
 the entire reason the schema is worth writing down.
 
+## A session you can send anywhere
+
+`chip_chat.otel.smoke` builds three turns out of nothing -- no model is called, no
+service is contacted, every value in it is invented -- which between them emit
+every span name above, nested as above.
+
+```bash
+make trace                                                       # to the local stack
+CHIP_CHAT_OTEL_CONSOLE=1 uv run python -m chip_chat.otel.smoke   # to your terminal
+```
+
+It ships with the package for the same reason `testing.py` does. The schema is
+consumed outside this repository, and pointing this module at a backend is how you
+find out whether the collector, the exporter and the schema still agree. It is
+also how decision D6 gets *checked* rather than asserted: repointing at Arize AX
+(#78) should produce this same tree from the same code, and running it against the
+new endpoint is the observation that says so.
+
 ## Not in scope
 
-No agent, no tools, no product logic. This is the instrumentation library only.
-Its consumers arrive in #15 (Phoenix in the dev loop), #16 and #64.
+No agent, no tools, no product logic. This is the instrumentation library only --
+`smoke.py` is a fixture of the schema and not an exception to that, and nothing
+imports it. Its real consumers arrive in #16 and #64; #15 put Phoenix in the dev
+loop around it.
