@@ -8,10 +8,17 @@ contributor — human or agent — has them locally. Read them in this order.
 | [system-design.md](system-design.md) | Phases, sequencing, cost guardrails |
 | [cilantro-prd.md](cilantro-prd.md) | Requirements (E/K/A/P/T/V/S ids), launch gates, metrics |
 | [rfc-001.md](rfc-001.md) | Components, data model, tool contracts, span schema, decisions |
+| [service-inventory.md](service-inventory.md) | Verified service names, tiers, quotas and prices — and where the three documents above are now wrong |
 
 The system design frames the problem, the PRD defines what to build, and the RFC
 defines how. When two documents disagree, the table above decides: whichever one
 owns the subject wins.
+
+The service inventory is a fourth kind of document: it does not decide anything, it
+*checks*. All three planning documents close by warning that service names and tiers
+move faster than the plan; where the inventory contradicts one of them on a matter of
+fact — a product name, a quota, a price, a region — the inventory is right, and the
+date at the top of it says how long that is likely to stay true.
 
 ## Repository conventions
 
