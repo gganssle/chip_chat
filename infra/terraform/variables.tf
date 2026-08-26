@@ -155,9 +155,20 @@ variable "web_min_replicas" {
 }
 
 variable "web_max_replicas" {
-  description = "Ceiling on replicas. Low on purpose — this is a demo, and scale-out is spend."
+  description = <<-EOT
+    Ceiling on replicas. ONE, and not for cost.
+
+    The spend cap's counters are process-local (api/README.md, "What is not here
+    yet"). Two replicas are two ledgers, so the daily token ceiling would mean
+    twice what it says and the per-session cap would apply to whichever replica
+    happened to answer. A ceiling that silently doubles under load is not a
+    ceiling.
+
+    Raise this only once BudgetLedger and SourceRateLimiter are behind a shared
+    store. The container also runs a single uvicorn worker for the same reason.
+  EOT
   type        = number
-  default     = 2
+  default     = 1
 }
 
 variable "web_image" {
@@ -172,9 +183,99 @@ variable "web_image" {
 }
 
 variable "web_target_port" {
-  description = "Port the chat app container listens on."
+  description = <<-EOT
+    Port the chat app container listens on. 8000, not 80: the container runs as
+    an unprivileged user and ports below 1024 need a capability it deliberately
+    does not have. Ingress is 443 either way — this is the port behind it.
+  EOT
   type        = number
-  default     = 80
+  default     = 8000
+}
+
+variable "container_registry_sku" {
+  description = <<-EOT
+    Container registry tier. Basic is the cheapest ACR there is, at roughly
+    $5/month; there is no free tier. It is a variable rather than a literal
+    because it is the only standing charge this stack adds that is not
+    pay-per-use, and a standing charge should be visible.
+  EOT
+  type        = string
+  default     = "Basic"
+
+  validation {
+    condition     = contains(["Basic", "Standard", "Premium"], var.container_registry_sku)
+    error_message = "container_registry_sku must be one of: Basic, Standard, Premium."
+  }
+}
+
+# --- The spend cap ----------------------------------------------------------
+#
+# api/README.md: "Issue #85 trips the ceiling against the real deployment.
+# SpendLimits.from_env is how that is done without a code change." These are
+# that. Every one is optional in code and defaulted small there too; they are
+# repeated here because the numbers guarding a URL with no authentication in
+# front of it should be reviewable in the same diff as the URL.
+
+variable "chat_deployment" {
+  description = <<-EOT
+    Which entry of var.model_deployments answers the agent's conversational
+    lane. This is the eval swap point (issue #8): change it, restart, and the
+    agent runs on a different model with no code change.
+  EOT
+  type        = string
+  default     = "gpt-5-mini"
+}
+
+variable "vision_deployment" {
+  description = "Which entry of var.model_deployments answers the photo lane."
+  type        = string
+  default     = "gpt-4.1-mini"
+}
+
+variable "spend_caps" {
+  description = <<-EOT
+    The inline spend cap's ceilings, passed to the app as CHIP_CHAT_* settings.
+    Defaults match the ones in api/src/chip_chat/api/limits.py.
+
+    turn_token_reservation is the one to think hardest about: it is what a turn
+    is charged against the daily ceiling *before* the model answers, and setting
+    it below the worst turn the agent can produce is the one way concurrent
+    turns can collectively overshoot.
+  EOT
+  type = object({
+    daily_token_ceiling        = optional(number, 2000000)
+    session_turn_cap           = optional(number, 40)
+    session_token_cap          = optional(number, 120000)
+    source_requests_per_window = optional(number, 20)
+    source_window_seconds      = optional(number, 60)
+    turn_token_reservation     = optional(number, 8000)
+    budget_reset_timezone      = optional(string, "UTC")
+  })
+  default = {}
+}
+
+variable "kill_switch" {
+  description = <<-EOT
+    The circuit breaker, as an application setting. Anything not recognisably
+    "off" ("", 0, false, no, off, run) stops the app on its next check.
+
+    It is set explicitly, to "off", rather than left absent on purpose: the
+    runbook in api/README.md promises a stop that takes a minute from a phone,
+    and a setting that is already in the portal is one edit away from thrown.
+    An absent one has to be created first, by somebody who remembers its name.
+  EOT
+  type        = string
+  default     = "off"
+}
+
+variable "otlp_endpoint" {
+  description = <<-EOT
+    Where agent-observability spans go. Empty while the deployed app exports
+    only to Application Insights; issue #78 points it at Arize AX, which
+    decision D6 says must be an endpoint and a header and nothing else.
+  EOT
+  type        = string
+  default     = ""
 }
 
 # --- Container registry -----------------------------------------------------
@@ -191,24 +292,6 @@ variable "container_registry_enabled" {
   EOT
   type        = bool
   default     = true
-}
-
-variable "container_registry_sku" {
-  description = <<-EOT
-    Container registry tier. There is no free tier.
-
-    Basic is ~$0.167/day (~$5/month) and includes 10 GB of storage, which is two
-    orders of magnitude more than one 60 MB agent image needs. Standard (~$0.667/
-    day) buys 100 GB and more webhooks; Premium buys geo-replication, private
-    endpoints and content trust. Nothing in this design uses any of that.
-  EOT
-  type        = string
-  default     = "Basic"
-
-  validation {
-    condition     = contains(["Basic", "Standard", "Premium"], var.container_registry_sku)
-    error_message = "container_registry_sku must be one of: Basic, Standard, Premium."
-  }
 }
 
 # --- Model deployments ------------------------------------------------------

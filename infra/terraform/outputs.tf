@@ -159,6 +159,13 @@ output "web_url" {
   value = "https://${azurerm_container_app.web.ingress[0].fqdn}"
 }
 
+
+
+output "container_app_name" {
+  description = "What `az containerapp update --image` targets when a new image is pushed."
+  value       = azurerm_container_app.web.name
+}
+
 output "ops_api_hostname" {
   value = azurerm_function_app_flex_consumption.ops.default_hostname
 }

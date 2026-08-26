@@ -3,7 +3,17 @@ name = "chip-chat-api"
 version = "0.0.0"
 description = "FastAPI service, sessions, budget enforcement, ops API."
 requires-python = ">=3.13"
-dependencies = ["chip-chat-otel"]
+dependencies = [
+    "chip-chat-otel",
+    # The agent this service puts a request path in front of, and the page it
+    # serves. Both directions are one-way: neither imports back into api/.
+    "chip-chat-agent",
+    "chip-chat-web",
+    "fastapi>=0.115",
+    # [standard] brings httptools and uvloop. The container runs one process
+    # with a handful of workers; the difference is not academic there.
+    "uvicorn[standard]>=0.34",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -13,4 +23,6 @@ build-backend = "hatchling.build"
 packages = ["src/chip_chat"]
 
 [tool.uv.sources]
+chip-chat-agent = { workspace = true }
 chip-chat-otel = { workspace = true }
+chip-chat-web = { workspace = true }

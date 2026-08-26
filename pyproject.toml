@@ -20,6 +20,10 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    # fastapi.testclient needs it, and it arrives transitively through the
+    # OpenAI SDK anyway -- named here so that the test suite does not depend on
+    # a dependency of a dependency staying where it is.
+    "httpx>=0.28",
     "import-linter>=2.3",
     "mypy>=1.14",
     "pytest>=8.3",

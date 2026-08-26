@@ -1,31 +1,39 @@
 """FastAPI service, sessions, budget enforcement, ops API.
 
-What lives here today is the spend cap, and it is here first on purpose. An open
-URL with no login means anyone can drive tokens on the subscription, and
-RFC-001 section 11 is explicit that the cap ships before the link is shared
-rather than when a hardening checklist is finally reached.
+Two halves that only make sense together. The spend cap
+(:mod:`chip_chat.api.guard` and what it is built from) arrived first, on
+purpose: an open URL with no login means anyone can drive tokens on the
+subscription, and RFC-001 section 11 is explicit that the cap ships before the
+link is shared rather than when a hardening checklist is finally reached.
 
-The cap is a library rather than a middleware because the shape of the request
-path is not settled yet. :class:`~chip_chat.api.guard.SpendGuard` drops into
-whichever one arrives::
-
-    guard = SpendGuard(SpendLimits.from_env(), kill_switch=any_of(
-        EnvironmentKillSwitch(),
-        FileKillSwitch("/mnt/ops/stop"),
-    ))
+:mod:`chip_chat.api.app` is the request path it stands inside, and
+:mod:`chip_chat.api.turns` is what makes the wiring structural rather than
+remembered. That distinction is the whole value of this package: a guard nothing
+calls stops nobody spending anything, and "the cap is in place" has to be true
+of the running system and not only of the code.
 
     with chat_turn(session_id=sid, turn_index=n, message=text) as turn:
-        with guard.turn(session_id=sid, source_address=ip) as budget:
-            if not budget.allowed:
-                turn.record_output(budget.message)
-                return stop_state(budget.message)
-            ...
+        with gate.turn(session_id=sid, source_address=ip) as funded:
+            if isinstance(funded, Stop):
+                return stop_state(funded.message)
+            result = funded.run(conversation, text)   # the only route to a model
 
-Read :mod:`chip_chat.api.guard` before changing any of it. The one property the
-whole module exists to hold is that a refusal happens *before* a model is
-called, in the request path, synchronously.
+Read :mod:`chip_chat.api.guard` for the four layers and
+:mod:`chip_chat.api.turns` for why there is no second route past them. The one
+property the whole package exists to hold is that a refusal happens *before* a
+model is called, in the request path, synchronously.
 """
 
+from chip_chat.api.app import (
+    SESSION_COOKIE,
+    ChatReply,
+    ChatRequest,
+    Service,
+    SessionStore,
+    build_service,
+    create_app,
+    default_kill_switch,
+)
 from chip_chat.api.clock import Clock, SystemClock
 from chip_chat.api.guard import SpendGuard, TurnBudget
 from chip_chat.api.killswitch import (
@@ -47,33 +55,45 @@ from chip_chat.api.outcome import (
     Usage,
 )
 from chip_chat.api.ratelimit import SourceRateLimiter
+from chip_chat.api.turns import FundedTurn, SpendGate, UnfundedTurnError
 from chip_chat.api.uploads import UploadLimiter
 from chip_chat.otel import service_name
 
 __all__ = [
     "KILL_SWITCH_VARIABLE",
     "SERVICE_NAME",
+    "SESSION_COOKIE",
     "STOP_STATE_MESSAGE",
     "BudgetLedger",
     "BudgetScope",
     "CachedKillSwitch",
+    "ChatReply",
+    "ChatRequest",
     "Clock",
     "EnvironmentKillSwitch",
     "FileKillSwitch",
+    "FundedTurn",
     "KillSwitch",
     "ManualKillSwitch",
     "Reservation",
+    "Service",
+    "SessionStore",
     "SourceRateLimiter",
+    "SpendGate",
     "SpendGuard",
     "SpendLimits",
     "Stop",
     "StopReason",
     "SystemClock",
     "TurnBudget",
+    "UnfundedTurnError",
     "UploadLimiter",
     "Usage",
     "__version__",
     "any_of",
+    "build_service",
+    "create_app",
+    "default_kill_switch",
     "service_name",
 ]
 

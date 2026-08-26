@@ -1,6 +1,8 @@
 # The build context is the whole repository, because the agent is a uv workspace
 # member and `uv sync --package` needs the workspace. Everything that is not an
 # input to that is excluded here -- which is most of it.
+# Everything the image does not need. The build stage copies the workspace
+# members explicitly, so this list is about what travels inside them.
 
 .git
 .github
@@ -26,24 +28,28 @@ infra/terraform/.terraform
 **/*.tfstate
 **/*.tfstate.*
 **/*.tfvars
-
 # Harvested and generated data.
 harvest/cache
 harvest/output
 data-gen/output
 data/generated
-
 node_modules
 **/node_modules
 web/dist
 .next
-
 .env
 .env.*
 !.env.example
 *.pem
 *.key
-
 .DS_Store
 .idea
 .vscode
+**/*.pyc
+**/tests
+docs
+infra/terraform
+Dockerfile
+compose.yaml
+Makefile
+*.md
