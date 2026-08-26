@@ -308,3 +308,13 @@ output "databricks_silver_verify_job_id" {
   description = "Asserts gh-34's acceptance criteria against the silver tables. Run it after the silver pipeline with: databricks jobs run-now <id>"
   value       = var.databricks_unity_catalog_enabled ? databricks_job.silver_verify[0].id : null
 }
+
+output "databricks_gold_pipeline_id" {
+  description = "The gold marts pipeline (gh-36). Start an update with: databricks pipelines start-update <id>. Run it after the silver pipeline; it reads silver and never bronze. Null while var.databricks_unity_catalog_enabled is false."
+  value       = var.databricks_unity_catalog_enabled ? databricks_pipeline.gold[0].id : null
+}
+
+output "databricks_gold_verify_job_id" {
+  description = "Asserts gh-36's acceptance criteria against the gold marts. Run it after the gold pipeline with: databricks jobs run-now <id>"
+  value       = var.databricks_unity_catalog_enabled ? databricks_job.gold_verify[0].id : null
+}

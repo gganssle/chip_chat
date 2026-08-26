@@ -15,6 +15,7 @@ contributor — human or agent — has them locally. Read them in this order.
 | [lakehouse-catalog.md](lakehouse-catalog.md) | The Unity Catalog layout — six medallion schemas, who may write to them, and the two jobs that check both claims against the live workspace |
 | [bronze-ingestion.md](bronze-ingestion.md) | How both streams get out of ADLS and into bronze — the Auto Loader options, what a row carries, where a malformed document goes, and the run that checked all four claims |
 | [silver-conformance.md](silver-conformance.md) | How both streams stop being what arrived and start being what is true — what is deduplicated and on which key, what counts as boilerplate and how its removal is checked, and which violations stop the pipeline |
+| [gold-marts.md](gold-marts.md) | The four personalization marts — what every number in them means, how `usual_order.confidence` is defined so a low value hedges honestly, and why no mart reads the table holding the fields a visitor may edit |
 | [deployment.md](deployment.md) | Getting the chat app onto the public URL — the procedure, and the ten things that surprised the first person to do it |
 | [chipotle-nutrition-spot-check.md](chipotle-nutrition-spot-check.md) | What the harvested nutrition and allergen data was checked against by hand, and when |
 | [chipotle-policy-spot-check.md](chipotle-policy-spot-check.md) | The same, for the harvested rewards, FAQ, catering and store data |
@@ -52,7 +53,11 @@ asks for, and the job that asserts each of them against the live workspace. The
 silver-conformance guide continues it one further, and is the first of them that
 has to argue rather than record — which key a duplicate is collapsed on, what
 counts as boilerplate, and why every expectation in that layer stops the pipeline
-instead of writing a warning nobody reads.
+instead of writing a warning nobody reads. The gold-marts guide is the last of the
+four and argues hardest, because a mart is a *definition* rather than a
+transformation: what a usual order is, what a confidence of 0.31 licenses the
+assistant to say, and which table the whole layer refuses to read so that a
+visitor editing their display name cannot invalidate an answer.
 
 The texture report is evidence of a different kind again, and the only document here
 that is *generated*. Issue #28 asks that "the data is interesting" become visible rather
