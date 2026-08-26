@@ -1,5 +1,56 @@
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
 
-# Beads / Dolt files (added by bd init)
+# --- Tooling caches ---------------------------------------------------------
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Secrets and local config -----------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Terraform --------------------------------------------------------------
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# --- Harvested and generated data -------------------------------------------
+harvest/cache/
+harvest/output/
+data-gen/output/
+data/generated/
+
+# --- Node (web/) ------------------------------------------------------------
+node_modules/
+.next/
+web/dist/
+
+# --- Editors and OS ---------------------------------------------------------
+.DS_Store
+.idea/
+.vscode/
+
+# --- Beads / Dolt files (added by bd init) ----------------------------------
 .dolt/
 *.db
 .beads-credential-key

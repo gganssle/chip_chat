@@ -12,11 +12,13 @@ own account, takes actions on that account, and can turn a photograph of a meal 
 
 ## Documents
 
+All three live in [`docs/`](docs/README.md).
+
 | Document | What it covers |
 | --- | --- |
-| [System design & build plan](https://claude.ai/code/artifact/6943b476-51fe-481b-8399-980d477730b8) | Architecture, the five capability lanes, twelve-phase build plan, cost guardrails |
-| [Cilantro PRD](https://claude.ai/code/artifact/3eff0560-14f4-4f81-84e2-04e71a90fb95) | Problem, personas, goals and non-goals, requirements, flows, success metrics |
-| [RFC-001 — Chip Chat](https://claude.ai/code/artifact/4221a4e4-6bcc-423e-9b63-0bd00e0ec26c) | Components, data model, trust boundaries, tool contracts, failure modes, decisions |
+| [System design & build plan](docs/system-design.md) | Architecture, the five capability lanes, twelve-phase build plan, cost guardrails |
+| [Cilantro PRD](docs/cilantro-prd.md) | Problem, personas, goals and non-goals, requirements, flows, success metrics |
+| [RFC-001 — Chip Chat](docs/rfc-001.md) | Components, data model, trust boundaries, tool contracts, failure modes, decisions |
 
 Read them in that order. The system design frames the problem, the PRD defines what to build, and
 the RFC defines how.
@@ -59,6 +61,19 @@ api/          FastAPI service, sessions, budget enforcement, ops API
 web/          Chat widget and entry flow
 eval/         Golden set, adversarial suite, Arize experiments
 otel/         Shared OpenInference instrumentation
+```
+
+Each directory is a uv workspace member holding one importable package under
+`src/chip_chat/`, sharing a single lockfile at the repository root. `otel/` is a
+leaf: everything may import it, it imports nothing. See
+[`docs/README.md`](docs/README.md#repository-conventions) for the conventions.
+
+## Getting started
+
+```bash
+make setup      # fresh clone -> working state (needs uv on PATH)
+make ci         # format check, lint, type check, import contracts, tests
+make help       # everything else
 ```
 
 ## Status

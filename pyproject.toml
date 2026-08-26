@@ -1,0 +1,188 @@
+[project]
+name = "chip-chat"
+version = "0.0.0"
+description = "Cilantro, a conversational assistant for a fast-casual restaurant."
+requires-python = ">=3.13"
+dependencies = [
+    "chip-chat-agent",
+    "chip-chat-api",
+    "chip-chat-data-gen",
+    "chip-chat-databricks",
+    "chip-chat-eval",
+    "chip-chat-harvest",
+    "chip-chat-infra",
+    "chip-chat-otel",
+    "chip-chat-snowflake",
+    "chip-chat-vision",
+    "chip-chat-web",
+]
+
+[dependency-groups]
+dev = [
+    "import-linter>=2.3",
+    "mypy>=1.14",
+    "pytest>=8.3",
+    "ruff>=0.9",
+]
+
+# ---------------------------------------------------------------------------
+# Workspace. One lockfile at the root; every directory below is a member.
+# ---------------------------------------------------------------------------
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = [
+    "agent",
+    "api",
+    "data-gen",
+    "databricks",
+    "eval",
+    "harvest",
+    "infra",
+    "otel",
+    "snowflake",
+    "vision",
+    "web",
+]
+
+[tool.uv.sources]
+chip-chat-agent = { workspace = true }
+chip-chat-api = { workspace = true }
+chip-chat-data-gen = { workspace = true }
+chip-chat-databricks = { workspace = true }
+chip-chat-eval = { workspace = true }
+chip-chat-harvest = { workspace = true }
+chip-chat-infra = { workspace = true }
+chip-chat-otel = { workspace = true }
+chip-chat-snowflake = { workspace = true }
+chip-chat-vision = { workspace = true }
+chip-chat-web = { workspace = true }
+
+# ---------------------------------------------------------------------------
+# ruff — formatter and linter, both.
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+target-version = "py313"
+line-length = 90
+src = [
+    "agent/src",
+    "api/src",
+    "data-gen/src",
+    "databricks/src",
+    "eval/src",
+    "harvest/src",
+    "infra/src",
+    "otel/src",
+    "snowflake/src",
+    "vision/src",
+    "web/src",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "W",      # pycodestyle warnings
+    "I",      # isort
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "A",      # flake8-builtins
+    "C4",     # flake8-comprehensions
+    "PT",     # flake8-pytest-style
+    "SIM",    # flake8-simplify
+    "TID",    # flake8-tidy-imports
+    "RUF",    # ruff-specific
+]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.per-file-ignores]
+"*/tests/*" = ["S101"]
+
+# ---------------------------------------------------------------------------
+# mypy — strict on otel/ and agent/, checked everywhere.
+# ---------------------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.13"
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = [
+    "agent/src",
+    "api/src",
+    "data-gen/src",
+    "databricks/src",
+    "eval/src",
+    "harvest/src",
+    "infra/src",
+    "otel/src",
+    "snowflake/src",
+    "vision/src",
+    "web/src",
+]
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_configs = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["chip_chat.otel.*", "chip_chat.agent.*"]
+disallow_any_generics = true
+disallow_incomplete_defs = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_untyped_decorators = true
+disallow_untyped_defs = true
+extra_checks = true
+no_implicit_reexport = true
+strict_equality = true
+warn_return_any = true
+
+# ---------------------------------------------------------------------------
+# import-linter — otel/ is a leaf. Nothing in it may import a sibling package.
+# ---------------------------------------------------------------------------
+
+[tool.importlinter]
+root_packages = ["chip_chat"]
+
+[[tool.importlinter.contracts]]
+name = "otel is a shared leaf library"
+type = "forbidden"
+source_modules = ["chip_chat.otel"]
+forbidden_modules = [
+    "chip_chat.agent",
+    "chip_chat.api",
+    "chip_chat.data_gen",
+    "chip_chat.databricks",
+    "chip_chat.eval",
+    "chip_chat.harvest",
+    "chip_chat.infra",
+    "chip_chat.snowflake",
+    "chip_chat.vision",
+    "chip_chat.web",
+]
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --strict-config"
+testpaths = [
+    "agent/tests",
+    "api/tests",
+    "data-gen/tests",
+    "databricks/tests",
+    "eval/tests",
+    "harvest/tests",
+    "infra/tests",
+    "otel/tests",
+    "snowflake/tests",
+    "vision/tests",
+    "web/tests",
+]

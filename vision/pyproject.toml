@@ -1,0 +1,16 @@
+[project]
+name = "chip-chat-vision"
+version = "0.0.0"
+description = "Photo pipeline: validate, moderate, describe, match."
+requires-python = ">=3.13"
+dependencies = ["chip-chat-otel"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/chip_chat"]
+
+[tool.uv.sources]
+chip-chat-otel = { workspace = true }
