@@ -9,6 +9,7 @@ import textwrap
 
 import pytest
 
+from chip_chat.otel.attributes import ChipChatAttributes, SpanAttributes
 from chip_chat.otel.config import TelemetryConfig
 from chip_chat.otel.schema import OPS_SPAN_PREFIX, TOOL_SPAN_PREFIX, SpanName
 from chip_chat.otel.smoke import (
@@ -115,6 +116,35 @@ def test_the_demo_session_reaches_every_node_of_the_schema() -> None:
         emit_demo_session(SESSION)
 
     assert {_node(name) for name in recorder.names()} == set(SpanName)
+
+
+def test_every_turn_reconciles_its_rollup_against_its_model_calls() -> None:
+    """The demo is what a consumer runs to check the schema, so it must add up.
+
+    ``assert_token_counts_sum`` is the check this package asks its consumers to
+    run over their own turns. A fixture that failed it -- or that quietly left
+    ``vision.describe`` uncounted -- would be teaching the wrong thing to every
+    reader of the trace it produces.
+    """
+    for turn in (knowledge_turn, account_turn, vision_order_turn):
+        with span_recorder() as recorder:
+            turn(SESSION)
+        recorder.assert_token_counts_sum(recorder.llm_token_usage())
+        rolled = recorder.attributes_of("chat.turn")[ChipChatAttributes.TOKENS_TOTAL]
+        assert rolled == recorder.llm_token_usage().total, turn.__name__
+
+
+def test_the_vision_span_is_counted_like_any_other_model_call() -> None:
+    """It is an LLM span, and the photo lane is the expensive lane."""
+    with span_recorder() as recorder:
+        vision_order_turn(SESSION)
+
+    vision = recorder.attributes_of("vision.describe")
+    assert vision[SpanAttributes.LLM_TOKEN_COUNT_TOTAL] == 365
+    # And the tool span above it carries the lane's rollup, under our own key.
+    tool = recorder.attributes_of("tool.match_meal_from_photo")
+    assert tool[ChipChatAttributes.TOKENS_TOTAL] == 365
+    assert SpanAttributes.LLM_TOKEN_COUNT_TOTAL not in tool
 
 
 def test_every_turn_carries_the_session_it_was_given() -> None:

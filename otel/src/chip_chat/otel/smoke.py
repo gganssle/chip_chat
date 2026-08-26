@@ -34,7 +34,10 @@ from chip_chat.otel.config import TelemetryConfig
 from chip_chat.otel.schema import OpsAction, ToolName
 from chip_chat.otel.spans import (
     Document,
+    LlmRecorder,
     Message,
+    TokenUsage,
+    VisionRecorder,
     agent_step,
     budget_check,
     chat_turn,
@@ -113,6 +116,43 @@ _MENU_DOCUMENTS: Sequence[Document] = (
 )
 
 
+_PHOTO_REF = "uploads/2026-08-25/smoke-meal.jpg"
+"""The photograph the vision turn describes.
+
+A ``container/name`` key, the form :class:`~chip_chat.vision.store.BlobRef`
+renders and the only form that crosses a tool boundary."""
+
+_NO_TOKENS = TokenUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+
+
+def _spend(
+    recorder: LlmRecorder | VisionRecorder,
+    running: TokenUsage,
+    *,
+    prompt: int,
+    completion: int,
+) -> TokenUsage:
+    """Record one model call's tokens, and add them to the turn's running total.
+
+    Both in one call so the two cannot drift. A fixture whose ``chat.turn``
+    rollup disagreed with the ``llm.token_count.*`` beneath it would be teaching
+    the wrong thing to every reader of the demo trace -- and would fail
+    :meth:`~chip_chat.otel.testing.SpanRecorder.assert_token_counts_sum`, which
+    is the check this schema asks its consumers to run.
+
+    Args:
+        recorder: The model call's recorder.
+        running: The turn's total so far.
+        prompt: Prompt tokens for this call.
+        completion: Completion tokens for this call.
+
+    Returns:
+        The new running total.
+    """
+    recorder.record_usage(prompt_tokens=prompt, completion_tokens=completion)
+    return running + TokenUsage(prompt_tokens=prompt, completion_tokens=completion)
+
+
 def knowledge_turn(session_id: str, *, index: int = 0, pause: float = 0.0) -> None:
     """Emit a menu-knowledge turn: both guards, a retrieval, two model steps.
 
@@ -133,6 +173,7 @@ def knowledge_turn(session_id: str, *, index: int = 0, pause: float = 0.0) -> No
         persona_id=PERSONA_ID,
         demo_id=DEMO_ID,
     ) as turn:
+        spent = _NO_TOKENS
         with budget_check() as budget:
             budget.record_budget(scope="session", tokens_used=812, tokens_limit=40_000)
             budget.allow()
@@ -145,7 +186,7 @@ def knowledge_turn(session_id: str, *, index: int = 0, pause: float = 0.0) -> No
         with agent_step(index=0) as step:
             with llm_completion(model=_MODEL, provider=_PROVIDER) as llm:
                 llm.record_input_messages([Message(role="user", content=question)])
-                llm.record_usage(prompt_tokens=812, completion_tokens=64)
+                spent = _spend(llm, spent, prompt=812, completion=64)
                 llm.record_finish_reason("tool_calls")
                 _work(pause)
 
@@ -161,13 +202,14 @@ def knowledge_turn(session_id: str, *, index: int = 0, pause: float = 0.0) -> No
         with agent_step(index=1):
             with llm_completion(model=_MODEL, provider=_PROVIDER) as llm:
                 llm.record_output_messages([Message(role="assistant", content=answer)])
-                llm.record_usage(prompt_tokens=1_240, completion_tokens=48)
+                spent = _spend(llm, spent, prompt=1_240, completion=48)
                 llm.record_finish_reason("stop")
                 _work(pause)
 
         with render_response() as render:
             render.record_output(answer)
             _work(pause)
+        turn.record_token_rollup(spent)
         turn.record_output(answer)
 
 
@@ -191,6 +233,7 @@ def account_turn(session_id: str, *, index: int = 1, pause: float = 0.0) -> None
         persona_id=PERSONA_ID,
         demo_id=DEMO_ID,
     ) as turn:
+        spent = _NO_TOKENS
         with budget_check() as budget:
             budget.record_budget(scope="session", tokens_used=2_164, tokens_limit=40_000)
             budget.allow()
@@ -199,7 +242,7 @@ def account_turn(session_id: str, *, index: int = 1, pause: float = 0.0) -> None
         with agent_step(index=0):
             with llm_completion(model=_MODEL, provider=_PROVIDER) as llm:
                 llm.record_input_messages([Message(role="user", content=question)])
-                llm.record_usage(prompt_tokens=904, completion_tokens=72)
+                spent = _spend(llm, spent, prompt=904, completion=72)
                 llm.record_finish_reason("tool_calls")
                 _work(pause)
 
@@ -224,13 +267,14 @@ def account_turn(session_id: str, *, index: int = 1, pause: float = 0.0) -> None
         with agent_step(index=1):
             with llm_completion(model=_MODEL, provider=_PROVIDER) as llm:
                 llm.record_output_messages([Message(role="assistant", content=answer)])
-                llm.record_usage(prompt_tokens=1_388, completion_tokens=56)
+                spent = _spend(llm, spent, prompt=1_388, completion=56)
                 llm.record_finish_reason("stop")
                 _work(pause)
 
         with render_response() as render:
             render.record_output(answer)
             _work(pause)
+        turn.record_token_rollup(spent)
         turn.record_output(answer)
 
 
@@ -261,6 +305,7 @@ def vision_order_turn(session_id: str, *, index: int = 2, pause: float = 0.0) ->
         persona_id=PERSONA_ID,
         demo_id=DEMO_ID,
     ) as turn:
+        spent = _NO_TOKENS
         with budget_check() as budget:
             budget.record_budget(scope="session", tokens_used=3_616, tokens_limit=40_000)
             budget.allow()
@@ -274,17 +319,21 @@ def vision_order_turn(session_id: str, *, index: int = 2, pause: float = 0.0) ->
 
         with agent_step(index=0):
             with llm_completion(model=_MODEL, provider=_PROVIDER) as llm:
-                llm.record_usage(prompt_tokens=1_020, completion_tokens=40)
+                spent = _spend(llm, spent, prompt=1_020, completion=40)
                 llm.record_finish_reason("tool_calls")
                 _work(pause)
 
             with tool_call(
                 ToolName.MATCH_MEAL_FROM_PHOTO,
-                arguments={"image_ref": "blob://uploads/smoke-meal.jpg"},
+                arguments={"blob_ref": _PHOTO_REF},
             ) as tool:
-                with vision_describe(
-                    image_ref="blob://uploads/smoke-meal.jpg", model=_VISION_MODEL
-                ) as vision:
+                lane = _NO_TOKENS
+                with vision_describe(image_ref=_PHOTO_REF, model=_VISION_MODEL) as vision:
+                    # The image as OpenInference reads a multimodal input, so
+                    # the demo trace shows the photograph the description came
+                    # from rather than an opaque key.
+                    vision.record_image(_PHOTO_REF, prompt="Describe this meal.")
+                    lane = _spend(vision, lane, prompt=274, completion=91)
                     vision.record_description(description)
                     _work(pause)
                 with matcher_resolve() as matcher:
@@ -299,10 +348,14 @@ def vision_order_turn(session_id: str, *, index: int = 2, pause: float = 0.0) ->
                     matcher.record_resolved_skus(["BOWL-CHK-001", "SIDE-GUAC-001"])
                     _work(pause)
                 tool.record_result({"skus": ["BOWL-CHK-001", "SIDE-GUAC-001"]})
+                # What the lane cost, on the span that contains it. Under our
+                # own key, so summing the OpenInference ones stays exact.
+                tool.record_token_rollup(lane)
+                spent = spent + lane
 
         with agent_step(index=1):
             with llm_completion(model=_MODEL, provider=_PROVIDER) as llm:
-                llm.record_usage(prompt_tokens=1_402, completion_tokens=88)
+                spent = _spend(llm, spent, prompt=1_402, completion=88)
                 llm.record_finish_reason("tool_calls")
                 _work(pause)
 
@@ -312,7 +365,7 @@ def vision_order_turn(session_id: str, *, index: int = 2, pause: float = 0.0) ->
 
         with agent_step(index=2):
             with llm_completion(model=_MODEL, provider=_PROVIDER) as llm:
-                llm.record_usage(prompt_tokens=1_540, completion_tokens=32)
+                spent = _spend(llm, spent, prompt=1_540, completion=32)
                 llm.record_finish_reason("tool_calls")
                 _work(pause)
 
@@ -330,6 +383,7 @@ def vision_order_turn(session_id: str, *, index: int = 2, pause: float = 0.0) ->
         with render_response() as render:
             render.record_output(answer)
             _work(pause)
+        turn.record_token_rollup(spent)
         turn.record_output(answer)
 
 
