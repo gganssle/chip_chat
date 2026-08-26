@@ -54,20 +54,44 @@ that directory on `sys.path`. Both modules import nothing but the standard
 library so that this works, and the files uploaded are the very files pytest
 imports — there is no second copy to drift.
 
-### What is deliberately not here
+### The reference tables, added later by #34
 
-`parsed/` and `catalog/` — the harvest package's *parsed* tables — are not
-ingested. The issue enumerates the harvested side as "HTML/JSON responses,
-Document Intelligence extractions, PDFs", which is the corpus, and adds
-"untransformed".
+The diagram above is #33's scope: the corpus, "untransformed". The harvest
+package's *parsed* tables were deliberately left out of it, and there was a
+concrete problem waiting in those directories — five table names collide between
+`parsed/chipotle/*` and `catalog/chipotle/`. `menu_items`, `item_prices`,
+`stores`, `caveats` and `item_allergens` are each written both by a parser and by
+the catalogue build, so landing them in one schema means choosing which file is
+the real one. That is conformance, which is the title of
+[#34](https://github.com/gganssle/chip_chat/issues/34), so it was left there
+rather than settled here by a naming convention.
 
-There is also a concrete problem waiting in those directories: five table names
-collide across the five parser datasets. `menu_items`, `item_prices`, `stores`,
-`caveats` and `item_allergens` are each written by two different parsers, so
-landing them in one schema means choosing which file is the real one, or
-inventing a prefix convention to avoid choosing. That is conformance, which is
-the title of [#34](https://github.com/gganssle/chip_chat/issues/34), and it is
-left there rather than settled here by a naming convention.
+#34 made the choice — **the catalogue wins for every name it publishes**, because
+the parsed tables are its inputs — and then landed fourteen more sources through
+this same pipeline, tagged `chip_chat.issue = gh-34`:
+
+```
+catalog/chipotle/*.jsonl              → chip_chat.bronze_harvested.menu_items,
+                                         item_prices, modifiers, stores,
+                                         item_allergens, allergens, caveats,
+                                         vocabulary
+catalog/chipotle/manifest.json        → chip_chat.bronze_harvested.catalog_manifest
+parsed/chipotle/policy/*.jsonl        → chip_chat.bronze_harvested.policy_documents,
+                                         policy_sections, faq_categories,
+                                         faq_entries, rewards
+```
+
+Only those five parsed tables, and only because the catalogue does not
+consolidate them: the first four are published prose and the fifth is the
+Rewards Exchange line-up every redemption in the loyalty ledger has to resolve
+to. `parsed/chipotle/menu`, `parsed/chipotle/nutrition` and `parsed/chipotle/pdf`
+are still not ingested at all. `docs/silver-conformance.md` §2 carries the full
+argument.
+
+The loop in `bronze_ingest.py` did not change. What changed is the length of
+`SOURCES` and the addition of `Source.issue`, so that a reader of the catalogue
+browser can tell #33's corpus from #34's reference tables without opening a
+repository.
 
 ## 2. What every row carries
 
@@ -294,8 +318,9 @@ Against the four acceptance criteria:
 ## 7. What this does not do
 
 - **No silver.** [#34](https://github.com/gganssle/chip_chat/issues/34) cleans,
-  deduplicates and conforms both streams, and decides how the parsed and
-  catalogue tables reach it.
+  deduplicates and conforms both streams. It also decided how the parsed and
+  catalogue tables reach the lakehouse, and the answer was "through this
+  pipeline" — see §1. `docs/silver-conformance.md` is that layer's write-up.
 - **No schedule.** [#38](https://github.com/gganssle/chip_chat/issues/38) argues
   the weekly re-harvest and the freshness signal. Nothing in this workspace
   should be able to start spending on its own.

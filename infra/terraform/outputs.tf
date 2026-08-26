@@ -298,3 +298,13 @@ output "databricks_bronze_verify_job_id" {
   description = "Asserts gh-33's acceptance criteria against the bronze tables. Run it after the pipeline with: databricks jobs run-now <id>"
   value       = var.databricks_unity_catalog_enabled ? databricks_job.bronze_verify[0].id : null
 }
+
+output "databricks_silver_pipeline_id" {
+  description = "The silver conformance pipeline (gh-34). Start an update with: databricks pipelines start-update <id>. Run it after the bronze pipeline; it reads bronze and never the landing zone. Null while var.databricks_unity_catalog_enabled is false."
+  value       = var.databricks_unity_catalog_enabled ? databricks_pipeline.silver[0].id : null
+}
+
+output "databricks_silver_verify_job_id" {
+  description = "Asserts gh-34's acceptance criteria against the silver tables. Run it after the silver pipeline with: databricks jobs run-now <id>"
+  value       = var.databricks_unity_catalog_enabled ? databricks_job.silver_verify[0].id : null
+}

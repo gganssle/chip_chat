@@ -19,16 +19,23 @@ constant this module shares with :mod:`chip_chat.databricks.catalog` — the
 ``bronze_<stream>`` schema name — is spelled out in :func:`schema_name` and
 asserted equal to the catalog module's answer in the tests rather than imported.
 
-**What is here and what is not.** The issue enumerates the harvested side:
-"HTML/JSON responses, Document Intelligence extractions, PDFs". That is the
-fetch-once cache in ``raw/`` and the analysis cache in ``analysis/``, and it is
-what :data:`SOURCES` carries. The parsed tables under ``parsed/`` and
-``catalog/`` are the harvest package's *output* rather than the corpus, and five
-of their names collide across datasets — ``menu_items``, ``item_prices``,
-``stores``, ``caveats`` and ``item_allergens`` are each written by two different
-parsers. Choosing which of two ``menu_items`` files is the real one is
-conformance, which is the title of #34, so it is left there rather than settled
-here by a naming convention.
+**What is here and what is not.** #33 enumerates the harvested side: "HTML/JSON
+responses, Document Intelligence extractions, PDFs". That is the fetch-once
+cache in ``raw/`` and the analysis cache in ``analysis/`` — the corpus, and the
+first three entries in :data:`SOURCES`.
+
+The parsed tables under ``parsed/`` and ``catalog/`` are the harvest package's
+*output* rather than the corpus, and five of their names collide between the two
+directories — ``menu_items``, ``item_prices``, ``stores``, ``caveats`` and
+``item_allergens`` are each written both by a parser and by the catalogue build.
+#33 refused to choose between them by naming convention and left the choice to
+conformance, which is #34; #34 made it, and it is recorded above
+:data:`_REFERENCE`. In one line: the catalogue is the consolidation of the
+parsers, so the catalogue wins for every name it publishes and ``parsed/`` is
+read only for what the catalogue does not consolidate. Those tables are landed
+here, tagged ``gh-34``, because a reference table silver conforms against has to
+arrive the same way everything else does — through a checkpoint that makes a
+re-run idempotent and a quarantine that catches a document that did not parse.
 
 **Idempotence is a property of the checkpoint, not of a key.** Auto Loader
 records the files it has consumed in ``cloudFiles.schemaLocation`` and never
@@ -167,6 +174,12 @@ class Source:
         glob: ``pathGlobFilter``, matched against the file name.
             Used where several tables share one directory, as the generated
             population does.
+        issue: The issue that added this source, as the Unity Catalog table
+            property ``chip_chat.issue``. Two issues land tables into these
+            schemas — #33 brought the corpus and the generated population, #34
+            brought the reference tables it needed to conform them against —
+            and a table that cannot say which is a table nobody can trace to
+            the argument that put it there.
     """
 
     table: str
@@ -178,6 +191,7 @@ class Source:
     multiline: bool = False
     schema_hints: tuple[str, ...] = ()
     glob: str | None = None
+    issue: str = "gh-33"
 
     @property
     def schema(self) -> str:
@@ -295,6 +309,388 @@ _HARVESTED: Final[tuple[Source, ...]] = (
     ),
 )
 
+
+# --- The reference tables the accounts are conformed against ----------------
+#
+# Added by #34, and this is where the collision #33 recorded and deferred gets
+# settled. Five table names -- `menu_items`, `item_prices`, `stores`, `caveats`
+# and `item_allergens` -- are each written twice: once by a parser under
+# `parsed/chipotle/*`, and once by the catalogue build under
+# `catalog/chipotle/`. #33 refused to pick by naming convention and left the
+# choice to conformance, which is #34.
+#
+# THE CATALOGUE WINS, EVERY TIME. The two files are not two candidates for one
+# fact -- one is an input to the other. `catalog/records.py` says so in its own
+# header: the parsed tables are "one harvest of one site", and the catalogue is
+# "the consolidation three other subsystems resolve against". Landing both would
+# land the same item twice under two names, which is exactly the duplication
+# #34 exists to remove.
+#
+# So `parsed/` is read for nothing the catalogue publishes. What is read from it
+# is only what the catalogue does not consolidate: the published policy prose,
+# which is corpus rather than catalogue, and the Rewards Exchange line-up, which
+# the loyalty ledger's redemptions have to resolve against.
+#
+# `parsed/chipotle/menu`, `parsed/chipotle/nutrition` and `parsed/chipotle/pdf`
+# are therefore not ingested at all. Everything in them reaches the lakehouse
+# through the catalogue, and the PDFs reach it as bytes and as a Document
+# Intelligence reading already.
+
+_CATALOGUE_PREFIX: Final = "catalog/chipotle"
+
+_POLICY_PREFIX: Final = "parsed/chipotle/policy"
+
+_ISSUE: Final = "gh-34"
+
+_REFERENCE: Final[tuple[Source, ...]] = (
+    Source(
+        table="menu_items",
+        identity=("item_id",),
+        stream="harvested",
+        path=_CATALOGUE_PREFIX,
+        fmt=JSON,
+        glob="menu_items.jsonl",
+        issue=_ISSUE,
+        comment=(
+            "The consolidated menu: identity from the online menu, calories "
+            "and allergen marks from the nutrition metadata, and a source_url "
+            "per document merged rather than one that covers both. This is "
+            "the table an order item has to resolve against, which is why it "
+            "is here and the parser's own menu_items is not. Landed by gh-34 "
+            "as the catalogue build wrote it; untransformed."
+        ),
+        schema_hints=(
+            "item_id STRING",
+            "name STRING",
+            "category STRING",
+            "item_type STRING",
+            "primary_filling STRING",
+            "description STRING",
+            "is_composed BOOLEAN",
+            "allergens ARRAY<STRING>",
+            "allergen_disclosure STRING",
+            "source_url STRING",
+            "harvested_at TIMESTAMP",
+            "nutrition_source_url STRING",
+            "nutrition_harvested_at TIMESTAMP",
+            "allergen_source_url STRING",
+            "allergen_harvested_at TIMESTAMP",
+        ),
+    ),
+    Source(
+        table="item_prices",
+        identity=("restaurant_id", "item_id"),
+        stream="harvested",
+        path=_CATALOGUE_PREFIX,
+        fmt=JSON,
+        glob="item_prices.jsonl",
+        issue=_ISSUE,
+        comment=(
+            "What each restaurant charges for each item. Money is landed as "
+            "the string the catalogue wrote, for the reason orders.total is: "
+            "casting it is silver's job. Landed by gh-34."
+        ),
+        schema_hints=(
+            "restaurant_id INT",
+            "item_id STRING",
+            "is_available BOOLEAN",
+            "eligible_for_delivery BOOLEAN",
+            "source_url STRING",
+            "harvested_at TIMESTAMP",
+        ),
+    ),
+    Source(
+        table="modifiers",
+        identity=("modifier_id",),
+        stream="harvested",
+        path=_CATALOGUE_PREFIX,
+        fmt=JSON,
+        glob="modifiers.jsonl",
+        issue=_ISSUE,
+        comment=(
+            "What may go in which slot on which item. Identity is the pair "
+            "<item_id>:<modifier_item_id>, because the same ingredient on a "
+            "different item is a different modifier. Landed by gh-34."
+        ),
+        schema_hints=(
+            "modifier_id STRING",
+            "item_id STRING",
+            "modifier_item_id STRING",
+            "name STRING",
+            "slot STRING",
+            "derivation STRING",
+            "group_name STRING",
+            "modifier_type STRING",
+            "min_quantity INT",
+            "max_quantity INT",
+            "is_default BOOLEAN",
+            "portion_options ARRAY<STRING>",
+            "source_url STRING",
+            "harvested_at TIMESTAMP",
+            "nutrition_source_url STRING",
+            "nutrition_harvested_at TIMESTAMP",
+        ),
+    ),
+    Source(
+        table="stores",
+        identity=("store_id",),
+        stream="harvested",
+        path=_CATALOGUE_PREFIX,
+        fmt=JSON,
+        glob="stores.jsonl",
+        issue=_ISSUE,
+        comment=(
+            "The restaurants, with a published week of hours kept nested on "
+            "the row rather than split into a side table a serialiser wanted. "
+            "The name comes from the restaurant API and the address from the "
+            "locator, which is why the row carries two provenances. Landed by "
+            "gh-34."
+        ),
+        schema_hints=(
+            "store_id INT",
+            "name STRING",
+            "street_address STRING",
+            "city STRING",
+            "region STRING",
+            "postal_code STRING",
+            (
+                "hours ARRAY<STRUCT<day_of_week: STRING, opens: STRING, "
+                "closes: STRING, is_published: BOOLEAN>>"
+            ),
+            "page_url STRING",
+            "source_url STRING",
+            "harvested_at TIMESTAMP",
+            "profile_source_url STRING",
+            "profile_harvested_at TIMESTAMP",
+        ),
+    ),
+    Source(
+        table="item_allergens",
+        identity=("item_id", "allergen_code"),
+        stream="harvested",
+        path=_CATALOGUE_PREFIX,
+        fmt=JSON,
+        glob="item_allergens.jsonl",
+        issue=_ISSUE,
+        comment=(
+            "One row per item per allergen code, carrying the published state "
+            "verbatim: CONTAINS, NOT_LISTED or NOT_PUBLISHED. Landed by "
+            "gh-34, three-valued, uncollapsed."
+        ),
+        schema_hints=(
+            "item_id STRING",
+            "allergen_code STRING",
+            "status STRING",
+            "source_url STRING",
+            "harvested_at TIMESTAMP",
+        ),
+    ),
+    Source(
+        table="allergens",
+        identity=("allergen_code",),
+        stream="harvested",
+        path=_CATALOGUE_PREFIX,
+        fmt=JSON,
+        glob="allergens.jsonl",
+        issue=_ISSUE,
+        comment=(
+            "The published allergen vocabulary: the codes the chart uses and "
+            "the words it renders them with. Landed by gh-34."
+        ),
+        schema_hints=(
+            "allergen_code STRING",
+            "name STRING",
+            "badge_text STRING",
+            "source_url STRING",
+            "harvested_at TIMESTAMP",
+        ),
+    ),
+    Source(
+        table="caveats",
+        identity=("position",),
+        stream="harvested",
+        path=_CATALOGUE_PREFIX,
+        fmt=JSON,
+        glob="caveats.jsonl",
+        issue=_ISSUE,
+        comment=(
+            "The caveats Chipotle publishes beside the allergen chart, in "
+            "published order — including the one saying foods contact one "
+            "another during preparation and the chart does not reflect it. "
+            "Landed by gh-34."
+        ),
+        schema_hints=(
+            "position INT",
+            "heading STRING",
+            "text STRING",
+            "source_url STRING",
+            "harvested_at TIMESTAMP",
+        ),
+    ),
+    Source(
+        table="vocabulary",
+        identity=("slot", "value"),
+        stream="harvested",
+        path=_CATALOGUE_PREFIX,
+        fmt=JSON,
+        glob="vocabulary.jsonl",
+        issue=_ISSUE,
+        comment=(
+            "The slot vocabulary RFC-001 §07's stage-4 schema is generated "
+            "from, with the item_ids each term resolves to. Landed by gh-34."
+        ),
+        schema_hints=(
+            "slot STRING",
+            "value STRING",
+            "name STRING",
+            "item_ids ARRAY<STRING>",
+            "derivation STRING",
+            "source_url STRING",
+            "harvested_at TIMESTAMP",
+        ),
+    ),
+    Source(
+        table="catalog_manifest",
+        identity=("catalog_version",),
+        stream="harvested",
+        path=_CATALOGUE_PREFIX,
+        fmt=JSON,
+        multiline=True,
+        glob="manifest.json",
+        issue=_ISSUE,
+        comment=(
+            "One row: which harvest produced this catalogue and the digest of "
+            "every table in it. `tables` is kept as JSON text so a table added "
+            "to the catalogue does not evolve this schema. Landed by gh-34."
+        ),
+        schema_hints=(
+            "catalog_version STRING",
+            "content_version STRING",
+            "reference_restaurant_id INT",
+            "restaurant_ids ARRAY<INT>",
+            "tables STRING",
+        ),
+    ),
+    Source(
+        table="policy_documents",
+        identity=("document_id",),
+        stream="harvested",
+        path=_POLICY_PREFIX,
+        fmt=JSON,
+        glob="policy_documents.jsonl",
+        issue=_ISSUE,
+        comment=(
+            "The published policy pages, one row each, so their sections have "
+            "something to hang off. From parsed/ rather than catalog/ because "
+            "the catalogue consolidates food and this is prose. Landed by "
+            "gh-34."
+        ),
+        schema_hints=(
+            "document_id STRING",
+            "kind STRING",
+            "title STRING",
+            "section_count INT",
+            "source_url STRING",
+            "harvested_at TIMESTAMP",
+        ),
+    ),
+    Source(
+        table="policy_sections",
+        identity=("document_id", "position"),
+        stream="harvested",
+        path=_POLICY_PREFIX,
+        fmt=JSON,
+        glob="policy_sections.jsonl",
+        issue=_ISSUE,
+        comment=(
+            "Policy prose split at the boundaries the page itself published. "
+            "RFC-001 §08 chunks a terms document by section, and a boundary "
+            "lost in the harvest cannot be recovered downstream. Landed by "
+            "gh-34."
+        ),
+        schema_hints=(
+            "document_id STRING",
+            "position INT",
+            "heading STRING",
+            "text STRING",
+            "source_url STRING",
+            "harvested_at TIMESTAMP",
+        ),
+    ),
+    Source(
+        table="faq_categories",
+        identity=("category_position", "subcategory_position"),
+        stream="harvested",
+        path=_POLICY_PREFIX,
+        fmt=JSON,
+        glob="faq_categories.jsonl",
+        issue=_ISSUE,
+        comment=(
+            "The FAQ's published two-level table of contents, in its published "
+            "order. That order is the document structure of a FAQ. Landed by "
+            "gh-34."
+        ),
+        schema_hints=(
+            "category STRING",
+            "category_position INT",
+            "subcategory STRING",
+            "subcategory_position INT",
+            "entry_count INT",
+            "source_url STRING",
+            "harvested_at TIMESTAMP",
+        ),
+    ),
+    Source(
+        table="faq_entries",
+        identity=("category", "subcategory", "rank"),
+        stream="harvested",
+        path=_POLICY_PREFIX,
+        fmt=JSON,
+        glob="faq_entries.jsonl",
+        issue=_ISSUE,
+        comment=(
+            "One published question and its answer. `links` carries every URL "
+            "the answer pointed at, because the text keeps the words a link "
+            "was made of and a URL living only in an href would be lost. "
+            "Landed by gh-34."
+        ),
+        schema_hints=(
+            "category STRING",
+            "subcategory STRING",
+            "rank INT",
+            "question STRING",
+            "answer STRING",
+            "links ARRAY<STRING>",
+            "is_top_question BOOLEAN",
+            "source_url STRING",
+            "harvested_at TIMESTAMP",
+        ),
+    ),
+    Source(
+        table="rewards",
+        identity=("position",),
+        stream="harvested",
+        path=_POLICY_PREFIX,
+        fmt=JSON,
+        glob="rewards.jsonl",
+        issue=_ISSUE,
+        comment=(
+            "The published Rewards Exchange line-up and what each reward "
+            "costs, in points. Every redemption in the loyalty ledger has to "
+            "resolve to a row here — which is why this one parsed table is "
+            "landed and the rest of parsed/chipotle/policy is not. Landed by "
+            "gh-34."
+        ),
+        schema_hints=(
+            "position INT",
+            "name STRING",
+            "point_cost INT",
+            "image_path STRING",
+            "source_url STRING",
+            "harvested_at TIMESTAMP",
+        ),
+    ),
+)
 
 # --- The generated account data ---------------------------------------------
 #
@@ -475,7 +871,7 @@ _SYNTHETIC: Final[tuple[Source, ...]] = (
     ),
 )
 
-SOURCES: Final[tuple[Source, ...]] = _HARVESTED + _SYNTHETIC
+SOURCES: Final[tuple[Source, ...]] = _HARVESTED + _REFERENCE + _SYNTHETIC
 """Every landing-zone location bronze ingests, harvested stream first."""
 
 

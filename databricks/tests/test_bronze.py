@@ -28,12 +28,14 @@ from pathlib import Path
 
 import pytest
 
+from chip_chat.catalog.records import TABLES as CATALOGUE_TABLES
 from chip_chat.data_gen.records import DEFAULT_PREFIX as SYNTHETIC_PREFIX
 from chip_chat.data_gen.records import TABLES as SYNTHETIC_TABLES
 from chip_chat.databricks import bronze, catalog
 from chip_chat.harvest.analysis import AnalysisCache
 from chip_chat.harvest.blobs import InMemoryBlobStore
 from chip_chat.harvest.cache import DocumentCache
+from chip_chat.harvest.sources.chipotle.policy_records import TABLES as POLICY_TABLES
 from chip_chat.harvest.sources.chipotle.tables import write_tables
 
 REPO = Path(__file__).resolve().parents[2]
@@ -164,12 +166,80 @@ def test_both_streams_are_ingested() -> None:
 
 
 def test_the_harvested_corpus_is_the_three_things_the_issue_names() -> None:
-    """HTML/JSON responses, Document Intelligence extractions, PDFs."""
-    assert {candidate.table for candidate in bronze.sources_for("harvested")} == {
-        "raw_documents",
-        "raw_bodies",
-        "document_analyses",
+    """HTML/JSON responses, Document Intelligence extractions, PDFs.
+
+    The corpus is gh-33's scope and is exactly these three. The other harvested
+    tables here are gh-34's reference tables, and `chip_chat.issue` is what
+    separates them — see the next test.
+    """
+    corpus = {
+        candidate.table
+        for candidate in bronze.sources_for("harvested")
+        if candidate.issue == "gh-33"
     }
+    assert corpus == {"raw_documents", "raw_bodies", "document_analyses"}
+
+
+def test_the_reference_tables_come_from_the_catalogue_and_not_the_parsers() -> None:
+    """The collision gh-33 deferred, settled: the catalogue wins every name.
+
+    Five names are written both by a parser under `parsed/chipotle/*` and by
+    the catalogue build under `catalog/chipotle/`. Landing both would land the
+    same item twice under two names, so `parsed/` is read for nothing the
+    catalogue publishes — and this asserts it, from the catalogue's own table
+    list rather than from a comment.
+    """
+    published = set(CATALOGUE_TABLES)
+    for candidate in bronze.sources_for("harvested"):
+        if candidate.table in published:
+            assert candidate.path == "catalog/chipotle", candidate.table
+            assert candidate.glob == f"{candidate.table}.jsonl"
+
+
+def test_every_catalogue_table_is_landed() -> None:
+    """A table added to the catalogue and not here would be built and not read."""
+    landed = {candidate.table for candidate in bronze.sources_for("harvested")}
+    assert set(CATALOGUE_TABLES) <= landed
+    assert "catalog_manifest" in landed
+
+
+def test_only_the_policy_tables_the_catalogue_does_not_consolidate_are_read() -> None:
+    """What is read from parsed/ is prose and rewards, and nothing else.
+
+    `stores` is on both lists and the catalogue owns it; catering and the store
+    profiles are consolidated or out of scope. A parsed table landed here that
+    the catalogue also publishes would be the duplication gh-34 exists to
+    remove.
+    """
+    parsed = {
+        candidate.table
+        for candidate in bronze.sources_for("harvested")
+        if candidate.path.startswith("parsed/")
+    }
+    assert parsed == {
+        "policy_documents",
+        "policy_sections",
+        "faq_categories",
+        "faq_entries",
+        "rewards",
+    }
+    assert parsed <= set(POLICY_TABLES)
+    assert not parsed & set(CATALOGUE_TABLES)
+
+
+def test_no_parsed_menu_nutrition_or_pdf_table_is_landed() -> None:
+    """Everything in them reaches the lakehouse through the catalogue."""
+    for candidate in bronze.SOURCES:
+        assert not candidate.path.startswith("parsed/chipotle/menu")
+        assert not candidate.path.startswith("parsed/chipotle/nutrition")
+        assert not candidate.path.startswith("parsed/chipotle/pdf")
+
+
+def test_every_source_says_which_issue_put_it_there() -> None:
+    """Two issues land tables into these schemas, and a table that cannot say
+    which is a table nobody can trace to the argument that put it there."""
+    for candidate in bronze.SOURCES:
+        assert candidate.issue in {"gh-33", "gh-34"}
 
 
 def test_the_bodies_are_read_as_bytes_and_nothing_else_is() -> None:
@@ -179,7 +249,7 @@ def test_the_bodies_are_read_as_bytes_and_nothing_else_is() -> None:
 
 def test_source_lookup_refuses_a_table_nothing_produces() -> None:
     with pytest.raises(KeyError, match="no bronze source produces"):
-        bronze.source("menu_items")
+        bronze.source("catering_packages")
 
 
 def test_sources_for_refuses_an_unknown_stream() -> None:

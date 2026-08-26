@@ -20,6 +20,13 @@
 # MAGIC columns on `raw_documents`, captured at fetch time by the harvest, which
 # MAGIC is the only place they can honestly come from.
 # MAGIC
+# MAGIC **Two issues land tables here.** #33 brought the corpus and the
+# MAGIC generated population; #34 added the reference tables silver conforms
+# MAGIC them against — the consolidated catalogue and the published policy prose
+# MAGIC — because a table silver resolves against has to arrive through the same
+# MAGIC checkpoint and the same quarantine as everything else. The loop is
+# MAGIC unchanged; `chip_chat.issue` on each table says which issue put it here.
+# MAGIC
 # MAGIC **Configuration**, all four supplied by Terraform:
 # MAGIC `chip_chat.raw_uri`, `chip_chat.catalog`, `chip_chat.checkpoint_uri`,
 # MAGIC `chip_chat.lib_path`.
@@ -94,7 +101,7 @@ def define(candidate):
         comment=candidate.comment,
         table_properties={
             "chip_chat.stream": candidate.stream,
-            "chip_chat.issue": "gh-33",
+            "chip_chat.issue": candidate.issue,
             "delta.enableChangeDataFeed": "true",
         },
     )
@@ -121,7 +128,7 @@ def define_binary(candidate):
         comment=candidate.comment,
         table_properties={
             "chip_chat.stream": candidate.stream,
-            "chip_chat.issue": "gh-33",
+            "chip_chat.issue": candidate.issue,
         },
     )
     def _ingest():
