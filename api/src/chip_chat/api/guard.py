@@ -16,6 +16,12 @@ Four layers, evaluated in this order:
 3. The global daily token ceiling.
 4. The per-session turn and token caps.
 
+Uploads get a fifth check of their own, in front of the read rather than in
+front of the model: see :meth:`SpendGuard.upload` and
+:mod:`chip_chat.api.uploads`. An upload also *costs* the turn's budget at
+acceptance -- :meth:`TurnBudget.record_upload` -- because the vision call it
+implies is spend that is already committed.
+
 Every one of them refuses the same way: :data:`~chip_chat.api.outcome.STOP_STATE_MESSAGE`,
 a designed state and never an error, on entry and mid-conversation alike.
 
@@ -26,6 +32,12 @@ Typical use, inside whatever the request handler already opened::
             if not budget.allowed:
                 turn.record_output(budget.message)
                 return stop_state_response(budget.message)
+            if photo_attached:
+                stop = guard.upload(session_id=sid, source_address=ip)
+                if stop is not None:
+                    return stop_state_response(stop.message)
+                photo = await intake.accept_stream(upload_file)
+                budget.record_upload()
             reply = agent.run(text)                  # only reached when allowed
             budget.record_usage(prompt_tokens=p, completion_tokens=c)
 
@@ -43,6 +55,7 @@ from chip_chat.api.ledger import BudgetLedger, Reservation
 from chip_chat.api.limits import SpendLimits
 from chip_chat.api.outcome import Stop, StopReason, Usage
 from chip_chat.api.ratelimit import SourceRateLimiter
+from chip_chat.api.uploads import UploadLimiter
 from chip_chat.otel import budget_check
 from chip_chat.otel.spans import GuardRecorder
 
@@ -58,10 +71,13 @@ class TurnBudget:
     reality rather than the pessimistic reservation the check made.
     """
 
-    __slots__ = ("_reservation", "_tokens_used")
+    __slots__ = ("_limits", "_reservation", "_tokens_used")
 
-    def __init__(self, reservation: Reservation) -> None:
+    def __init__(
+        self, reservation: Reservation, limits: SpendLimits | None = None
+    ) -> None:
         self._reservation = reservation
+        self._limits = limits if limits is not None else SpendLimits()
         self._tokens_used = 0
 
     @property
@@ -102,6 +118,31 @@ class TurnBudget:
         """
         self._tokens_used += max(0, prompt_tokens) + max(0, completion_tokens)
 
+    def record_upload(self, count: int = 1) -> None:
+        """Charge this turn for the vision call an accepted upload will cause.
+
+        Uploads have to count against the budget as well as against the upload
+        rate limits, and the two are not the same defence: the rate limit bounds
+        how *often*, and this bounds how *much*. Charging at acceptance rather
+        than at completion is the ledger's reserve-then-settle argument applied
+        one level up -- a cost known to be coming is counted before it arrives,
+        so a burst of uploads cannot each clear a ceiling that none of them has
+        been charged against yet.
+
+        The estimate is replaced by reality: when the vision model answers,
+        :meth:`record_usage` adds what it really billed. The charge is an
+        over-count of a turn that uploaded and then failed downstream, which is
+        the direction to err in.
+
+        Args:
+            count: How many uploads were accepted. Values below one are ignored,
+                so a caller that reaches for this on a refused upload charges
+                nothing.
+        """
+        if count < 1:
+            return
+        self._tokens_used += self._limits.upload_token_charge * count
+
     def settle(self) -> None:
         """Charge the ceiling with what the turn actually cost.
 
@@ -115,7 +156,13 @@ class TurnBudget:
 class SpendGuard:
     """The four spend-control layers, evaluated as one synchronous decision."""
 
-    __slots__ = ("_kill_switch", "_ledger", "_limits", "_rate_limiter")
+    __slots__ = (
+        "_kill_switch",
+        "_ledger",
+        "_limits",
+        "_rate_limiter",
+        "_upload_limiter",
+    )
 
     def __init__(
         self,
@@ -123,6 +170,7 @@ class SpendGuard:
         *,
         ledger: BudgetLedger | None = None,
         rate_limiter: SourceRateLimiter | None = None,
+        upload_limiter: UploadLimiter | None = None,
         kill_switch: KillSwitch | None = None,
         clock: Clock | None = None,
     ) -> None:
@@ -132,6 +180,8 @@ class SpendGuard:
             limits: The ceilings to enforce. Defaults to :class:`SpendLimits`.
             ledger: Token counters. Defaults to a fresh :class:`BudgetLedger`.
             rate_limiter: Per-source limiter. Defaults to a fresh one.
+            upload_limiter: Per-session and per-address upload limiter.
+                Defaults to a fresh one.
             kill_switch: The circuit breaker. Defaults to an in-process
                 :class:`~chip_chat.api.killswitch.ManualKillSwitch`, which a
                 deployment should replace with one whose source outlives the
@@ -156,6 +206,11 @@ class SpendGuard:
             if rate_limiter is not None
             else SourceRateLimiter(self._limits, the_clock)
         )
+        self._upload_limiter = (
+            upload_limiter
+            if upload_limiter is not None
+            else UploadLimiter(self._limits, the_clock)
+        )
         self._kill_switch = kill_switch if kill_switch is not None else ManualKillSwitch()
 
     @property
@@ -172,6 +227,11 @@ class SpendGuard:
     def rate_limiter(self) -> SourceRateLimiter:
         """The per-source limiter."""
         return self._rate_limiter
+
+    @property
+    def upload_limiter(self) -> UploadLimiter:
+        """The per-session and per-address upload limiter."""
+        return self._upload_limiter
 
     @property
     def kill_switch(self) -> KillSwitch:
@@ -214,7 +274,7 @@ class SpendGuard:
         with budget_check() as recorder:
             reservation = self._decide(session_id, source_address)
             _record(recorder, reservation)
-            return TurnBudget(reservation)
+            return TurnBudget(reservation, self._limits)
 
     @contextmanager
     def turn(self, *, session_id: str, source_address: str) -> Iterator[TurnBudget]:
@@ -236,6 +296,62 @@ class SpendGuard:
             yield budget
         finally:
             budget.settle()
+
+    def upload(self, *, session_id: str, source_address: str) -> Stop | None:
+        """Decide whether one upload may be read at all.
+
+        Called *before* the body is read and before
+        :meth:`~chip_chat.vision.intake.PhotoIntake.accept_stream`, inside the
+        turn whose budget is already held: a refusal here has to cost the
+        socket and nothing else, which it cannot do if the bytes have already
+        arrived. Opens and closes ``guard.budget_check``, so it runs inside a
+        ``chat.turn``.
+
+        The layers, in order, and each of them ahead of the one it protects:
+
+        1. The circuit breaker -- a manual flip beats every other consideration.
+        2. The per-address upload ceiling.
+        3. The per-session upload ceiling.
+
+        Args:
+            session_id: The conversation the upload belongs to.
+            source_address: The client address, already resolved from whatever
+                proxy headers the deployment trusts.
+
+        Returns:
+            A :class:`~chip_chat.api.outcome.Stop` to render, or ``None`` when
+            the upload may be read. On a refusal, charge nothing and read
+            nothing.
+        """
+        with budget_check() as recorder:
+            stop = self._decide_upload(session_id, source_address)
+            usage = (
+                stop.usage
+                if stop is not None
+                else self._upload_limiter.session_usage(session_id)
+            )
+            # `record_budget` names its numbers tokens, and these are uploads.
+            # Metadata is the sanctioned home for a fact the schema does not
+            # cover, and is a better place than an attribute that would read as
+            # a token count on every dashboard built on one.
+            recorder.set_metadata(
+                scope=usage.scope.value,
+                uploads_used=usage.used,
+                uploads_limit=usage.limit,
+            )
+            if stop is None:
+                recorder.allow()
+            else:
+                recorder.block(stop.reason.value)
+            return stop
+
+    def _decide_upload(self, session_id: str, source_address: str) -> Stop | None:
+        """Evaluate the upload layers in order."""
+        if self._kill_switch.is_thrown():
+            return Stop(reason=StopReason.KILL_SWITCH, usage=self._ledger.global_usage())
+        return self._upload_limiter.check(
+            session_id=session_id, source_address=source_address
+        )
 
     def _decide(self, session_id: str, source_address: str) -> Reservation:
         """Evaluate the four layers in order and return the resulting claim."""

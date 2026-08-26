@@ -1,9 +1,10 @@
 """The upload path, as one call the request handler makes.
 
-Stages 1 to 3 of RFC-001 section 07, in order, with the write at the end::
+Stages 1 to 3 of RFC-001 section 07, in order, with the bounded read in front
+and the write at the end::
 
-    validate  ──▶  normalize  ──▶  screen  ──▶  put  ──▶  blob_ref
-      bytes         pixels      Content Safety   Blob   the only thing that leaves
+    read  ──▶  validate  ──▶  normalize  ──▶  screen  ──▶  put  ──▶  blob_ref
+   bytes        bytes          pixels     Content Safety   Blob   what leaves
 
 This is a library rather than a route for the same reason the spend cap is
 (:mod:`chip_chat.api.guard`): the FastAPI app is issue #66 and does not exist
@@ -27,14 +28,23 @@ configuration of this class that quietly skips stage 3.
     )
 
     @app.post("/upload")
-    async def upload(file: UploadFile) -> UploadResponse:
+    async def upload(file: UploadFile, request: Request) -> UploadResponse:
         try:
-            photo = intake.accept(
-                await file.read(), declared_media_type=file.content_type
+            photo = await intake.accept_stream(
+                file,
+                declared_media_type=file.content_type,
+                declared_length=content_length(request.headers.get("content-length")),
             )
         except UploadRejectedError as refusal:
             return UploadResponse(error=refusal.message)
         return UploadResponse(blob_ref=str(photo.blob_ref), notice=photo.retention_notice)
+
+:meth:`PhotoIntake.accept_stream` rather than ``await file.read()`` then
+:meth:`PhotoIntake.accept`, and the difference is the point of
+:mod:`chip_chat.vision.reader`: ``file.read()`` with no argument buys whatever
+the sender chose to send before any ceiling gets a vote. The stream form does
+the same four stages with the read bounded, so a route that reaches for the
+obvious method gets the bounded one.
 
 What comes back is a :class:`StoredPhoto`, and the only field of it that may be
 handed to a tool is :attr:`~StoredPhoto.blob_ref`. Stage 4 (the vision model,
@@ -52,6 +62,7 @@ from dataclasses import dataclass
 from chip_chat.vision.limits import UploadLimits
 from chip_chat.vision.moderation import ImageModerator, ModerationVerdict
 from chip_chat.vision.normalize import NORMALIZED_MEDIA_TYPE, normalize
+from chip_chat.vision.reader import AsyncByteStream, read_upload_async
 from chip_chat.vision.retention import RETENTION_NOTICE
 from chip_chat.vision.store import BlobRef, BlobStore, blob_name
 from chip_chat.vision.validate import validate
@@ -131,13 +142,50 @@ class PhotoIntake:
         """Stage 3, for an ops surface that wants to report its thresholds."""
         return self._moderator
 
+    async def accept_stream(
+        self,
+        stream: AsyncByteStream,
+        *,
+        declared_media_type: str | None = None,
+        declared_length: int | None = None,
+    ) -> StoredPhoto:
+        """Read one upload under the ceiling and the deadline, then :meth:`accept` it.
+
+        The entry point a request handler should reach for. :meth:`accept`
+        takes bytes, and bytes only exist once something has already read the
+        body -- so a handler that calls it directly has bought whatever the
+        sender chose to send before the first gate ran. This method is the same
+        four stages with that hole closed, and it enforces *this intake's*
+        ceilings rather than whatever the route remembered to pass.
+
+        Args:
+            stream: The request body, with an awaitable ``read``.
+            declared_media_type: The request's content type, if it sent one.
+                Recorded, never trusted.
+            declared_length: The request's ``Content-Length``, if it sent one.
+                Used only to refuse early; see :mod:`chip_chat.vision.reader`.
+
+        Returns:
+            The :class:`StoredPhoto`.
+
+        Raises:
+            UploadRejectedError: If any gate refuses, the read included.
+                Nothing has been written.
+        """
+        payload = await read_upload_async(
+            stream, declared_length=declared_length, limits=self._limits
+        )
+        return self.accept(payload, declared_media_type=declared_media_type)
+
     def accept(
         self, data: bytes, *, declared_media_type: str | None = None
     ) -> StoredPhoto:
         """Validate, normalize, moderate and store one upload.
 
         Args:
-            data: The uploaded bytes.
+            data: The uploaded bytes, already read under a ceiling --
+                :meth:`accept_stream` is the method that guarantees that, and
+                the one a route should call.
             declared_media_type: The request's content type, if it sent one.
                 Recorded, never trusted.
 

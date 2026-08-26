@@ -27,6 +27,19 @@ class BudgetScope(StrEnum):
     SESSION = "session"
     SOURCE_ADDRESS = "source_address"
 
+    SESSION_UPLOADS = "session_uploads"
+    """Uploads one conversation has made inside the upload window."""
+
+    SOURCE_UPLOADS = "source_uploads"
+    """Uploads one address has made inside the upload window.
+
+    Distinct from :attr:`SESSION_UPLOADS` and from :attr:`SOURCE_ADDRESS`
+    because the three count different things and are refused for different
+    reasons -- and a dashboard that could not tell "this address is flooding
+    uploads" from "this address is chatty" would report the cost attack as
+    ordinary traffic.
+    """
+
 
 class StopReason(StrEnum):
     """Values for ``chip_chat.guard.reason``: which layer stopped the turn."""
@@ -40,6 +53,16 @@ class StopReason(StrEnum):
     SESSION_TURN_CAP = "session_turn_cap"
     SESSION_TOKEN_CAP = "session_token_cap"
     SOURCE_RATE_LIMIT = "source_rate_limit"
+
+    UPLOAD_RATE_LIMIT = "upload_rate_limit"
+    """Too many uploads, from this session or from this address.
+
+    One token for both scopes, deliberately: which of the two ceilings was hit
+    is a fact for the operator, on ``chip_chat.budget.scope``, and telling an
+    uploader whether the session or the address ran out would say which one to
+    re-roll. What the visitor gets is :data:`STOP_STATE_MESSAGE`, the same
+    designed state every other layer returns.
+    """
 
 
 @dataclass(frozen=True, slots=True)

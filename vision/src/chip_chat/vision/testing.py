@@ -9,6 +9,13 @@ rather than reinventing one.
 and "fails closed" is only a claim a test can settle if the test can make
 Content Safety unreachable on demand without reaching Azure to do it.
 
+:class:`ScriptedStream` and :class:`TricklingStream` are here for the abuse work
+in issue #80. "The read is bounded" and "a body that never ends is cut off" are
+claims about *how much was read* and *how long it took*, and neither is
+assertable against a ``BytesIO``: one has no cost and the other never lies about
+its length. These two count their reads and charge a clock, so a test can settle
+both without waiting for real seconds to pass.
+
 :func:`photo_with_location` is the interesting one. "EXIF is stripped" is only
 a meaningful assertion if the fixture actually had EXIF to lose, and only a
 *sufficient* assertion if the fixture also had the other places a camera writes
@@ -38,9 +45,15 @@ __all__ = [
     "SVG_WITH_SCRIPT",
     "XMP_LOCATION_MARKER",
     "ZIP_ARCHIVE",
+    "AsyncScriptedStream",
     "InMemoryBlobStore",
+    "ManualMonotonic",
+    "ScriptedStream",
     "StoredBlob",
     "StubImageAnalyzer",
+    "TricklingStream",
+    "jpeg_signed_but_not_jpeg",
+    "jpeg_with_appended_archive",
     "photo_with_location",
     "png_declaring",
     "safe_severities",
@@ -310,3 +323,193 @@ def png_declaring(width: int, height: int) -> bytes:
     chunk = bytes(raw[ihdr_data - 4 : ihdr_data + 13])
     raw[ihdr_data + 13 : ihdr_data + 17] = struct.pack(">I", zlib.crc32(chunk))
     return bytes(raw)
+
+
+def jpeg_with_appended_archive(size: tuple[int, int] = (64, 48)) -> bytes:
+    """A genuine JPEG with a zip glued to its tail: the classic polyglot.
+
+    Every gate in stage 1 passes it, and correctly so -- the signature is a
+    JPEG's, the header parses as a JPEG's, and the declared dimensions are a
+    photograph's. Refusing it would mean refusing every photograph with a
+    trailing byte, which is a lot of real photographs.
+
+    What handles it is stage 2, structurally rather than by inspection:
+    :func:`~chip_chat.vision.normalize.normalize` writes a new JPEG from pixel
+    data, so anything that was not a pixel is not copied. A test asserts on the
+    *stored* bytes, which is the only place the claim can be settled.
+
+    Args:
+        size: ``(width, height)`` of the carrier photograph.
+
+    Returns:
+        JPEG bytes with :data:`ZIP_ARCHIVE` appended.
+    """
+    return solid_image(size, fmt="JPEG") + ZIP_ARCHIVE
+
+
+def jpeg_signed_but_not_jpeg(size: tuple[int, int] = (32, 24)) -> bytes:
+    """A file that signs itself JPEG and decodes as a different format.
+
+    Built as an MPO -- a multi-picture container that opens with a JPEG's
+    signature and that Pillow resolves as ``MPO`` rather than ``JPEG``. It is
+    the cheapest honest way to produce the disagreement
+    :func:`~chip_chat.vision.validate.validate` refuses on: the bytes say one
+    format and the decoder says another, which is what a disguised payload
+    looks like from inside.
+
+    Args:
+        size: ``(width, height)`` of each frame.
+
+    Returns:
+        MPO bytes beginning with a JPEG signature.
+    """
+    first = Image.new("RGB", size, (120, 90, 60))
+    second = Image.new("RGB", size, (60, 90, 120))
+    buffer = BytesIO()
+    first.save(buffer, format="MPO", append_images=[second])
+    return buffer.getvalue()
+
+
+class ManualMonotonic:
+    """A monotonic clock a test moves by hand, callable where one is wanted.
+
+    :func:`~chip_chat.vision.reader.read_upload` takes its clock as a callable
+    so that "this upload took too long" is something a test asserts rather than
+    something it waits for.
+    """
+
+    __slots__ = ("seconds",)
+
+    def __init__(self, start: float = 0.0) -> None:
+        """Initialise the clock.
+
+        Args:
+            start: The instant it reads at first.
+        """
+        self.seconds = start
+
+    def __call__(self) -> float:
+        return self.seconds
+
+    def advance(self, seconds: float) -> None:
+        """Move the clock forward.
+
+        Args:
+            seconds: How far.
+        """
+        self.seconds += seconds
+
+
+class ScriptedStream:
+    """A finite byte stream that counts its reads and can charge for them.
+
+    :attr:`reads` is the point of the class. "The ceiling stopped the read"
+    means the reader asked for a bounded number of chunks and then stopped, and
+    a ``BytesIO`` cannot tell you whether it did -- it hands over twenty
+    megabytes as cheerfully as it hands over one.
+    """
+
+    __slots__ = ("_chunk_size", "_clock", "_data", "_offset", "_seconds", "reads")
+
+    def __init__(
+        self,
+        data: bytes,
+        *,
+        chunk_size: int = 64 * 1024,
+        seconds_per_read: float = 0.0,
+        clock: ManualMonotonic | None = None,
+    ) -> None:
+        """Initialise the stream.
+
+        Args:
+            data: What it will eventually deliver.
+            chunk_size: The most it returns from one read, whatever was asked
+                for -- a real socket does the same.
+            seconds_per_read: How far ``clock`` moves per read.
+            clock: The clock to charge. Required if ``seconds_per_read`` is set.
+        """
+        self._data = data
+        self._chunk_size = chunk_size
+        self._seconds = seconds_per_read
+        self._clock = clock
+        self._offset = 0
+        self.reads = 0
+
+    @property
+    def bytes_delivered(self) -> int:
+        """How much of :attr:`_data` the reader actually took."""
+        return self._offset
+
+    def read(self, size: int, /) -> bytes:
+        """Return the next chunk, charging the clock for it."""
+        self.reads += 1
+        if self._clock is not None and self._seconds:
+            self._clock.advance(self._seconds)
+        end = self._offset + min(size, self._chunk_size)
+        chunk = self._data[self._offset : end]
+        self._offset = end
+        return chunk
+
+
+class AsyncScriptedStream:
+    """:class:`ScriptedStream` with an awaitable ``read``, for the async reader.
+
+    Delegates rather than subclasses, so the two readers are exercised against
+    one set of behaviour instead of two that can drift.
+    """
+
+    __slots__ = ("_inner",)
+
+    def __init__(self, inner: ScriptedStream) -> None:
+        """Wrap a scripted stream.
+
+        Args:
+            inner: The stream to delegate to.
+        """
+        self._inner = inner
+
+    @property
+    def reads(self) -> int:
+        """How many times the reader asked for bytes."""
+        return self._inner.reads
+
+    async def read(self, size: int, /) -> bytes:
+        """Return the next chunk from the wrapped stream."""
+        return self._inner.read(size)
+
+
+class TricklingStream:
+    """A body that never ends: a few bytes per read, a clock tick per read.
+
+    The slow upload of issue #80, which is invisible to every size ceiling --
+    eight mebibytes at one byte a second is under an eight mebibyte limit for
+    ninety-seven days. What refuses it is the deadline, and this is the stream
+    that proves the deadline is there.
+    """
+
+    __slots__ = ("_chunk", "_clock", "_seconds", "reads")
+
+    def __init__(
+        self,
+        clock: ManualMonotonic,
+        *,
+        chunk: bytes = b"\x00",
+        seconds_per_read: float = 1.0,
+    ) -> None:
+        """Initialise the stream.
+
+        Args:
+            clock: The clock each read moves forward.
+            chunk: What each read returns. Never empty, which is the point.
+            seconds_per_read: How far the clock moves per read.
+        """
+        self._clock = clock
+        self._chunk = chunk
+        self._seconds = seconds_per_read
+        self.reads = 0
+
+    def read(self, size: int, /) -> bytes:
+        """Return :attr:`_chunk`, forever, charging the clock each time."""
+        self.reads += 1
+        self._clock.advance(self._seconds)
+        return self._chunk[:size]

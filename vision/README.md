@@ -5,12 +5,15 @@ ordering is the design**: moderation happens before inference so nothing
 unmoderated reaches a model, and SKU resolution happens after inference so no
 model output is trusted as a product identifier.
 
-What is implemented here is stages 1 to 3 — everything that happens before a
-model is involved at all. Nothing here decides what a photograph *is*. It
-decides whether a hostile upload ever reaches something that will.
+What is implemented here is everything that happens before a model is involved
+at all — the three stages RFC-001 numbers, plus the bounded read in front of
+them that [#80](https://github.com/gganssle/chip_chat/issues/80) added. Nothing
+here decides what a photograph *is*. It decides whether a hostile upload ever
+reaches something that will.
 
 | Stage | What it does | Where |
 | --- | --- | --- |
+| 0 Read | Byte ceiling and deadline, while the body arrives | `reader.py` |
 | 1 Validate | Size, magic bytes, allowlist, pixel ceiling | `validate.py` |
 | 2 Normalize | Strip metadata, re-encode, downscale | `normalize.py` |
 | 3 Moderate | Content Safety, then the write | `moderation.py`, `store.py` |
@@ -34,6 +37,7 @@ from chip_chat.vision import (
     ImageModerator,
     PhotoIntake,
     UploadRejectedError,
+    content_length,
 )
 
 intake = PhotoIntake(
@@ -43,18 +47,51 @@ intake = PhotoIntake(
 
 with chat_turn(session_id=sid, turn_index=n, message=text):
     try:
-        photo = intake.accept(payload, declared_media_type=request_content_type)
+        photo = await intake.accept_stream(
+            upload_file,
+            declared_media_type=upload_file.content_type,
+            declared_length=content_length(headers.get("content-length")),
+        )
     except UploadRejectedError as refusal:
         return upload_error(refusal.message)  # nothing was written
     return uploaded(str(photo.blob_ref), photo.retention_notice)
 ```
+
+`accept_stream()` rather than `await file.read()` and then `accept()`, and the
+difference is stage 0: reading the body first buys whatever the sender chose to
+send before any ceiling gets a vote. `accept()` is still there for a caller that
+already holds bytes, but the stream form is the one a route should reach for —
+it enforces *this intake's* ceilings rather than whichever ones the route
+remembered to pass.
 
 `accept()` emits `guard.content_safety`, which RFC-001 §09 places under
 `chat.turn` — so it is called inside one, and `chip_chat.otel` enforces that
 rather than merely documenting it. The guard belongs to the turn it protects,
 next to the spend cap and in front of `agent.step`.
 
-## Four properties, each easy to undo by accident
+## Five properties, each easy to undo by accident
+
+### Nothing is read unbounded
+
+`validate()` takes `bytes`, and its first gate compares `len(data)` against the
+ceiling. That gate is right and it is also too late on its own: something has to
+have read the body for `len` to have an answer. `reader.py` is the gate in front
+of it, and it closes two holes no size ceiling can see.
+
+**A small declared size with a large body.** `Content-Length` is a number the
+client typed, exactly like `Content-Type`. It is believed in one direction only:
+a declared length *over* the ceiling refuses before a byte is read, because a
+sender who admits to being oversized can be taken at their word. A declared
+length *under* the ceiling buys nothing, sizes nothing, and truncates nothing.
+
+**A body that never ends.** Eight mebibytes at one byte a second is under an
+eight mebibyte ceiling for ninety-seven days, and a few hundred of those
+connections is the whole worker pool. So the read carries
+`CHIP_CHAT_UPLOAD_MAX_SECONDS` as well as a size, checked between reads.
+
+What it does *not* do is bound a socket that connects and then goes silent
+inside a single `read` — no in-process loop can, and that one belongs to the
+server's own read timeout.
 
 ### The declared content type is never trusted
 
@@ -144,6 +181,27 @@ theirs, specifically, was the one that got flagged. Which of the two happened is
 on `guard.content_safety`, along with the categories and severities — the
 operator can read it and the visitor cannot.
 
+### Which refusals are neutral, and which are helpful
+
+The dividing line is **content disclosure**, and it is not the same line as "is
+this an abuse case". Most refusals here *are* abuse cases and are still worded
+helpfully, because none of them says anything about what is in the file:
+
+| Reason | What the visitor is told |
+| --- | --- |
+| `empty`, `too_large`, `too_slow` | The specific thing that was wrong, and what to do. A size limit is not a disclosure, and "something went wrong" in front of one just makes a visitor try the same photo four times. |
+| `not_an_image`, `unsupported_format` | That it is not a photo, or not a readable one. Both are decided from a signature, before anything looks at content. |
+| `too_many_pixels`, `corrupt` | That it is too big to open, or did not arrive intact. Both are measurements. |
+| `disguised_payload`, `unsafe_image`, `moderation_unavailable` | The **same neutral sentence**, byte for byte. Each of these is a verdict reached by looking *inside*. |
+
+`disguised_payload` — a file whose signature says one format and whose body
+decodes as another — is on the neutral side for the reason the other two are.
+"That file claims to be a PNG and decodes as something else" confirms both the
+detection and the method, and invites a better disguise. And no message
+interpolates anything from the upload: no filename, no declared type, no byte
+excerpt, no sniffed format. The one value any of them quotes is the size ceiling,
+which is a server-side constant.
+
 ### The thresholds, and why the violent one is looser
 
 Image analysis reports one severity per category on a four-level scale — 0, 2,
@@ -218,6 +276,12 @@ name, run it again tomorrow.
 | `CHIP_CHAT_UPLOAD_MAX_PIXELS` | 50 M | Bounds the **decode**, which the byte ceiling does not — a 67-byte PNG can honestly declare 8000×8000. |
 | `CHIP_CHAT_UPLOAD_MAX_EDGE` | 1024 | The model's working resolution. Vision models bill by tile; sending 4032×3024 pays to transmit detail the provider discards. |
 | `CHIP_CHAT_UPLOAD_JPEG_QUALITY` | 85 | Invisible re-encoding, small blob. |
+| `CHIP_CHAT_UPLOAD_MAX_SECONDS` | 30 | Bounds the **read**, which the byte ceiling does not — a trickle is under every size limit forever. |
+
+Uploads are also rate limited and charged to the turn's budget, and those knobs
+live in [`api/`](../api/README.md) with the rest of the spend cap:
+`CHIP_CHAT_SESSION_UPLOADS_PER_WINDOW`, `CHIP_CHAT_SOURCE_UPLOADS_PER_WINDOW`,
+`CHIP_CHAT_UPLOAD_WINDOW_SECONDS` and `CHIP_CHAT_UPLOAD_TOKEN_CHARGE`.
 
 Those defaults also land a normalized photo inside Content Safety's own limits —
 50×50 to 2048×2048 and no more than 4 MB — which is another reason stage 3 sits
@@ -247,6 +311,14 @@ something behind it. `conftest.py` builds the payloads that are not photographs:
 archives, an ELF binary, a shell script, HTML, a PDF, an SVG with script in it,
 and a decompression bomb whose IHDR is patched and CRC-corrected so that it is
 dangerous for the right reason rather than merely corrupt.
+
+`tests/test_upload_abuse.py` is the adversarial suite from #80, and it asks a
+different question from `test_validate.py`: not "was the verdict right" but
+"what did refusing cost". It asserts on how many bytes the reader took, on
+whether the pixels were ever allocated, and on whether two refusals a visitor
+can reach are the same sentence. `ScriptedStream` and `TricklingStream` in
+`testing.py` are what make the first two assertable — a `BytesIO` hands over
+twenty megabytes as cheerfully as one, and never takes any time to do it.
 
 `conftest.py` also opens a `chat.turn` around every test in the package, because
 `guard.content_safety` lives under one and `chip_chat.otel` refuses to emit it
