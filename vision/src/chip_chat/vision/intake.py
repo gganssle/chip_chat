@@ -1,0 +1,139 @@
+"""The upload path, as one call the request handler makes.
+
+Stages 1 and 2 of RFC-001 section 07, in order, with the write at the end::
+
+    validate  ──▶  normalize  ──▶  put  ──▶  blob_ref
+      bytes         pixels         Blob      the only thing that leaves
+
+This is a library rather than a route for the same reason the spend cap is
+(:mod:`chip_chat.api.guard`): the FastAPI app is issue #66 and does not exist
+yet, and the shape of its request path is not this module's business. What is
+this module's business is that the ordering above cannot be got wrong by
+whoever writes that route -- there is one entry point, and it does all four
+steps or raises.
+
+.. code-block:: python
+
+    intake = PhotoIntake(store=AzureBlobStore.from_env())
+
+    @app.post("/upload")
+    async def upload(file: UploadFile) -> UploadResponse:
+        try:
+            photo = intake.accept(
+                await file.read(), declared_media_type=file.content_type
+            )
+        except UploadRejectedError as refusal:
+            return UploadResponse(error=refusal.message)
+        return UploadResponse(blob_ref=str(photo.blob_ref), notice=photo.retention_notice)
+
+What comes back is a :class:`StoredPhoto`, and the only field of it that may be
+handed to a tool is :attr:`~StoredPhoto.blob_ref`. Stage 3 (Content Safety,
+issue #52) reads the blob next, and nothing between here and there has held the
+image in a place a model can see.
+"""
+
+from collections.abc import Callable
+from dataclasses import dataclass
+
+from chip_chat.vision.limits import UploadLimits
+from chip_chat.vision.normalize import NORMALIZED_MEDIA_TYPE, normalize
+from chip_chat.vision.retention import RETENTION_NOTICE
+from chip_chat.vision.store import BlobRef, BlobStore, blob_name
+from chip_chat.vision.validate import validate
+
+__all__ = ["PhotoIntake", "StoredPhoto"]
+
+
+@dataclass(frozen=True, slots=True)
+class StoredPhoto:
+    """One accepted upload: where it went, what it became, and what we promised."""
+
+    blob_ref: BlobRef
+    """The reference. The only field that may become a tool argument."""
+
+    width: int
+    height: int
+    byte_size: int
+    """Size of the *stored* object, after re-encoding -- not what was uploaded."""
+
+    source_media_type: str
+    """What the bytes turned out to be, per the magic-byte check. Telemetry only."""
+
+    declared_media_type: str | None
+    """What the request claimed. Recorded for abuse counting; never acted on."""
+
+    declared_matches_bytes: bool
+    """Whether those two agreed. See :mod:`chip_chat.vision.validate`."""
+
+    retention_notice: str = RETENTION_NOTICE
+    """The promise to show the visitor, alongside their photo. 48 hours."""
+
+
+class PhotoIntake:
+    """Stages 1 and 2, plus the write. One instance per process is enough."""
+
+    __slots__ = ("_limits", "_name", "_store")
+
+    def __init__(
+        self,
+        store: BlobStore,
+        *,
+        limits: UploadLimits | None = None,
+        name_factory: Callable[[], str] | None = None,
+    ) -> None:
+        """Assemble the intake.
+
+        Args:
+            store: Where accepted photos are written.
+            limits: The ceilings to enforce. Defaults to :class:`UploadLimits`.
+            name_factory: Mints blob names. Defaults to
+                :func:`~chip_chat.vision.store.blob_name`; a test passes its own
+                to get a name it can predict.
+        """
+        self._store = store
+        self._limits = limits if limits is not None else UploadLimits()
+        self._name: Callable[[], str] = (
+            name_factory if name_factory is not None else blob_name
+        )
+
+    @property
+    def limits(self) -> UploadLimits:
+        """The ceilings this intake enforces, for a UI that wants to quote one."""
+        return self._limits
+
+    def accept(
+        self, data: bytes, *, declared_media_type: str | None = None
+    ) -> StoredPhoto:
+        """Validate, normalize and store one upload.
+
+        Args:
+            data: The uploaded bytes.
+            declared_media_type: The request's content type, if it sent one.
+                Recorded, never trusted.
+
+        Returns:
+            The :class:`StoredPhoto`, whose ``blob_ref`` is what the rest of the
+            pipeline is given.
+
+        Raises:
+            UploadRejectedError: If any gate refuses. Nothing has been written --
+                the write is the last statement in this method, and it is
+                reached only by an upload that passed both stages.
+        """
+        image = validate(
+            data, declared_media_type=declared_media_type, limits=self._limits
+        )
+        photo = normalize(image, limits=self._limits)
+
+        name = self._name()
+        self._store.put(name, photo.data, content_type=NORMALIZED_MEDIA_TYPE)
+
+        return StoredPhoto(
+            blob_ref=BlobRef(container=self._store.container, name=name),
+            width=photo.width,
+            height=photo.height,
+            byte_size=photo.byte_size,
+            source_media_type=image.media_type,
+            declared_media_type=image.declared_media_type,
+            declared_matches_bytes=image.declared_matches_bytes,
+        )

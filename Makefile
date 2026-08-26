@@ -82,7 +82,7 @@ TF        ?= terraform
 TF_DIR    := infra/terraform
 TF_RUN    := $(TF) -chdir=$(TF_DIR)
 
-.PHONY: infra-bootstrap infra-init infra-fmt infra-validate infra-plan infra-apply infra-destroy infra-output
+.PHONY: infra-bootstrap infra-init infra-fmt infra-validate infra-plan infra-apply infra-destroy infra-output infra-check-uploads
 
 infra-bootstrap: ## Create the remote state storage account (once per subscription)
 	./infra/scripts/bootstrap-state.sh
@@ -107,3 +107,6 @@ infra-destroy: ## Tear the whole Azure estate down
 
 infra-output: ## Print stack outputs
 	$(TF_RUN) output
+
+infra-check-uploads: ## Verify uploaded photos really do expire (read-only)
+	./infra/scripts/check-uploads-retention.sh

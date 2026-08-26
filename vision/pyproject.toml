@@ -3,7 +3,13 @@ name = "chip-chat-vision"
 version = "0.0.0"
 description = "Photo pipeline: validate, moderate, describe, match."
 requires-python = ">=3.13"
-dependencies = ["chip-chat-otel"]
+dependencies = [
+    "chip-chat-otel",
+    "pillow>=11.1",
+    "pillow-heif>=0.21",
+    "azure-storage-blob>=12.24",
+    "azure-identity>=1.19",
+]
 
 [build-system]
 requires = ["hatchling"]
