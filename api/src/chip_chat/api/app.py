@@ -53,6 +53,7 @@ from pydantic import BaseModel, Field
 
 from chip_chat.agent import ACCOUNT, AzureChatModel, FoundryConfig
 from chip_chat.agent.loop import PROMPT_VERSION, Conversation
+from chip_chat.agent.tools import offered_tools
 from chip_chat.api.guard import SpendGuard
 from chip_chat.api.killswitch import (
     CachedKillSwitch,
@@ -66,6 +67,7 @@ from chip_chat.api.turns import SpendGate
 from chip_chat.otel import (
     TelemetryConfig,
     TokenUsage,
+    ToolName,
     chat_turn,
     configure_tracing,
     render_response,
@@ -155,15 +157,30 @@ class SessionStore:
         self._lock = threading.Lock()
         self._max = max_sessions
 
-    def get(self, session_id: str) -> Conversation:
-        """Return the conversation for ``session_id``, creating it if new."""
+    def get(
+        self, session_id: str, *, tools: tuple[ToolName, ...] | None = None
+    ) -> Conversation:
+        """Return the conversation for ``session_id``, creating it if new.
+
+        Args:
+            session_id: The conversation to fetch.
+            tools: The tools this deployment has registered, which a new
+                conversation's runtime context names. Read from
+                :func:`~chip_chat.agent.tools.offered_tools` at the call site,
+                because whether the photo lane is answerable is a property of
+                the assembled service and not of this store.
+        """
         with self._lock:
             conversation = self._conversations.get(session_id)
             if conversation is None:
                 if len(self._conversations) >= self._max:
                     # Insertion-ordered, so this is the least recently started.
                     self._conversations.pop(next(iter(self._conversations)))
-                conversation = Conversation(session_id=session_id)
+                conversation = (
+                    Conversation(session_id=session_id)
+                    if tools is None
+                    else Conversation(session_id=session_id, tools=tools)
+                )
                 self._conversations[session_id] = conversation
             return conversation
 
@@ -288,7 +305,9 @@ def create_app(service: Service | None = None) -> FastAPI:
         """Run one turn: guard, then agent, then render."""
         session_id = _session_id(request)
         source_address = _source_address(request)
-        conversation = resolved.sessions.get(session_id)
+        conversation = resolved.sessions.get(
+            session_id, tools=offered_tools(lane=resolved.gate.lane)
+        )
         payload = _run_turn(resolved, conversation, body, source_address)
         response = JSONResponse(payload.model_dump())
         _set_session_cookie(response, session_id, secure=_is_https(request))

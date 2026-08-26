@@ -233,9 +233,7 @@ class SpendGate:
                 assert budget.stop is not None
                 yield budget.stop
                 return
-            yield FundedTurn(
-                budget, self._model_for_this_turn(), self._desk, self._lane
-            )
+            yield FundedTurn(budget, self._model_for_this_turn(), self._desk, self._lane)
 
     def _model_for_this_turn(self) -> ChatModel:
         """Build the model on first use and keep it. Private, and stays private.

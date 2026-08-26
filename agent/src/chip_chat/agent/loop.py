@@ -29,7 +29,7 @@ from chip_chat.agent.hardcoded import ACCOUNT, MENU, SIMULATION_NOTICE, STORE
 from chip_chat.agent.model import ChatModel, ModelReply
 from chip_chat.agent.orders import OrderDesk
 from chip_chat.agent.prompt import load
-from chip_chat.agent.tools import dispatch, offered_schemas, offered_tools
+from chip_chat.agent.tools import TOOLS, dispatch, offered_schemas, offered_tools
 from chip_chat.otel import (
     Message,
     TokenUsage,
@@ -46,8 +46,10 @@ __all__ = [
     "RUNTIME_CONTEXT",
     "SYSTEM_PROMPT",
     "Conversation",
+    "ToolRegistrationError",
     "TurnResult",
     "run_turn",
+    "runtime_context",
 ]
 
 DEFAULT_MAX_STEPS = 5
@@ -99,7 +101,28 @@ An eval experiment swaps the first and holds the second."""
 PROMPT_VERSION = load().version
 """What ``chat.turn`` records. See :mod:`chip_chat.agent.prompt`."""
 
-RUNTIME_CONTEXT = f"""\
+
+def runtime_context(tools: Sequence[ToolName] = TOOLS) -> str:
+    """What is true today, as opposed to how the assistant behaves.
+
+    Deliberately a separate message rather than an f-string spliced into the
+    prompt. Splicing would make the prompt digest a function of the menu and the
+    persona, and a version that changes when a visitor changes is not a version.
+
+    A function rather than a constant because the registered tool list is not
+    the same in every deployment: ``match_meal_from_photo`` is answerable only
+    where a photo lane was wired. Telling the model a tool is registered when
+    nothing can answer it, or withholding one that is, are both worse than
+    either being consistently true -- see
+    :func:`~chip_chat.agent.tools.offered_tools`.
+
+    Args:
+        tools: The tools actually registered for this deployment.
+
+    Returns:
+        The second system message a conversation opens with.
+    """
+    return f"""\
 Facts about this turn. These change; the instructions above do not.
 
 The visitor is signed in as {ACCOUNT.display_name}, a rewards member at the
@@ -113,7 +136,7 @@ exists:
 
 If search_menu_knowledge returns nothing, say the menu is only these items.
 
-The tools registered right now are: {", ".join(name.value for name in TOOLS)}.
+The tools registered right now are: {", ".join(name.value for name in tools)}.
 Any lane above whose tool is not on that list is not available on this turn --
 say so plainly rather than improvising an answer or reaching for another tool.
 There is no retrieval corpus behind this menu yet, so answer menu questions from
@@ -122,11 +145,10 @@ what search_menu_knowledge returns and leave the citations field empty.
 {SIMULATION_NOTICE} Say so whenever an order is placed.
 
 Keep replies to a few sentences. Plain text, no markdown."""
-"""What is true today, as opposed to how the assistant behaves.
 
-Deliberately a separate message rather than an f-string spliced into the prompt.
-Splicing would make the prompt digest a function of the menu and the persona,
-and a version that changes when a visitor changes is not a version."""
+
+RUNTIME_CONTEXT = runtime_context()
+"""The runtime context of a deployment with no photo lane wired."""
 
 
 @dataclass(slots=True)
@@ -141,11 +163,18 @@ class Conversation:
     session_id: str
     messages: list[dict[str, Any]] = field(default_factory=list)
     turn_index: int = 0
+    tools: tuple[ToolName, ...] = TOOLS
+    """The tools registered for this deployment, as the runtime context names
+    them. Set from :func:`~chip_chat.agent.tools.offered_tools`, which is what
+    :func:`run_turn` checks it against -- a conversation told one list while the
+    model is offered another is a wiring fault, and a silent one."""
 
     def __post_init__(self) -> None:
         if not self.messages:
             self.messages.append({"role": "system", "content": SYSTEM_PROMPT})
-            self.messages.append({"role": "system", "content": RUNTIME_CONTEXT})
+            self.messages.append(
+                {"role": "system", "content": runtime_context(self.tools)}
+            )
 
     def next_turn_index(self) -> int:
         """Return this turn's index and move the counter on."""
@@ -173,6 +202,15 @@ class TurnResult:
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
+
+
+class ToolRegistrationError(RuntimeError):
+    """A turn was run with a tool set the conversation was not opened for.
+
+    Always a programming error: it means the runtime context the model is
+    reading and the tool definitions it is being offered disagree about what
+    exists, which is a discrepancy no prompt can recover from.
+    """
 
 
 _FALLBACK_REPLY = "I got a bit tangled there -- could you ask me that again, more simply?"
@@ -214,7 +252,22 @@ def run_turn(
 
     Returns:
         The reply, the tokens it cost across every round trip, and any card.
+
+    Raises:
+        ToolRegistrationError: If ``conversation`` was opened believing a
+            different set of tools was registered than ``lane`` implies.
     """
+    offered = offered_tools(lane=lane)
+    if tuple(conversation.tools) != offered:
+        # The runtime context is written once, when the conversation opens, and
+        # names the registered tools. A lane wired after that -- or a
+        # conversation built without one and then run with one -- would leave
+        # the model told one thing and offered another, and the symptom would be
+        # a model politely declining a lane it can in fact reach.
+        raise ToolRegistrationError(
+            f"the conversation was opened with {[t.value for t in conversation.tools]} "
+            f"registered, but this turn offers {[t.value for t in offered]}"
+        )
     if confirmed_draft_id:
         conversation.messages.append(
             {
