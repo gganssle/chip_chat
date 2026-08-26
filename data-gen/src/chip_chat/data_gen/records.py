@@ -8,8 +8,8 @@ food an order refers to is a foreign key into
 :class:`~chip_chat.catalog.MenuCatalog`, and
 ``test_referential_integrity.py`` asserts that every one of them resolves.
 
-Four columns are here that section 04 does not list, and each is here because
-a table without it cannot be checked:
+Seven columns are here that section 04 does not list, and each is here
+because a table without it cannot be checked:
 
 **``order_items.line_number``.** Section 04 keys an order line by
 ``(order_id, item_id)``, which cannot hold two burritos built differently —
@@ -30,6 +30,13 @@ says whose prices priced it. See ``docs/decisions/synthetic-population.md``.
 **``loyalty_ledger.order_id``.** Issue #27 reconciles the ledger against the
 published rewards terms. Reconciling it against the orders that earned it
 should be a join, not a regeneration.
+
+**``loyalty_ledger.reward_name``.** Issue #27's third consistency requirement
+is that "every redemption traces to a real published reward", and a redemption
+that only records what it cost traces to nothing: two rewards may be priced
+the same, and a cost is not an identity. The column holds the published
+``rewards.name`` verbatim, so the trace is a join onto the harvested Rewards
+Exchange rather than an inference from a number.
 """
 
 import hashlib
@@ -212,11 +219,15 @@ class LoyaltyEntry:
     Attributes:
         entry_id: The identifier.
         demo_id: Whose points.
-        delta: Signed. Positive earns, negative redeems.
+        delta: Signed. Positive earns, negative redeems or expires.
         reason: One of the configured reasons.
         order_id: The order this movement happened on, or ``None`` for an
-            opening balance. A redemption names the order it was spent on,
-            which is the order that also earned on it.
+            opening balance and for an expiry. A redemption names the order it
+            was spent on, which is the order that also earned on it.
+        reward_name: The published ``rewards.name`` this redemption was spent
+            on, or ``None`` for every entry that is not a redemption. Never a
+            name this package composed: the value comes off a harvested
+            Rewards Exchange row.
         created_at: When.
     """
 
@@ -225,6 +236,7 @@ class LoyaltyEntry:
     delta: int
     reason: str
     order_id: str | None
+    reward_name: str | None
     created_at: datetime
 
 
@@ -240,6 +252,13 @@ class SyntheticPopulation:
             rather than the full ``catalog_version`` on purpose: two harvests
             of an unchanged menu compose the same orders, and a population
             should not be invalidated by having been read on a Tuesday.
+        rewards_content_version: The published rewards programme's
+            :meth:`~chip_chat.data_gen.rewards.RewardsTerms.content_version` —
+            the digest of the earn rate, the expiry window, the daily cap and
+            the Rewards Exchange line-up. Recorded for the same reason as the
+            catalogue's: the ledger's arithmetic is an input to this
+            population, and a balance that looks wrong should be traceable to
+            the terms it was computed under rather than argued about.
         window_starts_at: The first instant an order could fall in.
         window_ends_at: The last.
         personas: The archetypes.
@@ -251,6 +270,7 @@ class SyntheticPopulation:
 
     seed: int
     catalog_content_version: str
+    rewards_content_version: str
     window_starts_at: datetime
     window_ends_at: datetime
     personas: tuple[Persona, ...]
@@ -301,9 +321,10 @@ class SyntheticPopulation:
     def manifest(self) -> dict[str, Any]:
         """Return a description of this population, digests and inputs included.
 
-        The manifest names both halves of what made it — the seed and the
-        catalogue's ``content_version`` — so a gold mart that looks wrong can
-        be traced back to an input rather than argued about.
+        The manifest names every half of what made it — the seed, the
+        catalogue's ``content_version`` and the published rewards programme's —
+        so a gold mart that looks wrong can be traced back to an input rather
+        than argued about.
 
         Returns:
             A JSON-ready mapping.
@@ -312,6 +333,7 @@ class SyntheticPopulation:
             "population_version": self.version(),
             "seed": self.seed,
             "catalog_content_version": self.catalog_content_version,
+            "rewards_content_version": self.rewards_content_version,
             "window_starts_at": self.window_starts_at.isoformat(),
             "window_ends_at": self.window_ends_at.isoformat(),
             "tables": describe(self.tables()),

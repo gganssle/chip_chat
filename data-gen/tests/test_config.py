@@ -173,6 +173,56 @@ def test_a_weekday_must_be_spelled_the_way_the_catalogue_spells_it(
         load_config(edited(tmp_path, {"personas.0.preferred_weekdays": ["Tues"]}))
 
 
+def test_the_ledgers_arithmetic_has_no_home_in_the_config() -> None:
+    """Issue #27 moved it out, and there is nowhere left to put it back.
+
+    A key that could set the earn rate is a key that could disagree with
+    Chipotle's published one, which is the whole failure this reorganisation
+    exists to prevent.
+    """
+    loyalty = load_config().loyalty
+
+    assert not hasattr(loyalty, "points_per_dollar")
+    assert not hasattr(loyalty, "redemption_threshold")
+    assert loyalty.seed_reason
+    assert loyalty.earn_reason
+    assert loyalty.redeem_reason
+    assert loyalty.expiry_reason
+
+
+@pytest.mark.parametrize("key", ["points_per_dollar", "redemption_threshold"])
+def test_a_config_that_still_sets_the_arithmetic_is_refused(
+    tmp_path: Path, key: str
+) -> None:
+    """Rather than ignored.
+
+    An older ``population.toml`` carrying these would otherwise be retuned
+    with no effect whatever — the reader would drop the key, the ledger would
+    keep using the published rate, and nothing would say so.
+    """
+    written = edited(tmp_path, {f"loyalty.{key}": 7})
+
+    with pytest.raises(ConfigError, match=key):
+        load_config(written)
+
+
+def test_every_archetype_states_how_readily_it_redeems(tmp_path: Path) -> None:
+    """Per archetype, because the Lapsed Regular's balance is the point of them."""
+    config = load_config()
+
+    rates = {spec.persona_id: spec.redemption_probability for spec in config.personas}
+
+    assert all(0.0 <= rate <= 1.0 for rate in rates.values())
+    assert rates["lapsed"] < rates["regular"]
+
+
+def test_a_redemption_probability_must_be_a_probability(tmp_path: Path) -> None:
+    written = edited(tmp_path, {"personas.0.redemption_probability": 1.4})
+
+    with pytest.raises(ConfigError, match="redemption_probability"):
+        load_config(written)
+
+
 def test_the_archetypes_are_reachable_by_identifier() -> None:
     config = load_config()
 

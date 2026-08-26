@@ -54,6 +54,15 @@ hour to write. A customer who orders more than once a day is a customer this
 generator does not model, and saying so is better than discovering it.
 """
 
+PUBLISHED_KEYS = frozenset({"points_per_dollar", "redemption_threshold"})
+"""``[loyalty]`` keys that used to set the ledger's arithmetic and no longer may.
+
+Issue #25 shipped both as provisional; issue #27 replaced them with Chipotle's
+published earn rate and published reward prices. They are named here so that a
+config file carrying them fails loudly rather than being retuned with no
+effect — which is the same reason nothing else in this module is clamped.
+"""
+
 TOLERANCE = 1e-6
 """How far a distribution may miss summing to one before it is a mistake.
 
@@ -95,6 +104,13 @@ class PersonaSpec:
         narrative: One sentence a visitor is shown when assigned this persona.
         share: Fraction of the population. Shares sum to one across the file.
         seed_points: Loyalty points the archetype starts with.
+        redemption_probability: Probability a customer of this kind redeems at
+            an order they could have redeemed at. Per archetype rather than
+            per population because issue #27's fourth scope item is that "the
+            Lapsed Customer archetype carries an accumulated, unredeemed
+            balance large enough to be worth surfacing unprompted", and a
+            single population-wide rate cannot express both that customer and
+            the regular who spends their points the week they get them.
         cadence_days: Mean days between orders. At least
             :data:`MINIMUM_CADENCE_DAYS`.
         cadence_spread: Log-normal spread on that gap. Zero is a metronome.
@@ -134,6 +150,7 @@ class PersonaSpec:
     narrative: str
     share: float
     seed_points: int
+    redemption_probability: float
     cadence_days: float
     cadence_spread: float
     active_from_share: float
@@ -258,29 +275,34 @@ class OrderConfig:
 
 @dataclass(frozen=True, slots=True)
 class LoyaltyConfig:
-    """The rewards arithmetic, provisionally.
+    """What the ledger calls each movement, and how a customer spends.
 
-    Issue #27 reconciles these against Chipotle's published rewards terms,
-    which the policy harvest already carries. Until it does they are stated
-    here as parameters rather than asserted anywhere as facts, and
-    ``loyalty_ledger`` says which order every entry came from so that the
-    reconciliation is a join rather than a regeneration.
+    No arithmetic. Issue #25 left ``points_per_dollar`` and
+    ``redemption_threshold`` here as declared-provisional parameters, and
+    issue #27 has taken them out: the earn rate, the expiry window, the daily
+    cap and every redemption price are now read from Chipotle's published
+    terms by :func:`~chip_chat.data_gen.rewards.load_rewards_terms`. There is
+    deliberately nowhere in this file to override them — a config key that
+    could disagree with the published programme is a config key that will.
 
     Attributes:
-        points_per_dollar: Points earned per dollar of a settled order.
-        redemption_threshold: Points a redemption costs.
         seed_reason: ``loyalty_ledger.reason`` for a persona's opening balance.
         earn_reason: The reason for points earned on an order.
-        redeem_reason: The reason for a redemption.
-        redemption_probability: Probability a customer redeems once they can.
+        redeem_reason: The reason for a redemption. What was redeemed is
+            ``loyalty_ledger.reward_name``, taken off the published row.
+        expiry_reason: The reason for a balance that reached the published
+            inactivity window.
+        splurge_share: Share of redemptions that take the most expensive
+            reward the balance covers, the rest being drawn from the whole
+            affordable line-up. Behaviour, not arithmetic: what each of those
+            rewards costs is published.
     """
 
-    points_per_dollar: int
-    redemption_threshold: int
     seed_reason: str
     earn_reason: str
     redeem_reason: str
-    redemption_probability: float
+    expiry_reason: str
+    splurge_share: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -483,6 +505,7 @@ def _persona(entry: Mapping[str, Any], index: int) -> PersonaSpec:
         narrative=_text(f"{where}.narrative", entry),
         share=_fraction(f"{where}.share", entry),
         seed_points=_count(f"{where}.seed_points", entry, minimum=0),
+        redemption_probability=_fraction(f"{where}.redemption_probability", entry),
         cadence_days=_number(
             f"{where}.cadence_days", entry, minimum=MINIMUM_CADENCE_DAYS
         ),
@@ -610,14 +633,27 @@ def _orders(raw: Mapping[str, Any]) -> OrderConfig:
 
 
 def _loyalty(raw: Mapping[str, Any]) -> LoyaltyConfig:
-    """Build the rewards parameters."""
+    """Build the ledger's vocabulary and spending behaviour.
+
+    Nothing arithmetic is read here. An older ``population.toml`` carrying
+    ``points_per_dollar`` or ``redemption_threshold`` is rejected rather than
+    ignored: a key that is silently dropped is a retuning that silently did
+    nothing, and these two in particular would look exactly like the knobs
+    that set the ledger's arithmetic while setting none of it.
+    """
+    published = sorted(set(raw) & PUBLISHED_KEYS)
+    if published:
+        raise ConfigError(
+            f"loyalty.{', loyalty.'.join(published)} no longer belongs in the "
+            f"config: the earn rate and what a reward costs are read from "
+            f"Chipotle's published rewards terms, not set here"
+        )
     return LoyaltyConfig(
-        points_per_dollar=_count("loyalty.points_per_dollar", raw, minimum=1),
-        redemption_threshold=_count("loyalty.redemption_threshold", raw, minimum=1),
         seed_reason=_text("loyalty.seed_reason", raw),
         earn_reason=_text("loyalty.earn_reason", raw),
         redeem_reason=_text("loyalty.redeem_reason", raw),
-        redemption_probability=_fraction("loyalty.redemption_probability", raw),
+        expiry_reason=_text("loyalty.expiry_reason", raw),
+        splurge_share=_fraction("loyalty.splurge_share", raw),
     )
 
 

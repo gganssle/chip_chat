@@ -33,3 +33,19 @@ class ThinCatalogError(GeneratorError):
     exactly the hallucinated menu item the whole pipeline is arranged to make
     impossible.
     """
+
+
+class RewardsTermsError(GeneratorError):
+    """The published rewards terms do not state the arithmetic the ledger needs.
+
+    Issue #27 asks that accrual rates and redemption costs be "taken from the
+    real published rewards terms, not invented", and the only way to keep that
+    promise when the terms stop saying something is to stop. A default earn
+    rate here would be a number this project made up, sitting in a column
+    labelled as Chipotle's — which is the precise failure the whole harvest is
+    arranged to prevent.
+
+    Raised when a published rule cannot be found, when two published documents
+    state it differently, or when the Rewards Exchange lands with no rewards
+    in it to redeem.
+    """

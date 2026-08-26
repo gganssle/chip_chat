@@ -10,19 +10,25 @@ import json
 from pathlib import Path
 
 import pytest
-from population_fixtures import CATALOG_FIXTURES, PACKAGED
+from population_fixtures import CATALOG_FIXTURES, PACKAGED, fixture_policy
 
 from chip_chat.data_gen.__main__ import main
 from chip_chat.data_gen.records import DEFAULT_PREFIX, TABLES
+from chip_chat.harvest.blobs import LocalBlobStore
 
 
 @pytest.fixture
 def landing(tmp_path: Path) -> Path:
-    """A landing zone with the fixture catalogue already in it."""
+    """A landing zone with the catalogue and the policy harvest already in it.
+
+    Both, because the generator reads two real things: what may be ordered,
+    and what Chipotle publishes about what an order earns.
+    """
     written = tmp_path / "catalog" / "chipotle"
     written.mkdir(parents=True)
     for source in (CATALOG_FIXTURES / "catalog").iterdir():
         (written / source.name).write_bytes(source.read_bytes())
+    fixture_policy().write(LocalBlobStore(tmp_path))
     return tmp_path
 
 
@@ -87,6 +93,33 @@ def test_a_landing_zone_with_no_catalogue_in_it_fails_loudly(
     assert run(tmp_path, small) == 1
 
     assert "population generation failed" in capsys.readouterr().err
+
+
+def test_a_landing_zone_with_no_published_terms_in_it_fails_loudly(
+    tmp_path: Path, small: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A catalogue is not enough: the ledger's arithmetic is published too.
+
+    Generating anyway would mean choosing an earn rate here, which is the one
+    thing issue #27 asks this package never to do.
+    """
+    written = tmp_path / "catalog" / "chipotle"
+    written.mkdir(parents=True)
+    for source in (CATALOG_FIXTURES / "catalog").iterdir():
+        (written / source.name).write_bytes(source.read_bytes())
+
+    assert run(tmp_path, small) == 1
+
+    assert "policy harvest" in capsys.readouterr().err
+
+
+def test_the_policy_prefix_can_be_moved(
+    landing: Path, small: Path, tmp_path: Path
+) -> None:
+    """The published terms land where the lakehouse put them, not where this looks."""
+    fixture_policy().write(LocalBlobStore(landing), prefix="elsewhere/policy")
+
+    assert run(landing, small, "--policy-prefix", "elsewhere/policy") == 0
 
 
 def test_a_config_that_does_not_describe_a_population_fails_loudly(

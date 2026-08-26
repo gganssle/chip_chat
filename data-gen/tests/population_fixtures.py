@@ -1,4 +1,4 @@
-"""One catalogue and one population, built once and shared by every test.
+"""One catalogue, one rewards programme, and one population, shared by all.
 
 The catalogue is the fixture committed by issue #24, which exists for exactly
 this: "so that issue #25's generator and issue #54's matcher have something to
@@ -12,6 +12,13 @@ quantity would be an artefact of its size. Proving the population is not thin
 against a real catalogue is issue #28, and it needs a real harvest to mean
 anything.
 
+The published rewards terms come from the harvest tests' fixture site, written
+to a blob store and read back through
+:func:`~chip_chat.data_gen.rewards.load_rewards_terms` — so every test that
+touches the ledger exercises the loader as well as the arithmetic, and a
+policy table that stopped serialising the way the loader reads it fails here
+rather than in production.
+
 The population is generated from the *shipped* ``population.toml``, not from a
 test-local copy. A config the tests never load is a config that can rot.
 """
@@ -21,28 +28,69 @@ import sys
 from functools import cache
 from pathlib import Path
 
-from chip_chat.catalog import MenuCatalog, load_catalog
-from chip_chat.data_gen import (
-    GeneratorConfig,
-    SyntheticPopulation,
-    generate_population,
-    load_config,
-)
-from chip_chat.harvest.blobs import LocalBlobStore
-
 REPOSITORY = Path(__file__).resolve().parents[2]
 CATALOG_FIXTURES = REPOSITORY / "catalog" / "tests" / "fixtures"
 CATALOG_PREFIX = "catalog"
 PACKAGED = REPOSITORY / "data-gen" / "src" / "chip_chat" / "data_gen" / "population.toml"
+POLICY_STORES = 30
+"""How many stores the fixture policy harvest reads. Above issue #21's floor,
+which the parser enforces, and enough that the run stays quick."""
 
 if str(CATALOG_FIXTURES.parent) not in sys.path:  # pragma: no cover - import path
     sys.path.insert(0, str(CATALOG_FIXTURES.parent))
+
+import catalog_fixtures  # noqa: E402
+
+from chip_chat.catalog import MenuCatalog, load_catalog  # noqa: E402
+from chip_chat.data_gen import (  # noqa: E402
+    GeneratorConfig,
+    RewardsTerms,
+    SyntheticPopulation,
+    generate_population,
+    load_config,
+    load_rewards_terms,
+)
+from chip_chat.harvest.blobs import (  # noqa: E402
+    InMemoryBlobStore,
+    LocalBlobStore,
+)
+from chip_chat.harvest.sources.chipotle import (  # noqa: E402
+    PolicyDataset,
+    harvest_policy,
+    parse_policy,
+)
 
 
 @cache
 def fixture_catalog() -> MenuCatalog:
     """Return the catalogue committed by issue #24."""
     return load_catalog(LocalBlobStore(CATALOG_FIXTURES), CATALOG_PREFIX)
+
+
+@cache
+def fixture_policy() -> PolicyDataset:
+    """Return the parsed policy harvest of issue #21, from the fixture site.
+
+    Built from the harvest tests' fixture site rather than from a second
+    recording, for the reason ``catalog/tests/catalog_fixtures.py`` gives about
+    the catalogue: a second copy is a second thing to keep true, and the one
+    that rots would be this one.
+    """
+    harvester = catalog_fixtures.harvester(catalog_fixtures.chipotle.site())
+    return parse_policy(harvest_policy(harvester, store_count=POLICY_STORES))
+
+
+@cache
+def fixture_terms() -> RewardsTerms:
+    """Return the published rewards programme, read back from a written harvest.
+
+    Written and then read rather than constructed, so that every test touching
+    the ledger exercises :func:`~chip_chat.data_gen.rewards.load_rewards_terms`
+    as well as the arithmetic it hands over.
+    """
+    blobs = InMemoryBlobStore()
+    fixture_policy().write(blobs)
+    return load_rewards_terms(blobs)
 
 
 @cache
@@ -71,13 +119,13 @@ def small_config() -> GeneratorConfig:
 @cache
 def fixture_population() -> SyntheticPopulation:
     """Return the whole population, generated once for the whole suite."""
-    return generate_population(fixture_catalog(), shipped_config())
+    return generate_population(fixture_catalog(), fixture_terms(), shipped_config())
 
 
 @cache
 def small_population() -> SyntheticPopulation:
     """Return a scaled-down population, generated once for the whole suite."""
-    return generate_population(fixture_catalog(), small_config())
+    return generate_population(fixture_catalog(), fixture_terms(), small_config())
 
 
 def personas_by_id() -> dict[str, str]:

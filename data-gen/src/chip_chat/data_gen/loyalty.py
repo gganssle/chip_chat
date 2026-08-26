@@ -1,30 +1,51 @@
-"""The loyalty ledger: points earned on real totals, redeemed at a real cost.
+"""The loyalty ledger: Chipotle's published arithmetic, run over real orders.
 
-Issue #27 reconciles this ledger against Chipotle's published rewards terms,
-which the policy harvest already carries. Two decisions here exist to make
-that reconciliation a join rather than an argument.
+Issue #25 left the arithmetic here as declared-provisional parameters and said
+issue #27 would reconcile them against the published rewards terms. It has:
+nothing in this module is a number this project chose. The earn rate, the
+expiry window, the daily cap and every redemption price arrive as
+:class:`~chip_chat.data_gen.rewards.RewardsTerms`, read off the policy harvest
+by :func:`~chip_chat.data_gen.rewards.load_rewards_terms`, which refuses to
+produce a programme it could not find published. ``population.toml`` keeps
+only *behaviour* — how eager an archetype is to spend, and what the ``reason``
+column calls each kind of movement.
 
-**Every arithmetic constant is config.** Points per dollar and the cost of a
-redemption live in ``population.toml`` under ``[loyalty]``, stated as the
-generator's parameters and asserted nowhere as facts about the real programme.
-When #27 reads the published terms, the difference between them and these is a
-diff on one file.
+**The ledger is append-only and the balance is derived.** There is no balance
+column anywhere in this package. A customer's balance is the sum of their
+entries and nothing else, which is what makes "the ledger sum equals what
+``get_points_balance`` returns" a property rather than a reconciliation job.
 
-**Every entry names the order it came from.** ``loyalty_ledger.order_id`` is
-not in RFC-001 section 04, and without it reconciling the ledger against the
-orders would mean regenerating the ledger — which checks that the code agrees
-with itself and nothing else.
+Four published rules are honoured, and each one is why some entry exists or
+does not:
 
-Only settled orders earn. A refunded order is real history, stays in
-``orders``, and moves no points.
+**Ten points per dollar, on qualifying purchases only.** A refunded or
+cancelled order is real history, stays in ``orders``, and moves no points.
+Points are floored to whole units, because a ledger of fractional points is a
+ledger no register prints.
+
+**Three qualifying purchases per day.** The fourth order on the same day is a
+real order that earns nothing. The day is the order's own UTC calendar day —
+the only day boundary ``orders`` publishes — so a reviewer re-derives the cap
+from ``orders.placed_at`` alone, without joining stores and assuming a zone.
+
+**Points expire after 365 days of account inactivity.** A gap that long
+between qualifying purchases writes a single entry taking the balance to zero,
+dated at the moment the published window closed. It is an entry rather than a
+silent reset for the same reason the opening balance is: a balance that
+changes without a row is a balance nothing can audit.
+
+**A redemption costs what the Rewards Exchange charges.** The customer spends
+on a real published reward they can afford, and the entry names it. There is
+no threshold constant: the cheapest published reward *is* the threshold.
 """
 
 from collections.abc import Iterator, Sequence
-from datetime import datetime
+from datetime import UTC, date, datetime, timedelta
 from random import Random
 
 from chip_chat.data_gen.config import LoyaltyConfig, OrderConfig
 from chip_chat.data_gen.records import ENTRY_ID_FORMAT, LoyaltyEntry, Order
+from chip_chat.data_gen.rewards import Reward, RewardsTerms
 
 
 def ledger_for(
@@ -33,8 +54,10 @@ def ledger_for(
     seed_points: int,
     created_at: datetime,
     orders: Sequence[Order],
+    terms: RewardsTerms,
     loyalty: LoyaltyConfig,
     statuses: OrderConfig,
+    redemption_probability: float,
     numbers: Iterator[int],
 ) -> tuple[LoyaltyEntry, ...]:
     """Return one customer's whole ledger, in time order.
@@ -45,60 +68,130 @@ def ledger_for(
         seed_points: The archetype's opening balance.
         created_at: When that balance was granted.
         orders: Their orders, oldest first.
-        loyalty: The rewards arithmetic.
-        statuses: Which order statuses settle.
+        terms: Chipotle's published rewards programme. Every number the
+            arithmetic uses comes from here.
+        loyalty: What the ``reason`` column calls each movement, and how a
+            customer chooses between the rewards they can afford.
+        statuses: Which order statuses qualify. A refunded order earns
+            nothing.
+        redemption_probability: How likely this archetype is to spend at a
+            register where it could. Per archetype rather than per population
+            because the Lapsed Regular's unredeemed balance is the point of
+            them.
         numbers: The running entry numbering, shared across the population.
 
     Returns:
-        The entries. An opening balance if the archetype has one, an earn for
-        every settled order, and a redemption whenever the balance clears the
-        threshold and the customer decides to spend it.
+        The entries, oldest first. An opening balance if the archetype has one,
+        an earn for every qualifying order, an expiry whenever the published
+        inactivity window closes on a live balance, and a redemption whenever
+        the customer decides to spend one they can afford.
     """
     entries: list[LoyaltyEntry] = []
     balance = 0
-    if seed_points > 0:
+    qualifying_on: dict[date, int] = {}
+    last_qualified: datetime | None = None
+
+    def write(
+        delta: int, reason: str, when: datetime, order_id: str | None, reward: str | None
+    ) -> None:
+        """Append one entry and move the running balance by it."""
+        nonlocal balance
         entries.append(
             LoyaltyEntry(
                 entry_id=ENTRY_ID_FORMAT.format(index=next(numbers)),
                 demo_id=demo_id,
-                delta=seed_points,
-                reason=loyalty.seed_reason,
-                order_id=None,
-                created_at=created_at,
+                delta=delta,
+                reason=reason,
+                order_id=order_id,
+                reward_name=reward,
+                created_at=when,
             )
         )
-        balance += seed_points
+        balance += delta
+
+    if seed_points > 0:
+        # Enrollment starts the inactivity clock: the published window runs
+        # from the last qualifying purchase, and before there has been one it
+        # runs from the day the account — and its opening balance — existed.
+        write(seed_points, loyalty.seed_reason, created_at, None, None)
+        last_qualified = created_at
 
     for order in orders:
         if order.status not in statuses.settled_statuses:
             continue
-        earned = int(order.total * loyalty.points_per_dollar)
-        if earned > 0:
-            entries.append(
-                LoyaltyEntry(
-                    entry_id=ENTRY_ID_FORMAT.format(index=next(numbers)),
-                    demo_id=demo_id,
-                    delta=earned,
-                    reason=loyalty.earn_reason,
-                    order_id=order.order_id,
-                    created_at=order.placed_at,
-                )
-            )
-            balance += earned
-        if balance < loyalty.redemption_threshold:
+
+        expired_at = _expiry(last_qualified, order.placed_at, terms)
+        if expired_at is not None and balance > 0:
+            write(-balance, loyalty.expiry_reason, expired_at, None, None)
+
+        day = order.placed_at.astimezone(UTC).date()
+        counted = qualifying_on.get(day, 0)
+        if counted < terms.daily_qualifying_purchases:
+            qualifying_on[day] = counted + 1
+            last_qualified = order.placed_at
+            earned = int(order.total * terms.points_per_dollar)
+            if earned > 0:
+                write(earned, loyalty.earn_reason, order.placed_at, order.order_id, None)
+
+        affordable = terms.affordable(balance)
+        if not affordable or rng.random() >= redemption_probability:
             continue
-        if rng.random() >= loyalty.redemption_probability:
-            continue
-        entries.append(
-            LoyaltyEntry(
-                entry_id=ENTRY_ID_FORMAT.format(index=next(numbers)),
-                demo_id=demo_id,
-                delta=-loyalty.redemption_threshold,
-                reason=loyalty.redeem_reason,
-                order_id=order.order_id,
-                created_at=order.placed_at,
-            )
+        reward = _chosen(rng, affordable, loyalty.splurge_share)
+        write(
+            -reward.point_cost,
+            loyalty.redeem_reason,
+            order.placed_at,
+            order.order_id,
+            reward.name,
         )
-        balance -= loyalty.redemption_threshold
 
     return tuple(entries)
+
+
+def _expiry(
+    last_qualified: datetime | None, now: datetime, terms: RewardsTerms
+) -> datetime | None:
+    """Return when a balance expired before ``now``, or ``None`` if it did not.
+
+    Args:
+        last_qualified: The last qualifying purchase, or ``None`` if there has
+            not been one.
+        now: The order about to be earned on.
+        terms: The published programme, for its inactivity window.
+
+    Returns:
+        The instant the published window closed, which is strictly before
+        ``now`` and at or after ``last_qualified`` — so an expiry entry never
+        lands out of order. ``None`` when the account was never inactive that
+        long, which is the ordinary case and, in the tuned population, the only
+        one.
+    """
+    if last_qualified is None:
+        return None
+    window = timedelta(days=terms.inactivity_expiry_days)
+    if now - last_qualified < window:
+        return None
+    return last_qualified + window
+
+
+def _chosen(rng: Random, affordable: Sequence[Reward], splurge_share: float) -> Reward:
+    """Return the reward this customer takes, from the ones they can afford.
+
+    A population where everybody always takes the most expensive thing their
+    balance covers has one redemption story in it, and so does one where the
+    choice is uniform: the first never buys a side tortilla, the second never
+    saves for an entrée. ``splurge_share`` is the share of redemptions that
+    take the best available, and the rest are drawn from the whole affordable
+    line-up.
+
+    Args:
+        rng: This customer's loyalty stream.
+        affordable: The published rewards their balance covers, non-empty.
+        splurge_share: Probability they take the most expensive one.
+
+    Returns:
+        One published reward.
+    """
+    if rng.random() < splurge_share:
+        return max(affordable, key=lambda reward: (reward.point_cost, -reward.position))
+    return affordable[rng.randrange(len(affordable))]

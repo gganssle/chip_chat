@@ -48,6 +48,7 @@ from chip_chat.data_gen.records import (
     Persona,
     SyntheticPopulation,
 )
+from chip_chat.data_gen.rewards import RewardsTerms
 from chip_chat.data_gen.rng import substream, weighted_choice
 from chip_chat.data_gen.timeline import placed_at, visit_days
 
@@ -83,18 +84,27 @@ months and walked in days, and 365.25 / 12 is the honest conversion."""
 
 
 def generate_population(
-    catalog: MenuCatalog, config: GeneratorConfig
+    catalog: MenuCatalog, terms: RewardsTerms, config: GeneratorConfig
 ) -> SyntheticPopulation:
     """Generate the whole synthetic population against one catalogue.
 
+    Two real inputs and one tuned one. The catalogue says what may be ordered;
+    the published rewards terms say what an order earns and what a reward
+    costs; the config says how five hundred people behave. Nothing about the
+    food and nothing about the points is decided here.
+
     Args:
         catalog: The real, harvested menu. Everything orderable comes from it.
+        terms: Chipotle's published rewards programme, from
+            :func:`~chip_chat.data_gen.rewards.load_rewards_terms`. Every
+            number in ``loyalty_ledger`` is derived from it.
         config: The tuned parameters, from ``population.toml`` or a file the
             caller named.
 
     Returns:
-        The population, with the catalogue's ``content_version`` recorded on
-        it so a downstream mart can be traced back to both of its inputs.
+        The population, with the catalogue's ``content_version`` and the
+        programme's recorded on it so a downstream mart can be traced back to
+        each of its inputs.
 
     Raises:
         ThinCatalogError: If the catalogue has no orderable entree or no
@@ -148,8 +158,10 @@ def generate_population(
                 spec.seed_points,
                 created_at,
                 mine,
+                terms,
                 config.loyalty,
                 config.orders,
+                spec.redemption_probability,
                 entry_numbers,
             )
         )
@@ -158,6 +170,7 @@ def generate_population(
     return SyntheticPopulation(
         seed=config.seed,
         catalog_content_version=menu.content_version,
+        rewards_content_version=terms.content_version(),
         window_starts_at=starts_at.astimezone(UTC),
         window_ends_at=ends_at.astimezone(UTC),
         personas=personas,

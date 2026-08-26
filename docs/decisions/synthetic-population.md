@@ -1,7 +1,8 @@
 # Decision: what the synthetic population carries beyond RFC-001 §04
 
 **Issue:** [#25](https://github.com/gganssle/chip_chat/issues/25) (bead `cc-6fj`) · **Decided:** 26 August 2026
-**Amends:** RFC-001 §04, whose "demo accounts" tables this adds five columns to
+**Revised by:** [#27](https://github.com/gganssle/chip_chat/issues/27) (bead `cc-rjs`), which added `loyalty_ledger.reward_name` and replaced "the loyalty arithmetic is provisional" below
+**Amends:** RFC-001 §04, whose "demo accounts" tables this adds seven columns to
 **Unblocks:** [#26](https://github.com/gganssle/chip_chat/issues/26) (persona fixtures), [#27](https://github.com/gganssle/chip_chat/issues/27) (loyalty reconciliation), [#28](https://github.com/gganssle/chip_chat/issues/28) (proving the population is not thin), [#33](https://github.com/gganssle/chip_chat/issues/33) (bronze ingestion)
 
 ---
@@ -37,6 +38,7 @@ Each of these exists because the table cannot be checked without it.
 | `orders.channel` | Chipotle publishes two prices per item, counter and delivery. A total is unexplainable until the row says which was used. |
 | `orders.priced_restaurant_id` | See below. |
 | `loyalty_ledger.order_id` | Issue #27 reconciles the ledger against published rewards terms. Reconciling it against the orders that earned it should be a join, not a regeneration. |
+| `loyalty_ledger.reward_name` | Issue #27 requires that every redemption trace to a real published reward. A redemption that records only what it cost traces to nothing: two rewards may be priced the same, and a cost is not an identity. The column holds the published `rewards.name` verbatim, so the trace is a join onto the harvested Rewards Exchange. |
 
 ## Thirty stores, one priced restaurant
 
@@ -76,12 +78,51 @@ are mapped to the one most of their restaurants are in. That is an approximation
 it is a visible table rather than a constant in a function so that it reads as one.
 When the locator harvest carries a store's own zone, the table goes away.
 
-## The loyalty arithmetic is provisional
+## The loyalty arithmetic is read, not configured
 
-`points_per_dollar` and `redemption_threshold` are parameters in `[loyalty]`, not
-facts. Issue #27 reconciles them against the rewards terms the policy harvest already
-carries. Until it does, nothing in this package asserts them as Chipotle's programme,
-and `loyalty_ledger.order_id` is there so that the reconciliation can be a join.
+*Superseding "the loyalty arithmetic is provisional". Issue #25 shipped
+`points_per_dollar = 10` and `redemption_threshold = 1250` in `[loyalty]`, declared
+them parameters rather than facts, and left the reconciliation to issue #27. This is
+that reconciliation.*
+
+The ledger's arithmetic now comes from the policy harvest of issue #21 and from
+nowhere else. `chip_chat.data_gen.rewards` reads four published rules out of it:
+
+| Rule | Published as | Where |
+| --- | --- | --- |
+| 10 points per $1 | prose | the FAQ, and the rewards page |
+| the Rewards Exchange and its point costs | a table | `rewards`, harvested whole |
+| expiry after 365 days of inactivity | prose | the terms, and the FAQ |
+| three qualifying purchases per day | prose | the terms |
+
+Three decisions hold that together.
+
+**The config keys are gone rather than defaulted.** `[loyalty]` keeps only the
+`reason` vocabulary and how eagerly an archetype spends. A file that still carries
+`points_per_dollar` is *rejected* by `config.PUBLISHED_KEYS` rather than ignored,
+because a key silently dropped is a retuning that silently did nothing.
+
+**There is no fallback.** `RewardsTermsError` is raised when a rule is published
+nowhere, when two pages state it differently, or when the Rewards Exchange lands
+empty. A default earn rate would be a number this project invented sitting in a
+column labelled as Chipotle's, which is the exact failure the whole harvest exists to
+prevent. The rate and the expiry window are each published twice, on different pages,
+and a disagreement between them means a harvest caught mid-change — not a number to
+choose between.
+
+**Two published limits are implemented and never reached.** No day in the generated
+population carries a fourth qualifying purchase and no gap in it reaches 365 days, so
+the cap never bites and no balance expires. Both facts are asserted in
+`test_ledger_population.py` rather than assumed, so a retune that lengthened the lapse
+or bunched orders onto one day fails a test instead of quietly changing what a balance
+means.
+
+`redemption_probability` moved from `[loyalty]` onto each archetype, because issue
+#27 asks that the Lapsed Regular carry "an accumulated, unredeemed balance large
+enough to be worth surfacing unprompted" — which is a property of that archetype and
+not of the programme. It redeems at 0.04 and the Weekly Regular at 0.55; fifty-nine
+of the sixty lapsed customers finish above the price of the most expensive published
+reward.
 
 ## What is not in this package
 

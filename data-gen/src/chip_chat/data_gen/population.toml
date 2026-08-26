@@ -151,14 +151,28 @@ status_weights = [0.958, 0.028, 0.014]
 settled_statuses = ["COMPLETED"]
 
 [loyalty]
-# Provisional. Issue #27 reconciles these against the harvested rewards terms;
-# until it does, they are parameters here and are asserted as facts nowhere.
-points_per_dollar = 10
-redemption_threshold = 1250
+# No arithmetic. Issue #27 took `points_per_dollar` and `redemption_threshold`
+# out of this file: the earn rate, the expiry window, the daily cap on earning
+# purchases and every redemption price are read from Chipotle's own published
+# rewards terms by `chip_chat.data_gen.rewards`, which refuses to run when it
+# cannot find them published. A key here that could disagree with the published
+# programme is a key that eventually will, so `config.PUBLISHED_KEYS` rejects
+# both of them rather than ignoring them.
+#
+# What is left is vocabulary and behaviour. How eager an archetype is to spend
+# is `redemption_probability`, on the archetype, because the Lapsed Regular's
+# unredeemed balance is a property of that archetype and not of the programme.
 seed_reason = "SIGNUP_BONUS"
 earn_reason = "ORDER"
-redeem_reason = "REWARD_FREE_ENTREE"
-redemption_probability = 0.65
+# What was redeemed is `loyalty_ledger.reward_name`, taken verbatim off the
+# published Rewards Exchange row. The reason column says only what kind of
+# movement this is, which is why it no longer names a particular reward.
+redeem_reason = "REWARD_REDEEMED"
+expiry_reason = "POINTS_EXPIRED"
+# Share of redemptions that take the best reward the balance covers. The rest
+# are drawn from the whole affordable line-up, so that a customer with 2,000
+# points sometimes still buys chips.
+splurge_share = 0.72
 
 [names]
 # Invented words combined by seed. There is no PII in this system by
@@ -206,6 +220,8 @@ label = "The Weekly Regular"
 narrative = "Same bowl, same store, the same day nearly every week, for as long as the data goes back."
 share = 0.16
 seed_points = 250
+# Spends what they earn, more or less as they earn it.
+redemption_probability = 0.55
 cadence_days = 7.0
 cadence_spread = 0.12
 active_from_share = 0.0
@@ -234,6 +250,9 @@ label = "The Lapsed Regular"
 narrative = "Ordered steadily for a year, then stopped about four months ago."
 share = 0.12
 seed_points = 180
+# The point of this archetype: eighteen months of earning and almost no
+# spending, so the balance is still there to be surfaced unprompted.
+redemption_probability = 0.04
 cadence_days = 9.0
 cadence_spread = 0.30
 active_from_share = 0.0
@@ -258,6 +277,8 @@ label = "The Explorer"
 narrative = "Rarely orders the same thing twice, and rarely from the same store."
 share = 0.18
 seed_points = 60
+# Tries the Rewards Exchange the way they try the menu.
+redemption_probability = 0.45
 cadence_days = 12.0
 cadence_spread = 0.45
 active_from_share = 0.0
@@ -281,6 +302,9 @@ label = "The Office Manager"
 narrative = "Puts in the midweek lunch order for the whole floor, on delivery."
 share = 0.08
 seed_points = 900
+# Orders on the company card and rarely thinks about the points, which is
+# how a large balance accumulates on a busy account.
+redemption_probability = 0.18
 cadence_days = 11.0
 cadence_spread = 0.35
 active_from_share = 0.05
@@ -305,6 +329,8 @@ label = "The Weekend Family"
 narrative = "Three or four entrees, chips for the table, most weekends."
 share = 0.16
 seed_points = 140
+# Redeems when the balance covers something for the table.
+redemption_probability = 0.50
 cadence_days = 16.0
 cadence_spread = 0.30
 active_from_share = 0.0
@@ -329,6 +355,8 @@ label = "The Newcomer"
 narrative = "First order about five months ago; still working out the usual."
 share = 0.10
 seed_points = 0
+# Five months in, and still finding out what points are for.
+redemption_probability = 0.30
 cadence_days = 10.0
 cadence_spread = 0.40
 # 1 - 5/18. A population where everyone has eighteen months of history has no
@@ -354,6 +382,8 @@ label = "The Occasional Visitor"
 narrative = "Turns up every couple of months, usually somewhere new."
 share = 0.20
 seed_points = 20
+# Turns up rarely, and usually with enough for something.
+redemption_probability = 0.35
 cadence_days = 46.0
 cadence_spread = 0.50
 active_from_share = 0.0

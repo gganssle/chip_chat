@@ -1,16 +1,23 @@
 """Command line for generating the synthetic population.
 
-The generator composes orders out of a catalogue, so the ordinary way to run
-it is against a landing zone that already has one::
+The generator composes orders out of a catalogue and earns points at Chipotle's
+published rate, so the ordinary way to run it is against a landing zone that
+already carries both — the catalogue of issue #24 and the policy harvest of
+issue #21::
 
     python -m chip_chat.harvest.sources.chipotle --landing landing --dataset all
     python -m chip_chat.catalog --landing landing --offline
     python -m chip_chat.data_gen --landing landing
 
-Nothing here fetches anything. The catalogue is read from the landing zone and
-the population is written back beside it, which is also how the first
-acceptance criterion is checked by hand: run it twice and compare the
-``population_version`` it prints.
+Nothing here fetches anything. The catalogue and the published rewards terms
+are read from the landing zone and the population is written back beside them,
+which is also how the first acceptance criterion is checked by hand: run it
+twice and compare the ``population_version`` it prints.
+
+There is no flag for the earn rate or for what a reward costs, and there is no
+key for either in ``--config``. Issue #27 asks that they be "taken from the
+real published rewards terms, not invented", so they are read from
+``parsed/chipotle/policy`` and the run stops if they are not published there.
 
 ``--seed`` overrides the seed in the config file without editing it, which is
 what you want when you are looking at *a* population rather than *the* one.
@@ -33,7 +40,9 @@ from chip_chat.data_gen.config import load_config
 from chip_chat.data_gen.errors import GeneratorError
 from chip_chat.data_gen.generate import generate_population
 from chip_chat.data_gen.records import DEFAULT_PREFIX
+from chip_chat.data_gen.rewards import load_rewards_terms
 from chip_chat.harvest.blobs import LocalBlobStore
+from chip_chat.harvest.sources.chipotle import DEFAULT_POLICY_PREFIX
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -52,6 +61,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--catalog-prefix",
         default=CATALOG_PREFIX,
         help=f"Key prefix the catalogue was written under. Defaults to {CATALOG_PREFIX}.",
+    )
+    parser.add_argument(
+        "--policy-prefix",
+        default=DEFAULT_POLICY_PREFIX,
+        help=(
+            "Key prefix the policy harvest was written under, which is where "
+            f"the published rewards terms are read from. Defaults to "
+            f"{DEFAULT_POLICY_PREFIX}."
+        ),
     )
     parser.add_argument(
         "--prefix",
@@ -84,8 +102,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         argv: Command line arguments, or ``None`` to read ``sys.argv``.
 
     Returns:
-        A process exit status: zero on success, one if the catalogue cannot be
-        read or the parameters do not describe a population that can exist.
+        A process exit status: zero on success, one if the catalogue or the
+        published rewards terms cannot be read, or if the parameters do not
+        describe a population that can exist.
     """
     args = build_parser().parse_args(argv)
     blobs = LocalBlobStore(args.landing)
@@ -95,7 +114,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.seed is not None:
             config = dataclasses.replace(config, seed=args.seed)
         catalog = load_catalog(blobs, args.catalog_prefix)
-        population = generate_population(catalog, config)
+        terms = load_rewards_terms(blobs, args.policy_prefix)
+        population = generate_population(catalog, terms, config)
     except (CatalogError, GeneratorError) as error:
         print(f"population generation failed: {error}", file=sys.stderr)
         return 1
