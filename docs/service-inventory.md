@@ -86,8 +86,11 @@ Source: [Export hosted agent telemetry by using OpenTelemetry](https://learn.mic
 | Product name | Azure AI Search (unchanged). Now also underpins **Foundry IQ**; the pricing page is titled "Foundry IQ pricing". | — | [pricing](https://azure.microsoft.com/en-us/pricing/details/search/) | 2026-08-25 |
 | Free tier limits | 1 service per subscription, **50 MB** storage, **3 indexes**, 3 indexers, 3 datasources, 3 skillsets, 3 synonym maps. No fixed partitions/replicas, no SLA. May be **deleted after extended inactivity**. | $0 | [service limits](https://learn.microsoft.com/en-us/azure/search/search-limits-quotas-capacity) (ms.date 2026-08-17) | 2026-08-25 |
 | Free tier indexer limits | Max **10,000 docs per invocation**; max running time **3 min** (blob) / **1 min** (other), or **3–10 min** with a skillset; invocation once per 180 s; **20 free enrichment transactions per indexer per day** for AI indexing that calls Foundry Tools. | $0 | same | 2026-08-25 |
-| Free tier: managed identity | **Not available.** Free tier also has no customer-managed keys, no IP firewall, no private endpoint, no availability zones. | — | [choose a tier](https://learn.microsoft.com/en-us/azure/search/search-sku-tier) (ms.date 2026-08-04) | 2026-08-25 |
-| **Semantic ranker on Free tier** | **Yes.** The feature-availability table reads: *"Semantic ranker — Runs on the Free tier but not recommended for large workloads."* | see below | [choose a tier](https://learn.microsoft.com/en-us/azure/search/search-sku-tier) (ms.date 2026-08-04) | 2026-08-25 |
+| Free tier: managed identity | **Not available** — meaning the identity *on* the service, used outbound by an indexer. Free tier also has no customer-managed keys, no IP firewall, no private endpoint, no availability zones. | — | [choose a tier](https://learn.microsoft.com/en-us/azure/search/search-sku-tier) (ms.date 2026-08-04) | 2026-08-25 |
+| Free tier: data-plane RBAC | **Available**, and not the same question as the row above. A Free service accepts `disableLocalAuth: true` and authorises data-plane calls by Entra token. Verified live: with admin keys off, the app's user-assigned identity created, loaded, queried and deleted an index. See finding 17. | — | measured on `srch-chip-chat-4cy39i` (Free, eastus) | **2026-08-26** |
+| Free tier: capacity by region | One free service **per subscription** is a quota; whether the region has any to give is separate. East US 2 had none at any tier for two days running; East US did. A second free service in a region with capacity fails `ServiceQuotaExceeded` — a different error meaning the subscription already has its one. | $0 | `az search service create`, regional usage API | **2026-08-26** |
+| **Semantic ranker on Free tier** | **Yes**, and now confirmed by running it rather than by reading it. The feature-availability table reads: *"Semantic ranker — Runs on the Free tier but not recommended for large workloads."* A semantic query on the live Free service returned `@search.rerankerScore` and extractive captions and reordered the hits. | see below | [choose a tier](https://learn.microsoft.com/en-us/azure/search/search-sku-tier) (ms.date 2026-08-04); measured 2026-08-26 | 2026-08-25 |
+| Semantic plan must be set explicitly | `semanticSearch` defaults to **`disabled`** on a new service — off, not capped. `"free"` is accepted on a Free SKU and grants the 1,000-request allowance. `"standard"` is refused: *"Semantic Search Standard Tier is not supported on Free SKU."* Leaving the field null ships a service with no reranker. | — | measured on `srch-chip-chat-4cy39i` | **2026-08-26** |
 | Semantic ranker billing plans | Two plans. **Free (default)** — a monthly free request allowance, then requests return a billing error; *"Available on all pricing tiers."* **Standard** — pay-as-you-go past the allowance; *"Requires the Basic tier or higher."* | — | [enable/disable semantic ranker billing](https://learn.microsoft.com/en-us/azure/search/semantic-how-to-enable-disable) (ms.date 2026-06-16) | 2026-08-25 |
 | Free semantic allowance | **First 1,000 requests per month free.** | $0 | [pricing](https://azure.microsoft.com/en-us/pricing/details/search/) | 2026-08-25 |
 | Semantic ranker standard price | **$1.00 per 1,000 queries**; overage meter **$2.00 per 1,000**. | $1.00/1K | retail API, meters `Semantic Ranker queries` / `Semantic Ranker Overage Queries` | 2026-08-25 |
@@ -288,11 +291,13 @@ it contradicts and what to do about it.
 
 11. **The reranker is available free.** See below; this closes issue #10 and means
     the ~$75/month Basic line item can stay out of the cost model for now.
-    *(Superseded 2026-08-26: Basic was authorised and is now configured, so the
-    line item is back in the cost model the moment the service can be created —
-    which it currently cannot, at any tier. See the note under "The reranker
-    decision" below, and cc-3d5 for what a fixed $73.73/month does to the budget
-    thresholds.)*
+    *(Superseded 2026-08-26, then restored the same day. Basic was authorised and
+    configured while the blocker looked like a tier problem; once it turned out to
+    be a regional-capacity problem that money could not solve (cc-6wz), the fix was
+    to move the service to East US, where Free creates fine (cc-okc). The service
+    now exists on Free, so this line item stays out of the cost model and cc-3d5's
+    budget concern is moot. Reranking is confirmed working on it — see the note
+    under "The reranker decision" below.)*
 
 12. **The $75/month Basic estimate was accurate.** $0.101/hour is $73.73 over a
     730-hour month. *system-design.md*'s "roughly $75/month" needs no correction.
@@ -333,13 +338,19 @@ it contradicts and what to do about it.
     firewall, no private endpoints. That's an acceptable PoC trade-off, but it should
     be a stated one rather than a surprise, and it's the strongest non-reranker
     argument for Basic.
-    *(Resolved in configuration on 2026-08-26: with Basic authorised,
-    `search.tf` sets `local_authentication_enabled = false`, so the data plane is
-    reachable only through the two role assignments on the app's user-assigned
-    identity. Nothing ever consumed a search key — the app is handed
-    `AZURE_SEARCH_ENDPOINT` and its identity — so this removed a credential
-    rather than changing a code path. It takes effect when the service can
-    actually be created.)*
+    *(**This finding was half wrong, and the wrong half was the load-bearing
+    half.** Corrected 2026-08-26 against a live Free service (cc-okc). "No managed
+    identity" is true only of the identity **on** the search service — the outbound
+    one an indexer would use to reach a data source, which does require Basic. It
+    says nothing about RBAC **into** the service. A Free service accepts
+    `disableLocalAuth: true` and then answers data-plane calls bearing an Entra
+    token, verified end to end: from the eastus2 container app, under its
+    user-assigned identity and with admin keys off, an index was created, loaded,
+    queried and deleted. So `search.tf` keeps `local_authentication_enabled =
+    false` on Free, and the security property survived the revert from Basic. It
+    was never an argument for Basic. The rest — no CMK, no IP firewall, no private
+    endpoints, no availability zones — stands, and remains the stated PoC
+    trade-off.)*
 
 18. **The free AI Search tier can starve the indexer.** 50 MB of storage and 3 indexes
     are generous for this corpus, but with a skillset attached the indexer is capped
@@ -364,19 +375,41 @@ it contradicts and what to do about it.
 
 ## The reranker decision (issue #10)
 
-> **Superseded on 2026-08-26, on cost grounds that were then overtaken by an
-> outage.** The account owner authorised the Basic tier (cc-6wz) to get past the
-> capacity failure in cc-3wo, so `var.search_sku` is now `"basic"` and the
-> semantic ceiling below no longer binds. That authorisation did not achieve
-> what it was bought for: East US 2 is out of AI Search capacity **at every
-> tier**, not merely in the shared free pool, so Basic returns the same
-> `InsufficientResourcesAvailable` as Free and no search service exists yet.
-> Verified 2026-08-26 through both Terraform and `az search service create`,
-> against untouched regional quota (free 0/1, basic 0/16, standard 0/16).
+> **Superseded on 2026-08-26 and reinstated the same day. This answer stands, and
+> the service it describes now exists.** The sequence is worth keeping because the
+> wrong turn in the middle is instructive.
 >
-> The analysis below is left intact because its reasoning is still sound and
-> will apply again if the tier is ever reconsidered. Only its premise — that a
-> Free service can be created in this region — turned out to be false.
+> The account owner authorised Basic (cc-6wz) to get past the capacity failure in
+> cc-3wo, on the theory that the exhausted pool was the shared free one and paying
+> would step around it. It did not: East US 2 is out of AI Search capacity **at
+> every tier**, so Basic returned the identical `InsufficientResourcesAvailable`.
+> Money was never the lever. Verified through both Terraform and `az search
+> service create`, against untouched regional quota (free 0/1, basic 0/16,
+> standard 0/16).
+>
+> The constraint was the **region**, so the fix was regional (cc-okc). AI Search
+> now runs in **East US** on **Free** while the rest of the estate stays in East
+> US 2; see "Region recommendation" below for why moving this one service does not
+> reopen the region decision. `var.search_sku` is back to `"free"`, the ~$73.73/month
+> is unspent, and the analysis below applies as written — its premise, that a Free
+> service can be created, was only ever false *in that one region*.
+>
+> Two things measured on the live Free service rather than read off a docs page:
+>
+> - **Reranking works.** A semantic query with `queryType: semantic` against a
+>   Free service returned an `@search.rerankerScore` and extractive captions, and
+>   reordered the results — for "what is a griddled beef sandwich" it lifted
+>   "Smash burger" to the top (reranker 1.73 against a BM25 score of 0.55).
+> - **The billing plan has to be set, not left alone.** `semanticSearch` defaults
+>   to `disabled`, which is off, not capped. `"free"` is accepted on a Free SKU
+>   and is what grants the 1,000-request allowance; `"standard"` is refused in as
+>   many words — *"Semantic Search Standard Tier is not supported on Free SKU."*
+>   `search.tf` now sets `"free"` explicitly. Leaving it null, as the Basic-era
+>   configuration did, would have shipped a service with no reranker at all.
+>
+> The 1,000-request monthly ceiling below therefore binds again, and it is a hard
+> stop rather than an overage. GH #49's degrade-to-hybrid-without-reranking path is
+> required code.
 
 **Answer: option 1 — the free tier is fine, with a stated ceiling.**
 
@@ -414,9 +447,13 @@ mode is an explicit billing error rather than a surprise invoice.
   queue-depth table in the service limits starts at Basic; Free has no row. Expect
   it to be slow and shared, and do not benchmark latency on it.
 - **Reconsider Basic if any of these become true**, at which point the ~$74/month is
-  buying more than the reranker: managed identity is wanted for AI Search access
-  (item 17), the corpus outgrows 50 MB, or the free-tier indexer's 3–10 minute
-  skillset cap makes integrated vectorization painful (item 18).
+  buying more than the reranker: the corpus outgrows 50 MB, the free-tier indexer's
+  3–10 minute skillset cap makes integrated vectorization painful (item 18), or the
+  1,000-request semantic ceiling starts costing more in degraded answers than
+  $74/month is worth. **Not** "managed identity is wanted" — item 17 has been
+  corrected; RBAC into the service works on Free and is already configured.
+  Basic in **East US** is pre-authorised if it comes to that; Basic in East US 2 is
+  not available at any price.
 - If you do buy Basic, **add teardown to the runbook** — it bills hourly whether or
   not anyone is using it.
 
@@ -448,12 +485,43 @@ the upload and text moderation on the prompt as separate calls, which East US 2
 supports. If multimodal moderation later becomes desirable, it can run as a second
 Content Safety resource in East US without moving anything else.
 
+### The one exception: AI Search runs in East US (2026-08-26, cc-okc)
+
+`var.location` is still `eastus2` and this recommendation is unchanged. **One
+resource sits outside it**: `azurerm_search_service.main`, in **East US**, via
+`var.search_location`.
+
+East US 2 ran out of AI Search capacity on 2026-08-25 and stayed out at every tier
+(cc-3wo, cc-6wz). Nothing about the estate could fix that — it is Azure-side. East
+US, next door, has capacity. What made moving *this* service acceptable, and what
+makes it a precedent for nothing else, is that the region pin is not general: it
+comes from Cortex Analyst, whose Azure availability is East US 2 / West Europe
+against an account whose region is fixed at signup (item 7). That binds Cortex
+Analyst and everything that has to sit beside it. AI Search talks to none of it.
+
+**The bill for the split, measured 2026-08-26 rather than estimated:**
+
+| | measured | how |
+| --- | --- | --- |
+| Keyword/hybrid query, agent in eastus2 → index in eastus | **p50 11.2 ms** (mean 11.1, p95 11.8, n=35) | warm pooled TLS connection, from inside `ca-chip-chat-web` |
+| Same query with semantic reranking + captions | **p50 ≈ 46 ms** (range 34–71, n=8) | the reranker is ~30 ms of that, not the region |
+| Query on a fresh TLS connection | p50 84.3 ms (n=12) | connection reuse matters ~7× more than the region does |
+| Region penalty in isolation (TCP connect RTT) | **≈ 6.8 ms** | eastus2→eastus p50 15.5 ms vs eastus2→eastus2 p50 8.8 ms (Foundry) / 8.7 ms (ADLS), n=25 each |
+| Cross-region data transfer | **$0.02/GB** | retail API meter "Standard Inter-Region Data Transfer", `eastus2` *and* `eastus`, tier minimum 0 |
+| …applied to retrieval | **≈ $0.0002/month** | a semantic top-5 response with captions is 9.0 KB; the Free tier caps semantic at 1,000 requests/month → ~9 MB. Even a million queries a month is ~$0.18. |
+
+So the hop costs single-digit milliseconds and no money worth writing down. It is
+not free, though: those milliseconds land on the **same turn-latency budget** as the
+Snowflake cross-region inference in GH #104, and the two **add**. GH #45 is
+measuring the Snowflake half.
+
 ---
 
 ## Notes on method
 
 - Prices came from the [Azure Retail Prices API](https://prices.azure.com/api/retail/prices)
-  (`armRegionName eq 'eastus2'`, `currencyCode 'USD'`) rather than the pricing pages,
+  (`armRegionName eq 'eastus2'`, and `'eastus'` for the AI Search and inter-region
+  transfer meters, `currencyCode 'USD'`) rather than the pricing pages,
   which now render prices client-side and serve `$-` to a fetch. Spot-checked against
   East US: identical for every meter used here.
 - Microsoft Learn `ms.date` values are quoted so a future reader can tell whether a

@@ -75,32 +75,70 @@ variable "cost_alert_email" {
   default     = "grahamganssle@gmail.com"
 }
 
-variable "search_sku" {
+variable "search_location" {
   description = <<-EOT
-    Azure AI Search tier. "basic" since 2026-08-26, authorised by the account
-    owner to get past the capacity outage in cc-3wo. It did not work: eastus2
-    is out of Search capacity for every tier, not just the free pool, so the
-    service still cannot be created. See search.tf for the evidence.
+    Azure region for the AI Search service ONLY. This is the one resource in the
+    estate that does not live in var.location, and the difference is deliberate:
+    do not "fix" it back to eastus2 or retrieval breaks again.
 
-    Kept at "basic" anyway, because it is the authorised tier, because it is
-    what should exist when capacity returns, and because Free is no more
-    creatable today than Basic is. This supersedes the Free-tier recommendation
-    in docs/service-inventory.md#the-reranker-decision-issue-10 — the reasoning
-    there is still correct, its premise (that a Free service can be created)
-    is not.
+    East US 2 is out of AI Search capacity at every tier — free, basic and
+    standard alike — and has been since 2026-08-25 (cc-3wo). Paying was tried and
+    returns the identical InsufficientResourcesAvailable (cc-6wz): money is not
+    the lever, capacity is. East US, next door, has capacity — a free-tier
+    service was created there successfully on 2026-08-26 (cc-okc).
 
-    Basic is $0.101/hour, $73.73 over a 730-hour month, confirmed against the
-    Azure Retail Prices API meter "Basic Unit" in eastus2 on 2026-08-26. It also
-    buys the two things Free lacked and that the rest of this estate assumes:
-    managed identity, so the service is reached by RBAC rather than an API key,
-    and the standard semantic billing plan, which turns the 1,000-semantic-
-    queries-a-month hard ceiling into $1.00 per 1,000 past the free allowance.
+    Moving ONE service is not moving the region. var.location stays eastus2
+    because Snowflake Cortex Analyst is Azure-native in East US 2 and West Europe
+    only and a Snowflake account's region is fixed at signup
+    (docs/service-inventory.md item 7). That constraint binds Cortex Analyst, and
+    through it the rest of the estate; it does not bind AI Search, which talks to
+    nothing region-pinned. Nothing else here should follow this variable out.
 
-    Going back to "free" is a real revert, not a knob: it re-enables local
-    authentication below and re-imposes that ceiling.
+    The cost of the split is a cross-region hop on every retrieval call: the
+    agent runs in eastus2 Container Apps and queries an index in eastus. Measured
+    at provisioning time, see search.tf for the number.
   EOT
   type        = string
-  default     = "basic"
+  default     = "eastus"
+}
+
+variable "search_sku" {
+  description = <<-EOT
+    Azure AI Search tier. Back to "free" as of 2026-08-26, after the region moved
+    to East US (var.search_location).
+
+    Basic was authorised by the account owner on the theory that the exhausted
+    pool was the free one and paying would step around it. It would not have:
+    eastus2 was out of capacity at every tier. Once the constraint turned out to
+    be the region rather than the tier, and East US free-tier capacity was
+    confirmed to exist, Basic bought nothing that Free does not — so this stays
+    Free and the ~$73.73/month stays unspent. This restores the recorded decision
+    in docs/service-inventory.md#the-reranker-decision-issue-10, which was right
+    on the merits all along.
+
+    Free comes with two consequences the rest of the estate has to absorb, and
+    they are the reason Basic in East US remains pre-authorised if either turns
+    out to be unworkable:
+
+      * Semantic ranking still EXISTS — the "free" semantic plan is accepted on a
+        Free SKU and search.tf now sets it explicitly, because leaving it unset
+        disables reranking rather than capping it. What Free changes is the shape
+        of the ceiling: 1,000 semantic requests a month, then a billing error
+        rather than a charge. That is a hard stop, not an overage, so the
+        degrade-to-hybrid-without-reranking path in #49 is load-bearing code and
+        not a fallback nobody will hit. Keep the counter in the retrieval eval
+        harness (#10).
+      * No managed identity ON the search service, which rules out an indexer
+        reaching a data source under its own identity. It does NOT rule out RBAC
+        INTO the service: the app's user-assigned identity holds data-plane roles
+        and local authentication is off, on Free, verified. See search.tf.
+
+    Free is also one service per subscription, which is a quota, not capacity —
+    a second one fails with ServiceQuotaExceeded and that error means the estate
+    already has its free service, not that the region is full again.
+  EOT
+  type        = string
+  default     = "free"
 
   validation {
     condition     = contains(["free", "basic", "standard"], var.search_sku)
@@ -406,21 +444,17 @@ variable "search_enabled" {
   description = <<-EOT
     Escape hatch for a regional capacity outage, not a design choice. On
     2026-08-25 East US 2 returned InsufficientResourcesAvailable for every
-    attempt to create a Free-tier search service — subscription quota was fine
-    (0 of 1 used); Azure's shared free pool in the region was full. The region
-    is fixed by Snowflake Cortex Analyst, so waiting is the only option that
-    keeps the rest of the design intact.
+    attempt to create a search service — subscription quota was fine (0 of 1
+    used at Free, 0 of 16 at Basic); the region itself was out of AI Search
+    capacity at every tier. Setting this false applied the rest of the estate
+    while that lasted. Tracked as cc-3wo.
 
-    Set false to apply the rest of the estate while the pool is full, then set it
-    back to true and re-apply. Retrieval is Phase 5, so this blocks nothing
-    earlier. Tracked as cc-3wo.
-
-    STILL UNRESOLVED as of 2026-08-26. Paying for Basic was tried (cc-6wz) on
-    the theory that the exhausted pool was the free one; it is not, the region
-    is out of Search capacity at every tier, and Basic returns the identical
-    400. So this escape hatch is still the only way to apply the rest of the
-    estate, and it is still `true` on purpose: a committed `false` would go on
-    silently skipping the service long after Azure fixes its capacity, whereas
+    RESOLVED 2026-08-26 by moving the service to East US (var.search_location)
+    rather than by waiting or by paying, so this hatch is closed and stays
+    `true`. It is kept, rather than deleted, because the failure it exists for
+    is Azure-side and can recur in any region: if East US fills up too, false
+    unblocks the rest of an apply. Do not commit it false — a committed false
+    goes on silently skipping the service long after the outage clears, whereas
     a loud failure self-heals.
   EOT
   type        = bool

@@ -126,10 +126,15 @@ something:
 - `az storage blob …` against either account needs `--auth-mode login`. The
   default is key auth and it will fail.
 
-The one exception is Azure AI Search, and it is a stated trade rather than an
-oversight: the Free tier has no managed identity at all — no customer-managed
-keys, no IP firewall, no private endpoints — so it is reached with an API key.
-The RBAC grants are written anyway, so moving to Basic is a one-line change. See
+Azure AI Search used to be listed here as the one exception — Free tier, so
+reached with an API key. **It is not an exception, and that entry was wrong.**
+What Free lacks is a managed identity *on the search service*, the outbound one
+an indexer would use; it has nothing to do with getting in. `search.tf` sets
+`local_authentication_enabled = false` on Free, and the app reaches the data
+plane by Entra token under its user-assigned identity like everything else.
+Verified end to end on 2026-08-26, admin keys off. What Free genuinely does not
+have is customer-managed keys, an IP firewall, private endpoints or availability
+zones — a stated PoC trade, and not an authentication one. See
 [item 17 in the service inventory](../docs/service-inventory.md#things-the-plan-is-quietly-wrong-about).
 
 ### Teardown is a `features` block
@@ -219,9 +224,12 @@ container.
 
 **Two free tiers are one-per-subscription** — AI Search Free, and F0 on each
 Cognitive Services kind — so a second stack has to pay for them or the apply
-fails on a quota error. `terraform.tfvars.example` has the overrides. Budget for
-roughly $74/month of AI Search Basic for as long as the scratch stack exists,
-which is the main reason to destroy it promptly.
+fails on a quota error. The live stack now holds the subscription's one free
+search service, so a scratch stack must set `search_sku = "basic"` (and a
+`search_location` with capacity) or its apply fails `ServiceQuotaExceeded`.
+`terraform.tfvars.example` has the overrides. Budget for roughly $74/month of AI
+Search Basic for as long as the scratch stack exists, which is the main reason to
+destroy it promptly.
 
 ---
 
@@ -232,7 +240,7 @@ decision.
 
 | Guardrail | Where | Why |
 | --- | --- | --- |
-| AI Search **Basic** tier — *the one guardrail deliberately spent* | `var.search_sku` | $0.101/hour ≈ $73.73/month, billed whether or not anyone queries it. Free was the recorded decision and the account owner overrode it on 2026-08-26 (cc-6wz) to get past the capacity outage below; that did not work, and no search service exists yet. Basic buys managed identity (so `local_authentication_enabled` is off) and lifts the 1,000-semantic-queries-a-month hard ceiling. [The reranker decision](../docs/service-inventory.md#the-reranker-decision-issue-10) |
+| AI Search **Free** tier — *and the region that makes it possible* | `var.search_sku`, `var.search_location` | $0. Basic was authorised on 2026-08-26 (cc-6wz) to get past the capacity outage below and did not work, because the blocker was the region rather than the tier; moving the service to East US (cc-okc) did, on Free, so the $73.73/month stays unspent. Free costs a 1,000-semantic-request monthly ceiling that is a hard stop rather than an overage. It does **not** cost the RBAC data plane — `local_authentication_enabled` is off on Free too. Basic in East US is pre-authorised if the ceiling starts hurting. [The reranker decision](../docs/service-inventory.md#the-reranker-decision-issue-10) |
 | Container Apps **min replicas 0** | `var.web_min_replicas` | An idle replica still bills, at roughly an eighth of the active vCPU rate. |
 | An **HTTP scale rule**, not CPU or memory | `compute.tf` | Not tuning. Scale-to-zero has two documented ways to strand an app: no ingress and no scale rule means it can never wake, and the KEDA CPU/memory scalers cannot scale to zero at all. |
 | Blob lifecycle **deleting uploads after a day** | `var.uploads_retention_days` | Data hygiene first, cost second. |
@@ -270,9 +278,12 @@ User-facing copy should say "within 48 hours" and mean it.
 
 ---
 
-## Known issue: AI Search will not provision
+## Resolved: AI Search would not provision in East US 2
 
-As of 2026-08-26, creating the search service in East US 2 fails **at every
+**Fixed on 2026-08-26 by moving the service to East US.** Kept here because the
+two days it took to get there contain the useful part.
+
+From 2026-08-25, creating the search service in East US 2 failed **at every
 tier**:
 
 ```
@@ -280,25 +291,34 @@ InsufficientResourcesAvailable: The region 'eastus2' is currently out of the
 resources required to provision new services.
 ```
 
-This is Azure's shared **regional capacity**, not subscription quota — the usage
-API reports free 0 of 1, basic 0 of 16, standard 0 of 16 — and it reproduces
-through the `az` CLI as readily as through Terraform. The region is not
-negotiable (Cortex Analyst), so waiting is the option that keeps the design
-intact.
+That is Azure's shared **regional capacity**, not subscription quota — the usage
+API reported free 0 of 1, basic 0 of 16, standard 0 of 16 — and it reproduced
+through the `az` CLI as readily as through Terraform.
 
-**Paying does not step around it.** The obvious escalation was Basic at
-~$74/month, on the theory that the exhausted pool was the shared *free* one. The
-account owner authorised that on 2026-08-26 (`cc-6wz`) and it returned the
-identical 400 — verified at both tiers, through Terraform and through
-`az search service create`. `var.search_sku` is now `"basic"` and stays that way,
-because it is the authorised tier and is what should exist the moment capacity
-returns, but there is nothing left to buy: this is Azure's to fix.
+**Paying did not step around it.** The obvious escalation was Basic at ~$74/month,
+on the theory that the exhausted pool was the shared *free* one. The account owner
+authorised that (`cc-6wz`) and it returned the identical 400, at both tiers,
+through both tools. There was nothing to buy.
 
-`var.search_enabled = false` applies the rest of the estate meanwhile. Note that
-it also unblocks the Container App, which references the search endpoint and is
-therefore ordered behind it. Retrieval is Phase 5, so nothing earlier is blocked.
-Tracked as bead `cc-3wo`.
+**The region was the variable, and it was less pinned than it looked.** East US
+had capacity — a free-tier service creates there. What made East US 2 non-
+negotiable was Cortex Analyst, and that binds Cortex Analyst, not AI Search. So
+`var.search_location` was added, defaulting to `eastus`, and **only**
+`azurerm_search_service.main` uses it (`cc-okc`). `var.location` is unchanged and
+nothing else moved. `var.search_sku` went back to `"free"`: the blocker was
+capacity, not tier, so Basic bought nothing and the $73.73/month stays unspent.
 
+The cost of the split, measured from inside the eastus2 container app rather than
+estimated: **p50 11.2 ms** per keyword query, **≈46 ms** with semantic reranking,
+and a region penalty of **≈6.8 ms** of round-trip once the reranker and TLS setup
+are held constant. Cross-region transfer is `$0.02/GB` (retail meter "Standard
+Inter-Region Data Transfer", both regions) against ~9 KB per semantic response, so
+under a cent a month. Full table in the
+[service inventory](../docs/service-inventory.md#the-one-exception-ai-search-runs-in-east-us-2026-08-26-cc-okc).
+
+`var.search_enabled = false` remains as the escape hatch if a region fills up
+again. It also unblocks the Container App, which references the search endpoint
+and is therefore ordered behind it. Do not commit it `false`.
 
 ---
 
@@ -1011,9 +1031,11 @@ Secret *values* are never in Terraform, not even in state. Terraform creates the
 vault and the grants; a human puts secrets in it. The two places this rubs:
 
 - **The AI Search admin key** is a computed attribute of the search service, so
-  it exists in state. It is not written to Key Vault by Terraform — copy it
-  across by hand, and treat the state container as sensitive regardless (it is
-  Entra-only and has no shared key, which is why it is safe enough).
+  a value for it exists in state whether or not anything uses it. Nothing does:
+  `local_authentication_enabled = false`, so the key does not authenticate
+  anything and there is nothing to copy into Key Vault. Treat the state container
+  as sensitive regardless (it is Entra-only and has no shared key, which is why it
+  is safe enough).
 - **The Application Insights connection string** carries an ingestion key and is
   an app setting on both the Container App and the Function App. It is marked
   `sensitive` in outputs; read it deliberately with
@@ -1031,7 +1053,7 @@ Against subscription `c8b63a71-218d-4d4c-991c-b963ed2fd1f0`, 2026-08-26, with
 | | |
 | --- | --- |
 | Adoption | `7 to import, 28 to add, 1 to change, 0 to destroy`. No attribute drift on the resource group, Key Vault, identity or action group. The one change was the budget's case-only `contact_groups` diff, applied in place. |
-| Standing | 15 resources in `rg-chip-chat`, everything except AI Search. |
+| Standing | 15 resources in `rg-chip-chat`, everything except AI Search — which was blocked on regional capacity at the time and has since been created in East US (2026-08-26, `cc-okc`). |
 | Idempotence | `terraform plan` after apply: **No changes.** |
 | Chat app | `https://ca-chip-chat-web.whitesea-eea6e4c0.eastus2.azurecontainerapps.io` returns **HTTP 200** over TLS on the Container Apps default FQDN, with its automatic managed certificate. No DNS zone, no CNAME, no certificate resource — issue #4 was closed in favour of this. |
 | **Cold start from zero replicas** | **0.26 s** to first byte, 0.21 s warm. The design guessed "a couple of seconds" and Microsoft publishes no figure; this is the measured number for a trivial container, and a real FastAPI image will be slower. |
@@ -1078,8 +1100,11 @@ take the random suffix instead.
   $36.50/month NAT gateway. It needs the workspace replaced and it is a security
   downgrade, so it has not been tried.
 
-- **Azure AI Search** — cannot be provisioned in East US 2 at all right now. See
-  [Known issue](#known-issue-ai-search-will-not-provision) and bead `cc-3wo`.
+- ~~**Azure AI Search** — cannot be provisioned in East US 2 at all.~~ Resolved
+  2026-08-26 by provisioning it in East US instead; the service exists, RBAC-only,
+  Free tier, with reranking confirmed working. See
+  [Resolved: AI Search would not provision in East US 2](#resolved-ai-search-would-not-provision-in-east-us-2)
+  and beads `cc-3wo` / `cc-okc`.
 - **Model deployments** — `var.model_deployments` is empty by design; issue #8
   chooses the models and confirms quota.
 - **The budget's test notification** — see above; it sends real mail and is left
