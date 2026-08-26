@@ -84,8 +84,33 @@ output "foundry_project_endpoints" {
 }
 
 output "model_deployment_names" {
-  description = "Deployed model names. Empty until issue #8 sets var.model_deployments."
+  description = "Deployment names on the Foundry account. These are what an inference call passes as `model`."
   value       = keys(azurerm_cognitive_deployment.models)
+}
+
+output "model_deployments" {
+  description = <<-EOT
+    Every deployment with the model, SKU and capacity behind it. This is the
+    answer to "what is actually deployed and what does it cost", and it is a
+    plain output rather than a table in a README because a teardown and re-apply
+    changes it.
+  EOT
+  value = {
+    for name, d in azurerm_cognitive_deployment.models : name => {
+      model    = "${d.model[0].name}:${d.model[0].version}"
+      sku      = d.sku[0].name
+      capacity = d.sku[0].capacity
+    }
+  }
+}
+
+# The two deployments the application reads by role. They are outputs rather
+# than literals in the app so that swapping the model behind a lane for an eval
+# experiment is a change to var.model_deployments and an environment variable,
+# and nothing else. See CHIP_CHAT_FOUNDRY_* in .env.example.
+output "foundry_inference_endpoint" {
+  description = "OpenAI-shaped inference endpoint on the Foundry account — what the SDK wants as azure_endpoint."
+  value       = azurerm_cognitive_account.foundry.endpoint
 }
 
 output "content_safety_endpoint" {

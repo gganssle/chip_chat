@@ -185,6 +185,15 @@ state.
 
 #11 stays open until #8 reports that number. Nothing else in it is unresolved.
 
+**Update, 26 August 2026 (#8 / `cc-v9q`).** Partially answered, and the part that
+is answered is the reassuring part: threads are id-addressable from a cold client,
+and the service exposes *no* expiry, TTL or retention field on a thread object —
+across three api-versions — nor any thread-retention setting on the Foundry
+account. The retention *period* remains unmeasured, because it cannot be measured
+in a day. A probe thread and the tool to re-read it now exist; see
+[Thread retention](../phase-0-verification.md#thread-retention-issue-11). #11
+stays open until that thread has been fetched after a real gap.
+
 ---
 
 ## Consequences for open tickets

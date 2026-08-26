@@ -160,3 +160,23 @@ resource "azurerm_role_assignment" "app_document_intelligence_user" {
   principal_id         = azurerm_user_assigned_identity.app.principal_id
   principal_type       = "ServicePrincipal"
 }
+
+# The developer's own data-plane grant on the Foundry account (issue #8).
+#
+# Subscription Owner does not imply this. Owner carries `*` in `actions` and
+# nothing in `dataActions`, and inference is a data action — so without the two
+# grants below, `az login` credentials get a 401 from the model endpoint while
+# every management call keeps working, which is a confusing way to spend an
+# afternoon. This is the "configure managed identity access" half of #8's
+# acceptance criteria for a human rather than for the app.
+resource "azurerm_role_assignment" "developer_foundry_user" {
+  scope                = azurerm_cognitive_account.foundry.id
+  role_definition_name = "Cognitive Services User"
+  principal_id         = data.azurerm_client_config.current.object_id
+}
+
+resource "azurerm_role_assignment" "developer_foundry_openai_user" {
+  scope                = azurerm_cognitive_account.foundry.id
+  role_definition_name = "Cognitive Services OpenAI User"
+  principal_id         = data.azurerm_client_config.current.object_id
+}

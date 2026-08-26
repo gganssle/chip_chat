@@ -3,7 +3,16 @@ name = "chip-chat-agent"
 version = "0.0.0"
 description = "Foundry agent definition and tool implementations."
 requires-python = ">=3.13"
-dependencies = ["chip-chat-otel"]
+dependencies = [
+    "chip-chat-otel",
+    # Foundry's model endpoint is OpenAI-shaped, so the OpenAI SDK's Azure
+    # client is the supported path rather than a convenience.
+    "openai>=1.60",
+    "azure-identity>=1.19",
+    # The photo lane reads uploads from ADLS Gen2. Shared keys are disabled on
+    # that account, so there is no connection-string shortcut past this.
+    "azure-storage-blob>=12.24",
+]
 
 [build-system]
 requires = ["hatchling"]
