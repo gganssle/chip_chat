@@ -1,0 +1,229 @@
+# `otel/` — the span schema of record
+
+This package is the one shared library in the monorepo. Every other package may
+import it; it imports none of them, and the import-linter contract in the root
+`pyproject.toml` enforces that structurally.
+
+Its job is not "some tracing helpers". Its job is a **schema**. RFC-001 §09 fixes
+the span tree a turn emits, Phase 9's evaluations and every dashboard axis attach
+to those names, and a rename is therefore a breaking change to consumers that
+live outside this repository. Instrumenting last is one of the seven failure
+modes the build plan calls out by name; this package exists so that it cannot
+happen here.
+
+**If you are about to add a span, change a name, or add an attribute, this file
+and `src/chip_chat/otel/schema.py` are the two places that have to agree.**
+
+## The tree
+
+```
+chat.turn                    root span, one per visitor message
+├─ guard.budget_check        synchronous; may terminate the turn
+├─ guard.content_safety
+├─ agent.step                one per model round trip
+│  ├─ llm.completion         tokens, model, finish reason
+│  └─ tool.<tool_name>       one per call, arguments recorded
+│     ├─ retriever.search    documents + scores
+│     ├─ db.cortex_analyst   generated SQL + row count
+│     ├─ vision.describe     image ref + structured output
+│     ├─ matcher.resolve     slot confidences + resolved SKUs
+│     └─ ops.<action>        draft id + confirmation state
+└─ render.response
+```
+
+Nesting is enforced, not documented. Each helper checks its position before it
+opens a span and raises `SpanSchemaError` if a call site would have produced a
+tree the RFC does not describe. `llm.completion` outside an `agent.step` is a
+failed test, not a slightly odd trace.
+
+### `tool.<tool_name>`
+
+One span per call, from the eleven tools of RFC-001 §06. The parameter is a
+`ToolName`, never a string, so a typo is a failed import rather than a span
+nobody's dashboard is watching.
+
+| Span | Tool |
+| --- | --- |
+| `tool.search_menu_knowledge` | AI Search over the harvested corpus |
+| `tool.ask_account_question` | Cortex Analyst |
+| `tool.get_points_balance` | Snowflake |
+| `tool.get_usual_order` | Gold mart |
+| `tool.get_recommendations` | Gold mart |
+| `tool.match_meal_from_photo` | Vision + matcher |
+| `tool.propose_order` | App |
+| `tool.place_order` | Ops API (write, confirmed) |
+| `tool.cancel_order` | Ops API (write, confirmed) |
+| `tool.redeem_points` | Ops API (write, confirmed) |
+| `tool.update_preferences` | Ops API (write, confirmed) |
+
+### `ops.<action>`
+
+The four writes, each nested inside its tool span: `ops.place_order`,
+`ops.cancel_order`, `ops.redeem_points`, `ops.update_preferences`.
+
+Confirmation is enforced by the ops API rather than by the prompt, so
+`chip_chat.ops.confirmation_state` is the attribute an eval reads to catch an
+agent that tried to write against something the visitor never confirmed. A
+`rejected` state also sets the span status to error, because that is a
+launch-gate violation and it should not look like a success.
+
+## Using it
+
+```python
+from chip_chat.otel import (
+    OpsAction,
+    ToolName,
+    agent_step,
+    budget_check,
+    chat_turn,
+    llm_completion,
+    ops_write,
+    render_response,
+    retriever_search,
+    tool_call,
+)
+
+with chat_turn(session_id=sid, turn_index=n, message=text) as turn:
+    with budget_check() as guard:
+        guard.record_budget(scope="session", tokens_used=used, tokens_limit=cap)
+        guard.allow()
+
+    with agent_step(index=0):
+        with llm_completion(model="gpt-4o", provider="azure") as llm:
+            llm.record_usage(prompt_tokens=812, completion_tokens=64)
+            llm.record_finish_reason("tool_calls")
+
+        with tool_call(ToolName.SEARCH_MENU_KNOWLEDGE, arguments={"query": q}) as tool:
+            with retriever_search(query=q) as search:
+                search.record_documents(documents)
+            tool.record_result(passages)
+
+    with render_response() as render:
+        render.record_output(reply)
+    turn.record_output(reply)
+```
+
+No tracer is exported from this package. That is deliberate: a tracer is a
+free-form span-name factory, and handing one to a call site is how the schema
+would quietly stop being one. Attributes are set through the recorder each helper
+yields, so the same holds for the attribute namespace.
+
+Anything genuinely outside the schema goes through `set_metadata(**values)`,
+which lands in OpenInference's `metadata` key — the one place free-form data
+belongs, and out of the namespace the evals are built on.
+
+## Attributes
+
+Three sources, in strict order of precedence.
+
+**1. OpenInference.** These are what make Arize and Phoenix read a span as an LLM
+call, a retrieval or a tool invocation rather than as an anonymous unit of work.
+Where OpenInference defines a name, we use it and offer no alternative:
+`openinference.span.kind`, `llm.model_name`, `llm.token_count.*`,
+`llm.finish_reason`, `llm.input_messages.*`, `llm.tools.*`, `tool.name`,
+`tool.parameters`, `retrieval.documents.*`, `session.id`, `user.id`,
+`input.value`, `output.value`, `metadata`, `tag.tags`.
+
+**2. OpenTelemetry's database conventions**, for `db.cortex_analyst`:
+`db.system`, `db.query.text`, `db.response.returned_rows`. OpenInference has
+nothing to say about SQL and these names already exist.
+
+**3. `chip_chat.*`**, for the handful of facts neither standard covers — turn
+index, guard outcomes, budget scope, matcher slot confidences, ops confirmation
+state. All namespaced, so a backend can tell at a glance which attributes are
+portable and which are ours.
+
+Every span in a turn carries `session.id`, `chip_chat.turn.index` and (when
+bound) `chip_chat.persona.id` and `chip_chat.demo.id` — not only the root.
+Application Insights searches attributes far more comfortably than it walks trace
+trees, and "it did something weird" arrives with a session id at best.
+
+### `demo_id` is not an identity input
+
+`demo_id` is the row-level security key inside Snowflake. On a span it is an
+**opaque correlation attribute and nothing else**: it exists so a bug report can
+become a trace. Never read it back off a span to make an authorisation decision.
+No helper in this package takes a decision from it, and none should.
+
+## Two backends, one instrumentation
+
+Application Insights answers *is the service healthy*. Phoenix — later Arize AX —
+answers *is the agent behaving*. They are not overlapping purchases, and both
+consume OpenTelemetry spans carrying OpenInference conventions, so there is one
+instrumentation and a fan-out.
+
+Decision D6 says the agent-observability vendor is a configuration value. That
+claim has to be true rather than intended, so `exporters.py` names no vendor at
+all: there is one OTLP slot and one Application Insights slot, and which product
+answers on the OTLP endpoint is none of this package's business. Moving from
+Phoenix to Arize AX changes an endpoint and a header. `test_export_configuration.py`
+asserts it, including a test that fails if a product name ever appears in
+`exporters.py`.
+
+| Variable | Meaning |
+| --- | --- |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Full traces URL, used verbatim |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Base URL; `/v1/traces` is appended |
+| `OTEL_EXPORTER_OTLP_TRACES_HEADERS` | `k=v,k=v`; falls back to the row below |
+| `OTEL_EXPORTER_OTLP_HEADERS` | `k=v,k=v` — where an API key or space id goes |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | Enables the App Insights exporter |
+| `CHIP_CHAT_ENVIRONMENT` | `deployment.environment`; defaults to `local` |
+| `CHIP_CHAT_OTEL_CONSOLE` | Truthy adds a console exporter |
+
+Every slot is optional. A configuration with no exporters is valid and useful:
+spans are still built and still schema-checked, they simply go nowhere.
+
+### This package does not ride on Foundry's built-in tracing
+
+Worth stating, because it is the first thing a reader wonders. The spans above
+are emitted by *this* package, through its own `TracerProvider`, from whichever
+process imports it. Where the agent's own tracing can be exported to is a
+separate question — a Foundry prompt agent's traces reach Application Insights
+and stop there, while a hosted agent can be pointed at a third-party OTLP
+endpoint through environment variables — and it constrains the agent's shape
+rather than this schema. Our `llm.completion` spans wrap the model call from the
+outside and reach both backends either way.
+
+The consequence is real but belongs downstream: under a prompt agent, Foundry's
+own server-side spans would not appear alongside ours in Phoenix, so the trace
+would hold our view of the model call and not Foundry's. That is an input to the
+agent-shape decision in #16, not a reason to change a span name here.
+
+Wire it up once, at start-up:
+
+```python
+from chip_chat.otel import TelemetryConfig, configure_tracing
+
+configure_tracing(TelemetryConfig.from_env("api"))
+```
+
+Local development points `OTEL_EXPORTER_OTLP_ENDPOINT` at a Phoenix container;
+that is issue #15's job, and this package is already ready for it.
+
+## Testing your own spans
+
+`chip_chat.otel.testing` ships with the package rather than living in
+`otel/tests`, because the packages that arrive later need to make the same
+assertions about their own turns — and a contract test is only a contract if both
+sides can run it.
+
+```python
+from chip_chat.otel.testing import span_recorder
+
+with span_recorder() as spans:
+    run_one_turn()
+
+assert (
+    spans.tree_text()
+    == "chat.turn\n  guard.budget_check\n  agent.step\n    llm.completion"
+)
+assert spans.attributes_of("llm.completion")["llm.token_count.total"] == 876
+```
+
+`tree_text()` is the assertion that fails when somebody renames a span, which is
+the entire reason the schema is worth writing down.
+
+## Not in scope
+
+No agent, no tools, no product logic. This is the instrumentation library only.
+Its consumers arrive in #15 (Phoenix in the dev loop), #16 and #64.
