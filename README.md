@@ -80,6 +80,11 @@ make ci         # format check, lint, type check, import contracts, tests
 make help       # everything else
 ```
 
+[`docs/local-setup.md`](docs/local-setup.md) takes it from a clean machine: the `az`,
+`terraform` and `databricks` CLIs, how each one authenticates, and the single rule for
+how secrets reach a local process. It also explains why the `snow` CLI is deliberately
+not installed yet.
+
 ## Status
 
 Planning complete; implementation not started. The build plan runs twelve phases over roughly five

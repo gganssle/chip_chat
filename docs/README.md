@@ -9,6 +9,7 @@ contributor — human or agent — has them locally. Read them in this order.
 | [cilantro-prd.md](cilantro-prd.md) | Requirements (E/K/A/P/T/V/S ids), launch gates, metrics |
 | [rfc-001.md](rfc-001.md) | Components, data model, tool contracts, span schema, decisions |
 | [service-inventory.md](service-inventory.md) | Verified service names, tiers, quotas and prices — and where the three documents above are now wrong |
+| [local-setup.md](local-setup.md) | Getting a machine from clean to a passing `make ci` — CLIs, authentication, and how secrets reach a local process |
 
 The system design frames the problem, the PRD defines what to build, and the RFC
 defines how. When two documents disagree, the table above decides: whichever one
@@ -19,6 +20,10 @@ The service inventory is a fourth kind of document: it does not decide anything,
 move faster than the plan; where the inventory contradicts one of them on a matter of
 fact — a product name, a quota, a price, a region — the inventory is right, and the
 date at the top of it says how long that is likely to stay true.
+
+The local setup guide is a fifth kind again: it is a *procedure*, not a plan or a
+check. It records what to install, how to authenticate each platform, and which
+steps are deliberately not done yet.
 
 ## Repository conventions
 
