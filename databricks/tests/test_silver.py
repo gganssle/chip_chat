@@ -155,6 +155,36 @@ def test_the_ledger_vocabulary_is_the_generators_own() -> None:
     }
 
 
+def test_the_entree_derivations_are_the_catalogues_own() -> None:
+    """The vocabulary expectation exempts exactly the two derivations whose
+    terms the catalogue documents as carrying no `item_ids` — a vessel and a
+    protein are each half of an entree. A third derivation added there and
+    forgotten here would either fail every one of its terms or, if it were
+    exempted by accident, stop checking the terms the expectation is about."""
+    from chip_chat.catalog.records import Derivation
+
+    assert set(silver.ENTREE_DERIVATIONS) == {
+        Derivation.ITEM_TYPE.value,
+        Derivation.PRIMARY_FILLING.value,
+    }
+    assert set(silver.ENTREE_DERIVATIONS) < {item.value for item in Derivation}
+
+
+def test_the_vocabulary_expectation_exempts_only_the_entree_derivations() -> None:
+    """`size(item_ids) > 0` alone fails four of the eight published terms."""
+    vocabulary = next(
+        candidate for candidate in silver.TABLES if candidate.name == "vocabulary"
+    )
+    constraint = next(
+        expectation.constraint
+        for expectation in vocabulary.expectations
+        if "item_ids" in expectation.constraint
+    )
+    for derivation in silver.ENTREE_DERIVATIONS:
+        assert f"'{derivation}'" in constraint
+    assert "size(item_ids) > 0" in constraint
+
+
 def test_every_published_reason_appears_in_the_expectation() -> None:
     """A reason the constraint does not name is a hole the check falls through:
     the row would satisfy none of the three clauses and fail, or — worse, if the
@@ -483,9 +513,11 @@ def test_a_page_with_no_main_falls_back_to_the_whole_body() -> None:
 
 
 def test_a_page_that_is_entirely_furniture_extracts_to_nothing() -> None:
-    """A redirect stub or a consent interstitial. A corpus that keeps it keeps
-    noise with a citation attached, so the pipeline's `says_something`
-    expectation stops the update with the row in hand."""
+    """A redirect stub, a consent interstitial, or a client-rendered shell
+    fetched for the address of its script bundle. A corpus that keeps it keeps
+    noise with a citation attached, so it is not a document: `_documents`
+    excludes it, and `silver_verify` bounds those exclusions against
+    `MAXIMUM_PROSELESS_SHARE` and prints every one of them by URL."""
     assert silver.extract_blocks(_PAGE.format(body="")) == ()
 
 

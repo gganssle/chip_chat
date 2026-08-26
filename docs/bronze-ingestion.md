@@ -300,6 +300,21 @@ Every synthetic count is the generator's own, to the row. `raw_documents` is 84
 rather than 82 because the two malformed documents are counted: they landed,
 flagged, rather than being dropped.
 
+> ⚠️ **The seven `bronze_synthetic` tables were re-inferred on 2026-08-26**, in
+> a second `--full-refresh` (update `6079b5e4`) that #34's live run needed. They
+> had arrived carrying 50 columns each — the union of every file in
+> `accounts/synthetic/`, so `order_items` had an all-null `demo_id` and
+> `personas` had a `line_total`. The rows were right and the counts above are
+> unchanged; the *schema* was the union. The cause is not in the reader options,
+> which are byte-identical to what ran here and inferred #34's fourteen sources
+> cleanly over two equally crowded directories. It is that
+> `cloudFiles.schemaLocation` is a path this repository chooses,
+> `addNewColumns` widens and never narrows, and **a full refresh does not reset
+> a schema location it did not allocate** — so version 0, inferred during this
+> run without an effective glob, outlived every table built from it. Deleting
+> `_autoloader/bronze_synthetic/*/_schemas` and refreshing fixed all seven.
+> `docs/silver-conformance.md` §7 carries the whole account.
+
 Against the four acceptance criteria:
 
 - **Both streams land from a cold start.** The `--full-refresh` update rebuilt

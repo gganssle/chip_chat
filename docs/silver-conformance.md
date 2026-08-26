@@ -11,14 +11,12 @@ Everything below is `infra/terraform/databricks_silver.tf`,
 added to `databricks/src/chip_chat/databricks/bronze.py`. Nothing was made by
 hand in the workspace UI.
 
-> **Status.** The code, the declarations and the Terraform are here and
-> `make ci` is green over them, including the boilerplate stripper and the
-> deduplication rule, which are run against known documents rather than
-> described. The pipeline has **not** been run against `dbw-chip-chat` yet —
-> doing so needs a `terraform apply` and a landing zone carrying
-> `catalog/chipotle/` and `parsed/chipotle/policy/`. §6 says exactly what the
-> live run has to show, and it is a job you run rather than a screenshot you
-> take. Tracked separately.
+> **Status.** Run. `chip-chat-silver-conform` completed against `dbw-chip-chat`
+> on 2026-08-26 and `chip-chat-silver-verify` returned SUCCESS over what it
+> wrote. §7 is what it did, including the six things that only failed once
+> there was a cluster: five declarations that contradicted the package they
+> were copied from, and one assertion that was true of the algorithm and false
+> of this corpus.
 
 ## 1. The shape
 
@@ -228,6 +226,30 @@ substring, and hero images that hold real copy break the bare word's promise.
 > Real pages are full of images. `silver._VOID` is checked before anything else,
 > and `test_a_void_element_does_not_swallow_the_rest_of_the_page` is the guard.
 
+### A page with nothing in it is not a document
+
+Some pages the harvest fetched are not prose and were never meant to be.
+`chipotle.policy.CATERING_URL` is read "for the address of its script bundle,
+nothing else", and what came back is a 395-byte Vue shell: a `<title>`, a
+`<noscript>`, an empty `<div id="app">` and two `<script>` tags. Every element
+in it is furniture by the list above, correctly, so it extracts to nothing. It
+is in the fetch-once cache because everything the harvest fetches goes through
+the cache, not because anybody wanted its text.
+
+So a fetched page that carries no prose is **not a document** and does not enter
+the corpus. That exclusion is the one row removal in this layer that does not
+stop an update — the thing §5 refuses everywhere else — so it is bounded rather
+than trusted. `silver.MAXIMUM_PROSELESS_SHARE` is a quarter, the verify job
+asserts against it, and it prints every URL it excluded by name. A stripper that
+regressed would empty most of the corpus rather than one page of it; one page in
+thirty-eight is a publisher rendering a page in the browser.
+
+The exclusion also makes conservation say more than it did. Criterion 2's check
+is now `citations + proseless pages = fetched URLs` rather than `citations =
+fetched URLs`, so every fetched URL is accounted for either way — and a document
+that silently lost a citation and a page that was silently dropped stop looking
+identical from outside.
+
 ### How its removal is checked, rather than admired
 
 The evidence is separate from the mechanism, and it is `document_frequency`: how
@@ -296,9 +318,18 @@ pass vacuously. So the constraint names all four published movements:
 
 ```sql
 (reason = 'ORDER'            AND order_id IS NOT NULL AND reward_name IS NULL)
-OR (reason = 'REWARD_REDEEMED'  AND reward_name IS NOT NULL AND order_id IS NULL)
+OR (reason = 'REWARD_REDEEMED'  AND reward_name IS NOT NULL AND order_id IS NOT NULL)
 OR (reason IN ('SIGNUP_BONUS', 'POINTS_EXPIRED') AND order_id IS NULL AND reward_name IS NULL)
 ```
+
+A redemption references **both**, and that is the clause the first live update
+found wrong. `loyalty.py` writes `order.order_id` beside the reward's name
+because points are spent at the till, on the visit that earned on them, and
+`LoyaltyEntry.order_id` says so outright: "a redemption names the order it was
+spent on, which is the order that also earned on it". Written as `order_id IS
+NULL` the constraint failed 13,684 of the ledger's 32,234 rows, and would have
+deleted exactly the link [#27](https://github.com/gganssle/chip_chat/issues/27)
+reconciles earned points against.
 
 Those four strings are the generator's, copied here because `silver.py` may not
 import a sibling, and `test_silver.py` asserts them against `population.toml`
@@ -312,9 +343,16 @@ where the pipeline can say what it did. Never `DOUBLE`: the harvest goes to the
 trouble of parsing money out of the JSON token's own text to avoid binary-float
 noise, and a float here would put it straight back.
 
-`order_items` also checks its own arithmetic — `line_total = unit_price * qty` —
-which is what turns "prices are computed from the catalogue rather than invented"
-from a claim into something a reviewer can re-derive.
+`order_items` also checks its own arithmetic, and the check is a **floor**:
+`line_total >= unit_price * qty`. A line is priced `qty * (unit price + every
+modifier's own published price)`, and a modifier the catalogue prices at zero is
+free here too — so the item price is a bound the total may sit above and can
+never sit below. Written as an equality it fails every line carrying a priced
+modifier, which is half of them, and it did: 24,592 of 48,767 on the first live
+update. The full identity needs the modifier prices summed over an array, which
+is a join and an aggregate rather than a column expression; `data-gen` asserts
+it against the catalogue in `test_referential_integrity.py`, and this document
+says so rather than implying silver re-derives it.
 
 ### What silver drops, and the one thing it keeps
 
@@ -356,12 +394,20 @@ What it asserts, against the three acceptance criteria:
    the table in place and looks healthy from outside, while a constraint
    downgraded to a warning leaves violating rows in the current one. Only the
    second is visible here, and it is the one that is a lie.
-2. **Deduplication reduces and conserves.** Four numbers: fetched HTML responses
-   against distinct documents, and block occurrences against distinct facts —
-   each with its citation total, which must match the count before the
-   collapse. A corpus that happens to contain no duplicates at all passes
-   conservation and fails reduction, which is the right way round: it means the
-   harvest changed and somebody should look.
+2. **Deduplication reduces and conserves.** Fetched HTML responses against
+   distinct documents, and block occurrences against distinct facts — each with
+   its citation total, which must match the count before the collapse.
+
+   The two reductions are asserted differently, and the difference is the one
+   thing the live run changed here. The **document** reduction is an inequality:
+   more URLs fetched than documents kept. The **block** reduction is an
+   *equality*, against the distinct `(heading, text)` pairs recomputed in the
+   verify job from the text rather than from the digest the pipeline grouped on.
+   `distinct < occurrences` looks stronger and is weaker: it cannot tell a
+   `block_digest` that stopped collapsing anything from a corpus in which no
+   fact is published on two documents, and both produce the same number. The
+   equality tells them apart, and catches over-collapsing besides — which the
+   inequality never could.
 3. **Boilerplate removal, on a sample.** The ten most widely repeated blocks are
    printed, and the five worst are asserted against the 50 % threshold. Three
    whole documents are printed end to end underneath, which is the "inspect a
@@ -376,11 +422,133 @@ documents written into the test file — a page with a cookie banner, a nav, a
 footer and screen-reader-only text, and two item pages publishing the same
 nutrition sentence. Four block occurrences, three distinct facts, four citations.
 
-## 7. What this does not do
+## 7. What it did when it was run
 
-- **It has not been run.** See the status note at the top. The three acceptance
-  criteria are claims about a live system, and until `silver_verify` has returned
-  SUCCESS against `dbw-chip-chat` they are claims about an unrun pipeline.
+2026-08-26, against `dbw-chip-chat`, catalog `chip_chat`. The landing zone is
+the one `docs/bronze-ingestion.md` §6 describes, plus `catalog/chipotle/` and
+`parsed/chipotle/policy/`, seeded from the committed fixtures through the real
+writers.
+
+| Run | Result |
+| --- | --- |
+| `terraform apply`, targeted at the silver resources | 7 added, 2 changed — the pipeline, the verify job, three notebooks, `silver.py`, and bronze's fourteen new sources |
+| Bronze update `6079b5e4`, `--full-refresh` | **COMPLETED** — see "the schema that outlived its table" below |
+| Silver update `740e16df` | **COMPLETED**, 24 tables |
+| Verify job run `310675037690290` | **SUCCESS**, 398 s |
+| Silver update `39c116db`, re-run from the committed tree | **COMPLETED** |
+| Verify job run `885499660637937` | **SUCCESS** — every count identical |
+
+The last two are the same commit's notebooks against the same landing zone, and
+they are in the table because a materialized view recomputes in full every
+update: a second run returning a different number would mean the conformance is
+reading something that moved. It returned the same twenty-four.
+
+What landed:
+
+```
+chip_chat.silver_harvested                chip_chat.silver_synthetic
+      4  allergens                             500  demo_visitors
+      1  catalog_manifest                    32234  loyalty_ledger
+      5  caveats                             48767  order_items
+      8  document_blocks                     18898  orders
+      7  document_tables                        28  persona_fixtures
+      6  documents                               7  personas
+      8  faq_categories                          1  population_manifest
+     11  faq_entries
+     40  item_allergens
+     20  item_prices
+     10  menu_items
+     10  modifiers
+      2  policy_documents
+     10  policy_sections
+      3  rewards
+     30  stores
+      8  vocabulary
+```
+
+Every synthetic count is the number bronze-ingestion.md §6 recorded, to the row.
+Conformance cast money, resolved four foreign keys and deduplicated on the
+published key without losing one of 100,435 rows — which is the cheapest
+available evidence that the dedup partitions are identities and not display
+names.
+
+The corpus: **38 fetched HTML URLs → 6 distinct documents → 8 facts.** Thirty of
+those URLs are store-locator pages publishing one identical block, and three are
+`robots.txt` served as `text/html`; they collapse to two rows between them. The
+four that are left are `chipotle.com`, `/rewards`, `/rewards-terms` and
+`/allergens`. One further URL — the catering home page — carries no prose and is
+excluded, which is §4's rule earning its place on the first run rather than on a
+hypothetical one.
+
+Against the three acceptance criteria:
+
+- **Silver tables for both streams, expectations enforced.** All 24 exist and
+  hold rows, in both schemas, and every constraint re-run as a filter matched
+  nothing. The enforcement is not a claim about the code: four of the six
+  defects below were *found* by an expectation stopping the update, and a
+  fifth by the graph refusing to validate.
+- **Deduplication reduces and conserves.** 38 → 6 → 8, with citations equal to
+  occurrences at both levels and the excluded page counted rather than dropped.
+- **Boilerplate removal, on a sample.** No surviving block appears in more than
+  half the corpus; the most repeated blocks and three whole documents are in the
+  run's output.
+
+Plus the one the criteria do not name: silver holds one row per distinct
+`item_id` bronze landed.
+
+### The schema that outlived its table
+
+Every `chip_chat.bronze_synthetic` table arrived carrying 50 columns — the union
+of all seven files in `accounts/synthetic/` — so `order_items` had an all-null
+`demo_id` on it, `personas` had `line_total`, and so on. The data was right; the
+schema was not. `SELECT * EXCEPT (...)` then carried the spurious `demo_id` into
+silver, where the join off `orders` adds the real one, and the update failed
+graph validation before it read a row: *the column name(s) 'demo_id' are
+duplicated in dataset 'chip_chat.silver_synthetic.order_items'*.
+
+It is not a defect in the reader options. The fourteen sources #34 added use the
+identical `path` + `pathGlobFilter` mechanism over `catalog/chipotle/` (nine
+files) and `parsed/chipotle/policy/` (ten), and inferred cleanly on this same
+run — `menu_items` 22 columns, `catalog_manifest` 11, `rewards` 12.
+`bronze_ingest.py` and `autoloader_options` are byte-identical to what #33 ran.
+What is stale is the *state*: version 0 of each schema, written during #33's run
+without an effective glob.
+
+> ⚠️ **A full refresh does not reset an explicitly configured
+> `cloudFiles.schemaLocation`.** `schemaEvolutionMode = addNewColumns` widens
+> and never narrows, and the schema location is a path this repository chooses
+> rather than one the pipeline allocates — so a schema inferred wrong once
+> outlives every table built from it, and the ordinary remedy does not touch it.
+> Deleting `_autoloader/bronze_synthetic/*/_schemas` and re-running with
+> `--full-refresh` re-inferred all seven correctly. The file ledger is not in
+> there — DLT keeps its own — so this resets inference and nothing else.
+
+### The five declarations that were wrong
+
+Four of the five are `silver.py` disagreeing with the package it copied from;
+the first is the notebook, and is the one of the six a reader is most likely to
+write again. Each cost a cluster start to find, and none is reachable by
+`make ci` — which is the argument for this section existing.
+
+| Update | What stopped it | What was actually true |
+| --- | --- | --- |
+| `81d96b7d` | `ModuleNotFoundError: No module named 'silver'`, all three corpus flows | A UDF is cloudpickled and unpickled in a Python worker that never saw the driver's `sys.path`. A module global is pickled **by name**; the four UDFs now call a notebook-local `lib()` instead, so what crosses is a string and an import |
+| `45f3c011` | `line_total = unit_price * qty` | A line is `qty * (unit + modifiers)`. 24,592 of 48,767 rows carry a priced modifier. Now a floor, `>=` |
+| `7fbbd70c` | `says_something` on `documents` | `catering.chipotle.com` is fetched for its script bundle's address and is a 395-byte Vue shell. Not a document; excluded and bounded — §4 |
+| `59b85541` | `references_a_real_order_or_a_real_reward` | A redemption names **both** the reward and the order it was spent on. 13,684 of 32,234 rows |
+| `54bec6b9` | `every_term_resolves_to_an_item` | `item_ids` is empty by design for a vessel and a protein — each is half of an entree. 4 of 8 terms. Now `every_modifier_term_resolves_to_an_item`, exempting `silver.ENTREE_DERIVATIONS` |
+
+The two that were copied constants — the ledger's reasons and the vocabulary's
+derivations — are now asserted against `data-gen` and against
+`catalog.records.Derivation` in `test_silver.py`, so the next disagreement is a
+`make ci` failure rather than a cluster start.
+
+And one that was not a declaration at all: the verify job's own criterion 2
+asserted `distinct_blocks < occurrences`, which this corpus fails while working
+correctly. §6 says what replaced it and why the equality is the stronger claim.
+
+## 8. What this does not do
+
 - **No chunking.** [#35](https://github.com/gganssle/chip_chat/issues/35) takes
   `document_blocks` and `document_tables` and structures them for retrieval.
   Silver's job is to make sure there is nothing in them that should not be

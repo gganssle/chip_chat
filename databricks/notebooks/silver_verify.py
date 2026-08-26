@@ -19,7 +19,13 @@
 # MAGIC    distinct fact.** Two numbers, both computed: the reduction, and the
 # MAGIC    conservation. Citations after deduplication must equal occurrences
 # MAGIC    before it — that equality is the difference between removing a
-# MAGIC    duplicate and losing a source.
+# MAGIC    duplicate and losing a source. The reduction is asserted at the
+# MAGIC    document level as an inequality and at the block level as an
+# MAGIC    *equality* against the distinct `(heading, text)` pairs, recomputed
+# MAGIC    here from the text rather than from the digest the pipeline grouped
+# MAGIC    on. `distinct < occurrences` cannot tell a digest that stopped
+# MAGIC    collapsing anything from a corpus in which no fact is published on
+# MAGIC    two documents, and the seeded landing zone is the second of those.
 # MAGIC 3. **Boilerplate removal verified against a sample of chunks.** Furniture
 # MAGIC    is the text that is on nearly every page, so the assertion is that no
 # MAGIC    surviving block appears in more than `MAXIMUM_DOCUMENT_SHARE` of the
@@ -201,16 +207,34 @@ blocks = silver_name("harvested", "document_blocks")
 # Distinct requested_url, not row count: silver deduplicates the pointers on
 # that key before it extracts anything, so a landing zone that was ingested twice
 # would otherwise make conservation look broken when it is not.
-fetched = (
+fetched_urls = (
     spark.table(catalog.table(bronze.LAYER, "harvested", "raw_documents"))
     .where(f"NOT {silver.QUARANTINED}")
     .where(f"lower(content_type) LIKE '{silver.HTML_CONTENT_TYPE}%'")
     .selectExpr("requested_url")
     .distinct()
-    .count()
 )
+fetched = fetched_urls.count()
 distinct_documents = counts.get(documents, 0)
 cited = spark.table(documents).selectExpr(f"sum(size({silver.CITATION}))").first()[0]
+
+# Every fetched URL is either a citation on a document or a page that carried no
+# prose, and this is where the second of those stops being invisible. The corpus
+# excludes a proseless page rather than failing on it -- see
+# `silver.MAXIMUM_PROSELESS_SHARE` -- which is the only row removal in the layer
+# that does not stop an update, so it is counted, bounded and named here rather
+# than trusted. Conservation is then the whole of `fetched` accounted for, which
+# is a stronger statement than the citation total alone: a document that
+# silently lost a citation and a page that was silently dropped now look
+# different from each other.
+excluded_urls = fetched_urls.join(
+    spark.table(documents)
+    .selectExpr(f"explode({silver.CITATION}) AS citation")
+    .selectExpr("citation.requested_url AS requested_url"),
+    "requested_url",
+    "left_anti",
+)
+proseless = excluded_urls.count()
 
 check(
     distinct_documents < fetched,
@@ -218,10 +242,21 @@ check(
     f"{distinct_documents} distinct documents",
 )
 check(
-    cited == fetched,
-    f"{documents}: {cited} citations for {fetched} fetched URLs — "
-    "deduplication conserved every source",
+    cited + proseless == fetched,
+    f"{documents}: {cited} citations and {proseless} pages carrying no prose "
+    f"account for all {fetched} fetched URLs — deduplication lost no source",
 )
+check(
+    proseless <= fetched * silver.MAXIMUM_PROSELESS_SHARE,
+    f"{documents}: {proseless} of {fetched} fetched HTML URLs extracted to "
+    f"nothing, at or under the {silver.MAXIMUM_PROSELESS_SHARE:.0%} ceiling — "
+    "a stripper that had regressed would empty the corpus, not one page of it",
+)
+
+if proseless:
+    print()
+    print("  fetched, and carrying no prose — excluded from the corpus:")
+    excluded_urls.show(20, truncate=False)
 
 occurrences = spark.table(documents).selectExpr("sum(block_count)").first()[0]
 distinct_blocks = counts.get(blocks, 0)
@@ -229,10 +264,34 @@ block_citations = (
     spark.table(blocks).selectExpr(f"sum(size({silver.CITATION}))").first()[0]
 )
 
+# The block reduction is asserted as an EQUALITY against a number computed here
+# from `(heading, text)`, and never as `distinct < occurrences`. The inequality
+# looks stronger and is weaker, because it cannot tell the two things apart that
+# both produce `distinct == occurrences`: a `block_digest` that stopped
+# collapsing anything, and a corpus in which no fact is published on two
+# documents. The seeded landing zone is the second — thirty store pages carrying
+# one identical block collapse at the DOCUMENT level, and the six documents left
+# share nothing — so the inequality fails there on a pipeline that is working.
+#
+# Recomputing the grouping from the text itself makes that distinction, and
+# catches over-collapsing as well as under-collapsing, which the inequality
+# never could. `extract_blocks` emits normalised text, so the two agree by
+# construction; if they ever disagree it is the digest that moved.
+distinct_pairs = (
+    spark.table(documents)
+    .selectExpr("explode(blocks) AS block")
+    .selectExpr("block.heading AS heading", "block.text AS text")
+    .distinct()
+    .count()
+)
+collapsed = occurrences - distinct_blocks
+
 check(
-    distinct_blocks < occurrences,
+    distinct_blocks == distinct_pairs,
     f"{blocks}: {occurrences} block occurrences reduced to "
-    f"{distinct_blocks} distinct facts",
+    f"{distinct_blocks} distinct facts, which is exactly the "
+    f"{distinct_pairs} distinct (heading, text) pairs the corpus published — "
+    f"{collapsed} occurrence(s) collapsed",
 )
 check(
     block_citations == occurrences,

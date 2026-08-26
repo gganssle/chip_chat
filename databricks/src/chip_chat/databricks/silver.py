@@ -109,12 +109,14 @@ __all__ = [
     "DOCUMENT_FREQUENCY",
     "DROPPED",
     "EARN_REASON",
+    "ENTREE_DERIVATIONS",
     "EXPIRY_REASON",
     "HTML_CONTENT_TYPE",
     "INGESTED_AT",
     "LAYER",
     "MAIN_TAG",
     "MAXIMUM_DOCUMENT_SHARE",
+    "MAXIMUM_PROSELESS_SHARE",
     "MONEY",
     "QUARANTINED",
     "REASONS",
@@ -404,6 +406,28 @@ def _citation(table_name: str) -> Expectation:
 
 _CATALOGUE_CITATION: Final = ("source_url", "harvested_at")
 
+ENTREE_DERIVATIONS: Final[tuple[str, ...]] = ("ITEM_TYPE", "PRIMARY_FILLING")
+"""The two vocabulary derivations whose terms carry no ``item_ids``.
+
+Copied from ``chip_chat.catalog.records.Derivation`` for the reason every other
+constant here is copied — this module may not import a sibling — and asserted
+equal to the enum in ``test_silver.py``.
+
+They are load-bearing rather than decorative. A vocabulary term normally names
+a modifier and resolves to the identifiers Chipotle publishes it under, so an
+empty ``item_ids`` is a word the vision model can return and the matcher cannot
+resolve. These two are the documented exception: ``VocabularyTerm.item_ids`` is
+"empty for a term that is a property of an entree rather than a row of its
+own", because a vessel and a protein are each half of an entree and a described
+bowl of chicken resolves through ``(item_type, primary_filling)`` rather than
+through either half alone. Exempting them by name is what keeps the expectation
+fatal for the terms it is actually about.
+"""
+
+_ENTREE_DERIVATION_SQL: Final = ", ".join(
+    f"'{derivation}'" for derivation in ENTREE_DERIVATIONS
+)
+
 _MENU_ITEM_REFERENCE: Final = Reference(
     column="item_id",
     stream="harvested",
@@ -614,12 +638,23 @@ _HARVESTED: Final[tuple[Table, ...]] = (
         expectations=(
             _citation("vocabulary"),
             Expectation(
-                name="every_term_resolves_to_an_item",
-                constraint="size(item_ids) > 0",
+                name="every_modifier_term_resolves_to_an_item",
+                constraint=(
+                    f"derivation IN ({_ENTREE_DERIVATION_SQL}) OR size(item_ids) > 0"
+                ),
                 why=(
                     "the vision model's enums are generated from this table, "
-                    "so a term with nothing behind it is a word the model can "
-                    "return and the matcher cannot resolve"
+                    "so a modifier term with nothing behind it is a word the "
+                    "model can return and the matcher cannot resolve. The two "
+                    "entree derivations are exempt because their emptiness is "
+                    "the catalogue's design and not a gap: VocabularyTerm."
+                    "item_ids is 'empty for a term that is a property of an "
+                    "entree rather than a row of its own', and a described "
+                    "bowl of chicken resolves through (item_type, "
+                    "primary_filling) rather than through either half alone. "
+                    "Written as size(item_ids) > 0 it fails four of the eight "
+                    "published terms — every vessel and every protein — on "
+                    "dbw-chip-chat, 2026-08-26"
                 ),
             ),
         ),
@@ -949,12 +984,20 @@ _SYNTHETIC: Final[tuple[Table, ...]] = (
         references=(_ORDER_REFERENCE, _MENU_ITEM_REFERENCE),
         expectations=(
             Expectation(
-                name="line_total_is_the_unit_price_times_the_quantity",
-                constraint="line_total = unit_price * qty",
+                name="line_total_is_at_least_the_unit_price_times_the_quantity",
+                constraint="line_total >= unit_price * qty",
                 why=(
-                    "with the arithmetic checked, orders.total is a number a "
-                    "reviewer can re-derive; without it, 'prices computed from "
-                    "the catalogue rather than invented' is a claim"
+                    "a line is priced qty * (unit price + every modifier's own "
+                    "published price), and a modifier the catalogue prices at "
+                    "zero is free — so the item price is a floor the total may "
+                    "sit above and can never sit below. Written as equality it "
+                    "fails every line carrying a priced modifier, which is half "
+                    "of them: 24,592 of 48,767 on dbw-chip-chat, 2026-08-26. "
+                    "The full identity needs the modifier prices summed over an "
+                    "array, which is a join and an aggregate rather than a "
+                    "column expression; data-gen asserts it against the "
+                    "catalogue in test_referential_integrity.py, and gh-34's "
+                    "write-up says so rather than implying silver re-derives it"
                 ),
             ),
             Expectation(
@@ -1028,7 +1071,7 @@ _SYNTHETIC: Final[tuple[Table, ...]] = (
                     f"(reason = '{EARN_REASON}' AND order_id IS NOT NULL "
                     "AND reward_name IS NULL) OR "
                     f"(reason = '{REDEEM_REASON}' AND reward_name IS NOT NULL "
-                    "AND order_id IS NULL) OR "
+                    "AND order_id IS NOT NULL) OR "
                     f"(reason IN ('{SEED_REASON}', '{EXPIRY_REASON}') "
                     "AND order_id IS NULL AND reward_name IS NULL)"
                 ),
@@ -1037,7 +1080,15 @@ _SYNTHETIC: Final[tuple[Table, ...]] = (
                     "earned on an order or spent on a reward; the only two "
                     "movements that reference neither are an opening balance "
                     "and an expiry, and they are named rather than left as a "
-                    "hole the check falls through"
+                    "hole the check falls through. A redemption references "
+                    "BOTH — loyalty.py writes `order.order_id` beside the "
+                    "reward's name because points are spent at the till, on "
+                    "the visit that earned on them, and LoyaltyEntry.order_id "
+                    "says so: 'a redemption names the order it was spent on'. "
+                    "Written as `order_id IS NULL` it fails every redemption "
+                    "in the population — 13,684 of 32,234 on dbw-chip-chat, "
+                    "2026-08-26 — and would delete the link #27 reconciles "
+                    "earned points against"
                 ),
             ),
             Expectation(
@@ -1382,6 +1433,33 @@ same nutrition figure on three pages — is exactly what deduplication is
 *supposed* to collapse into one row with several citations, and the threshold
 must not turn that success into a failure. Furniture does not appear on half a
 site; it appears on all of it.
+"""
+
+MAXIMUM_PROSELESS_SHARE: Final = 0.25
+"""How much of the fetched HTML may extract to no prose at all.
+
+**Not every HTML response the harvest cached is a document.** Some pages are
+fetched for a machine-readable value rather than for what they say:
+``chipotle.policy.CATERING_URL`` is read "for the address of its script bundle,
+nothing else", and what comes back is a 395-byte Vue shell — a ``<title>``, a
+``<noscript>``, an empty ``<div id="app">`` and two ``<script>`` tags. Every
+one of those is furniture by the list above, correctly, so the page extracts to
+nothing. It is not a failure to be quarantined and not a stripper bug; it is a
+page with no prose in it, and the fetch-once cache holds it because everything
+the harvest fetches goes through the cache.
+
+So a response that yields no prose is **not a document** and does not enter the
+corpus. That exclusion is the one thing in this layer that removes a row
+without failing, which is exactly the shape this module refuses everywhere
+else — so it is bounded rather than trusted. A stripper that regressed would
+empty most of the corpus rather than one page of it, and the verify job
+asserts against this share and prints every URL it excluded, by name. One in
+thirty-eight on ``dbw-chip-chat``, 2026-08-26.
+
+A quarter is the same kind of generous as :data:`MAXIMUM_DOCUMENT_SHARE`: high
+enough that a handful of client-rendered pages joining the seed list is not a
+failure, low enough that a `<main>` rule or a tag list gone wrong cannot hide
+behind it.
 """
 
 _HEADINGS: Final[frozenset[str]] = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
@@ -1923,19 +2001,13 @@ CORPUS: Final[tuple[Corpus, ...]] = (
             "chip_chat.databricks.silver rather than inferred. Every URL that "
             "served this text is in `citations`; source_url and harvested_at "
             "are the most recent of them, promoted so a chunk can cite itself "
-            "with one field. Built by gh-34."
+            "with one field. A fetched page that carries no prose at all is "
+            "not a document and is not here — see MAXIMUM_PROSELESS_SHARE, "
+            "which is the bound the verify job holds that exclusion to. "
+            "Built by gh-34."
         ),
         expectations=(
             _CORPUS_CITATION,
-            Expectation(
-                name="says_something",
-                constraint="character_count > 0",
-                why=(
-                    "a document that extracted to nothing is a redirect stub "
-                    "or a consent interstitial, and a corpus that keeps it "
-                    "keeps noise with a citation attached"
-                ),
-            ),
             Expectation(
                 name="keeps_every_url_that_served_it",
                 constraint=f"size({CITATION}) > 0",

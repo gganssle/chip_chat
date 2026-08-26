@@ -197,6 +197,45 @@ for _table in silver.TABLES:
 
 # COMMAND ----------
 
+
+def lib():
+    """Return the ``silver`` module, importable in whichever process is asking.
+
+    ⚠️ **A UDF body may not close over an imported module.** The `sys.path`
+    entry added at the top of this notebook belongs to the *driver*. A Python
+    UDF is cloudpickled and unpickled inside a Python worker — a separate
+    process, forked from a daemon the cluster started before this notebook ran
+    — and cloudpickle serializes a module global **by name**, emitting a bare
+    `__import__("silver")` that the worker cannot satisfy. The failure is
+    `ModuleNotFoundError: No module named 'silver'` inside a
+    `SerializationError`, at the first row rather than at declaration, so the
+    graph validates and the flow dies. Observed on `dbw-chip-chat`, 2026-08-26
+    (gh-34), on the three corpus flows at once.
+
+    Calling this instead keeps the module out of the closure: `LIB_PATH` is a
+    string and is pickled by value, and a function defined in a notebook is
+    pickled by value too, so what reaches the worker is the path and the import
+    rather than a name it has to resolve.
+
+    This is the same uploaded workspace file, on the same `sys.path`, and it
+    stays true that the file pytest imports is the file that runs — the
+    arrangement `bronze_ingest.py` describes, extended to the one layer that
+    has UDFs at all.
+
+    Returns:
+        The ``silver`` declarations module.
+    """
+    import sys
+
+    if LIB_PATH not in sys.path:
+        sys.path.insert(0, LIB_PATH)
+    import silver
+
+    return silver
+
+
+# COMMAND ----------
+
 _BLOCK = StructType(
     [
         StructField("position", IntegerType()),
@@ -225,8 +264,8 @@ def extract_blocks(body):
     A body that will not decode as UTF-8 returns nothing rather than raising.
     That is not leniency about bad data — bronze already quarantined anything
     that failed to parse, and a mis-encoded HTML page is a fact about the
-    publisher. It arrives here as a document with no blocks, fails the
-    `says_something` expectation, and stops the pipeline with the row in hand.
+    publisher. It arrives here as a document with no blocks, which `_documents`
+    excludes from the corpus and `silver_verify` counts and prints by URL.
     """
     if body is None:
         return []
@@ -234,23 +273,25 @@ def extract_blocks(body):
         document = bytes(body).decode("utf-8")
     except UnicodeDecodeError:
         return []
+    module = lib()
     return [
         {
             "position": block.position,
             "heading": block.heading,
             "text": block.text,
-            "block_sha256": silver.block_digest(block.heading, block.text),
+            "block_sha256": module.block_digest(block.heading, block.text),
         }
-        for block in silver.extract_blocks(document)
+        for block in module.extract_blocks(document)
     ]
 
 
 @F.udf(returnType=StringType())
 def text_sha256(blocks):
     """Return the digest of a document's extracted prose."""
-    return silver.text_digest(
+    module = lib()
+    return module.text_digest(
         tuple(
-            silver.Block(
+            module.Block(
                 position=row["position"], heading=row["heading"], text=row["text"]
             )
             for row in (blocks or ())
@@ -261,13 +302,13 @@ def text_sha256(blocks):
 @F.udf(returnType=ArrayType(StringType()))
 def analysis_paragraphs(result):
     """Return the prose paragraphs of one Document Intelligence result."""
-    return list(silver.analysis_paragraphs(result)) if result else []
+    return list(lib().analysis_paragraphs(result)) if result else []
 
 
 @F.udf(returnType=ArrayType(_TABLE_ROW))
 def analysis_table_rows(result):
     """Return every extracted table row, whole, with its column headings."""
-    return list(silver.analysis_table_rows(result)) if result else []
+    return list(lib().analysis_table_rows(result)) if result else []
 
 
 def harvested_documents():
@@ -364,8 +405,24 @@ def _blocks_text(blocks):
     {e.name: e.constraint for e in silver.corpus("documents").expectations}
 )
 def _documents():
-    extracted = harvested_documents().withColumn(
-        silver.TEXT_SHA256, text_sha256("blocks")
+    # ⚠️ **A fetched page that carries no prose is not a document.** Some pages
+    # are fetched for a machine-readable value rather than for what they say —
+    # `chipotle.policy.CATERING_URL` is read "for the address of its script
+    # bundle, nothing else" — and what comes back is a Vue shell whose every
+    # element is furniture by the tag list. It extracts to nothing, correctly.
+    # Left in, it fails `says_something` and stops the whole layer over a page
+    # nobody wanted the text of; the expectation is therefore gone and this
+    # filter is in its place. It is the one row this pipeline removes without
+    # failing, so `silver_verify` bounds it against
+    # `silver.MAXIMUM_PROSELESS_SHARE` and prints every URL it excluded: a
+    # stripper that regressed would empty the corpus rather than one page of
+    # it. Observed on `dbw-chip-chat`, 2026-08-26 (gh-34).
+    extracted = (
+        harvested_documents()
+        .withColumn("block_count", F.size("blocks"))
+        .where("block_count > 0")
+        .drop("block_count")
+        .withColumn(silver.TEXT_SHA256, text_sha256("blocks"))
     )
     grouped = extracted.groupBy(silver.TEXT_SHA256).agg(
         F.sort_array(
