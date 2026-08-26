@@ -401,3 +401,22 @@ def test_an_enormous_message_is_refused_before_anything_else(
     """The cheapest possible bound on prompt tokens: never reach the model."""
     assert client.post("/api/chat", json={"message": "x" * 5_000}).status_code == 422
     assert model.call_count == 0
+
+
+def test_a_bogus_confirmation_announces_nothing_and_places_nothing(
+    limits: SpendLimits,
+) -> None:
+    """The note is written only if the desk really confirmed something.
+
+    A visitor who posts an id that is not theirs gets no note, and place_order
+    refuses them anyway -- the desk is the gate, the note is a hint.
+    """
+    model = ScriptedModel(answer("There is no such draft."))
+    service = Service(SpendGate(SpendGuard(limits), lambda: model))
+    with TestClient(create_app(service)) as client:
+        body = say(client, "yes", confirm_draft_id="draft-not-mine").json()
+    assert body["receipt"] is False
+    assert not any(
+        "pressed Confirm" in str(message.get("content", ""))
+        for message in model.requests[0]
+    )

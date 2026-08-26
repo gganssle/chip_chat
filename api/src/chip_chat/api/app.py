@@ -309,14 +309,15 @@ def _run_turn(
     sequence of statements anybody can read top to bottom.
     """
     session_id = conversation.session_id
-    with chat_turn(
-        session_id=session_id,
-        turn_index=conversation.next_turn_index(),
-        message=body.message,
-        persona_id=ACCOUNT.persona_id,
-    ) as turn, service.gate.turn(
-        session_id=session_id, source_address=source_address
-    ) as funded:
+    with (
+        chat_turn(
+            session_id=session_id,
+            turn_index=conversation.next_turn_index(),
+            message=body.message,
+            persona_id=ACCOUNT.persona_id,
+        ) as turn,
+        service.gate.turn(session_id=session_id, source_address=source_address) as funded,
+    ):
         if isinstance(funded, Stop):
             # A Stop has no `run`. The refused branch could not call a model
             # if it tried, which is why this is an `isinstance` and not a

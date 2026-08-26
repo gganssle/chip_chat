@@ -155,9 +155,20 @@ variable "web_min_replicas" {
 }
 
 variable "web_max_replicas" {
-  description = "Ceiling on replicas. Low on purpose — this is a demo, and scale-out is spend."
+  description = <<-EOT
+    Ceiling on replicas. ONE, and not for cost.
+
+    The spend cap's counters are process-local (api/README.md, "What is not here
+    yet"). Two replicas are two ledgers, so the daily token ceiling would mean
+    twice what it says and the per-session cap would apply to whichever replica
+    happened to answer. A ceiling that silently doubles under load is not a
+    ceiling.
+
+    Raise this only once BudgetLedger and SourceRateLimiter are behind a shared
+    store. The container also runs a single uvicorn worker for the same reason.
+  EOT
   type        = number
-  default     = 2
+  default     = 1
 }
 
 variable "web_image" {

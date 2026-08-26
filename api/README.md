@@ -89,7 +89,7 @@ with chat_turn(session_id=sid, turn_index=n, message=text) as turn:
     with gate.turn(session_id=sid, source_address=ip) as funded:
         if isinstance(funded, Stop):
             return stop_state_response(funded.message)  # 200, not an error
-        result = funded.run(conversation, text)          # settles its own tokens
+        result = funded.run(conversation, text)  # settles its own tokens
 ```
 
 `guard.budget_check` is a child of `chat.turn`, so `SpendGate.turn` must be

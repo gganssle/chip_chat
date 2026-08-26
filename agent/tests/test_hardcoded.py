@@ -23,7 +23,7 @@ def test_prices_are_decimals() -> None:
 
 
 def test_summary_names_allergens_even_when_there_are_none() -> None:
-    """"Allergens: none declared" is an answer; a missing line is not."""
+    """ "Allergens: none declared" is an answer; a missing line is not."""
     assert "none declared" in MENU["SIDE-GUACAMOLE"].summary()
     assert "milk" in MENU["BOWL-CHICKEN"].summary()
 
@@ -35,7 +35,7 @@ def test_search_finds_an_item_by_a_word_from_its_description() -> None:
 
 
 def test_search_finds_an_item_by_a_word_nobody_put_in_the_name() -> None:
-    """"guac" is what a visitor types; "Guacamole" is what the menu says."""
+    """ "guac" is what a visitor types; "Guacamole" is what the menu says."""
     hits = search_menu("can I get guac")
     assert [item.item_id for item, _ in hits] == ["SIDE-GUACAMOLE"]
 

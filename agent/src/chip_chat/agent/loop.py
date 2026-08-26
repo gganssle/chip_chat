@@ -32,6 +32,7 @@ from chip_chat.agent.tools import TOOL_SCHEMAS, dispatch
 from chip_chat.otel import Message, ToolName, agent_step, llm_completion
 
 __all__ = [
+    "CONFIRMATION_NOTE",
     "DEFAULT_MAX_STEPS",
     "SYSTEM_PROMPT",
     "Conversation",
@@ -50,6 +51,23 @@ amount against a fixed reservation -- which is the one way the ceiling in
 
 _PROVIDER = "azure"
 _SYSTEM = "openai"
+
+CONFIRMATION_NOTE = (
+    "The visitor has just pressed Confirm on draft {draft_id}. It is now "
+    "confirmed and place_order will succeed. Call place_order with that "
+    "draft_id now; do not ask them to press Confirm again."
+)
+"""What the model is told when a draft has actually been confirmed.
+
+The model cannot see the button and has no other way to learn that it was
+pressed -- and having been refused once, it will go on refusing, politely and
+forever, which is exactly what the first deployed run of this slice did.
+
+Read what this is and is not. It is a *hint*, written by the server, only after
+:meth:`chip_chat.agent.orders.OrderDesk.confirm` actually confirmed the draft.
+It is not the enforcement: a visitor who posts somebody else's draft id gets no
+note and no confirmation, and ``place_order`` refuses them either way. Deleting
+this string would make the agent unhelpful; it would not make it unsafe."""
 
 _MENU_LINES = "\n".join(
     f"  {item.item_id} - {item.name} (${item.unit_price})" for item in MENU.values()
@@ -137,6 +155,7 @@ def run_turn(
     *,
     model: ChatModel,
     desk: OrderDesk,
+    confirmed_draft_id: str | None = None,
     max_steps: int = DEFAULT_MAX_STEPS,
 ) -> TurnResult:
     """Run one visitor message to an answer.
@@ -148,12 +167,23 @@ def run_turn(
         message: What the visitor said.
         model: The chat model to call.
         desk: The order desk holding this session's drafts.
+        confirmed_draft_id: A draft the desk has *already* confirmed. The model
+            is told, because it cannot see the button. See
+            :data:`CONFIRMATION_NOTE` for why telling it is not the same as
+            trusting it.
         max_steps: Round trips before the loop gives up. See
             :data:`DEFAULT_MAX_STEPS` for why it is a spend control.
 
     Returns:
         The reply, the tokens it cost across every round trip, and any card.
     """
+    if confirmed_draft_id:
+        conversation.messages.append(
+            {
+                "role": "system",
+                "content": CONFIRMATION_NOTE.format(draft_id=confirmed_draft_id),
+            }
+        )
     conversation.messages.append({"role": "user", "content": message})
     prompt_tokens = 0
     completion_tokens = 0

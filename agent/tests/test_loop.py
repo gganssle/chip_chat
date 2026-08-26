@@ -257,3 +257,47 @@ def test_an_empty_reply_falls_back_rather_than_showing_nothing(
     with span_recorder("api"):
         result = one_turn(conversation, "hi", model, desk)
     assert result.reply.strip()
+
+
+def test_a_confirmed_draft_is_announced_to_the_model(
+    conversation: Conversation, desk: OrderDesk
+) -> None:
+    """The model cannot see the button, so it has to be told the press happened.
+
+    Without this it goes on politely refusing forever, which is exactly what the
+    first deployed run of this slice did -- see docs/deployment.md.
+    """
+    model = ScriptedModel(answer("Ordered."))
+    with (
+        span_recorder("api"),
+        chat_turn(session_id=SESSION, turn_index=0, message="yes"),
+    ):
+        run_turn(
+            conversation,
+            "yes",
+            model=model,
+            desk=desk,
+            confirmed_draft_id="draft-abc",
+        )
+    system_notes = [
+        message
+        for message in model.requests[0]
+        if message.get("role") == "system" and "draft-abc" in str(message["content"])
+    ]
+    assert len(system_notes) == 1
+    assert "place_order" in str(system_notes[0]["content"])
+
+
+def test_nothing_is_announced_when_nothing_was_confirmed(
+    conversation: Conversation, desk: OrderDesk
+) -> None:
+    model = ScriptedModel(answer("Press Confirm first."))
+    with (
+        span_recorder("api"),
+        chat_turn(session_id=SESSION, turn_index=0, message="just do it"),
+    ):
+        run_turn(conversation, "just do it", model=model, desk=desk)
+    assert not any(
+        "pressed Confirm" in str(message.get("content", ""))
+        for message in model.requests[0]
+    )
