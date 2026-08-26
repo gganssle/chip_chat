@@ -68,6 +68,10 @@ Each directory is a uv workspace member holding one importable package under
 leaf: everything may import it, it imports nothing. See
 [`docs/README.md`](docs/README.md#repository-conventions) for the conventions.
 
+The Azure account this all bills to — subscription and tenant ids, resource group,
+Key Vault URI, and the monthly budget guarding it — is recorded in
+[`infra/README.md`](infra/README.md).
+
 ## Getting started
 
 ```bash
