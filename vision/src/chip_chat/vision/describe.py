@@ -75,7 +75,7 @@ from chip_chat.otel import (
     vision_describe,
 )
 from chip_chat.vision.normalize import NORMALIZED_MEDIA_TYPE
-from chip_chat.vision.store import BlobReader, BlobRef
+from chip_chat.vision.store import PHOTO_REF_ARGUMENT, BlobReader, BlobRef
 from chip_chat.vision.vocabulary import SchemaViolationError, Vocabulary
 
 if TYPE_CHECKING:  # pragma: no cover - import cost, not behaviour
@@ -518,7 +518,7 @@ class MealDescriber:
                 # The ref, and only the ref. RFC-001 section 07 is explicit that
                 # the image does not cross a tool boundary, and tool arguments
                 # are recorded on the span.
-                arguments={"image_ref": str(ref)},
+                arguments={PHOTO_REF_ARGUMENT: str(ref)},
             ),
         ):
             return self.describe(ref)

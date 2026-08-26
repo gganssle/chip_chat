@@ -182,6 +182,7 @@ from chip_chat.vision.retention import (
     RETENTION_NOTICE_LONG,
 )
 from chip_chat.vision.store import (
+    PHOTO_REF_ARGUMENT,
     AzureBlobStore,
     BlobReader,
     BlobRef,
@@ -201,6 +202,7 @@ __all__ = [
     "DESCRIBE_UNAVAILABLE_MESSAGE",
     "NORMALIZED_MEDIA_TYPE",
     "NOTHING_SEEN",
+    "PHOTO_REF_ARGUMENT",
     "REQUIRED_SLOTS",
     "RETENTION_CEILING_HOURS",
     "RETENTION_NOTICE",

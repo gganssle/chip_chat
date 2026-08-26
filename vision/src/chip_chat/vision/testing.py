@@ -61,7 +61,7 @@ from chip_chat.vision.describe import MealDescriber, VisionAnswer
 from chip_chat.vision.lane import PhotoLane
 from chip_chat.vision.matcher import MealMatcher
 from chip_chat.vision.moderation import ModerationUnavailableError, SafetyCategory
-from chip_chat.vision.store import BlobRef
+from chip_chat.vision.store import PHOTO_REF_ARGUMENT, BlobRef
 from chip_chat.vision.vocabulary import Vocabulary
 
 __all__ = [
@@ -762,7 +762,10 @@ def photo_tool_call(ref: BlobRef | str, *, step: int = 0) -> Iterator[None]:
     """
     with (
         agent_step(index=step),
-        tool_call(ToolName.MATCH_MEAL_FROM_PHOTO, arguments={"image_ref": str(ref)}),
+        tool_call(
+            ToolName.MATCH_MEAL_FROM_PHOTO,
+            arguments={PHOTO_REF_ARGUMENT: str(ref)},
+        ),
     ):
         yield
 

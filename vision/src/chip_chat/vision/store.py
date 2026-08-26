@@ -42,6 +42,7 @@ if TYPE_CHECKING:  # pragma: no cover - import cost, not behaviour
 __all__ = [
     "ACCOUNT_VARIABLE",
     "CONTAINER_VARIABLE",
+    "PHOTO_REF_ARGUMENT",
     "AzureBlobStore",
     "BlobReader",
     "BlobRef",
@@ -54,6 +55,19 @@ ACCOUNT_VARIABLE = "AZURE_STORAGE_ACCOUNT"
 
 CONTAINER_VARIABLE = "AZURE_UPLOADS_CONTAINER"
 """The uploads container name, set by the same file. ``uploads`` in practice."""
+
+PHOTO_REF_ARGUMENT = "blob_ref"
+"""What ``match_meal_from_photo`` calls its one argument.
+
+The name has to match the parameter
+:mod:`chip_chat.agent.surface` declares, because tool arguments are recorded on
+the tool span and Phase 9's tool-selection evals read them: two names for one
+argument is two vocabularies for one tool, which is the whole class of problem
+the span schema exists to prevent. It lives here rather than in ``agent/``
+because ``vision/`` cannot import back into ``agent/`` -- see
+:mod:`chip_chat.vision.describe` on why that direction is one-way --  and
+``agent/tests/test_photo_tool.py`` is where the two are asserted equal.
+"""
 
 
 @dataclass(frozen=True, slots=True)

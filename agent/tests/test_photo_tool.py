@@ -32,6 +32,7 @@ from chip_chat.agent.loop import (
 )
 from chip_chat.agent.model import ToolInvocation
 from chip_chat.agent.orders import OrderDesk
+from chip_chat.agent.surface import spec
 from chip_chat.agent.testing import ScriptedModel, answer
 from chip_chat.agent.tools import (
     PHOTO_UNAVAILABLE_MESSAGE,
@@ -44,6 +45,7 @@ from chip_chat.otel import ChipChatAttributes, ToolName, agent_step, chat_turn
 from chip_chat.otel.testing import SpanRecorder, span_recorder
 from chip_chat.vision.describe import DescribeUnavailableError
 from chip_chat.vision.lane import PhotoLane
+from chip_chat.vision.store import PHOTO_REF_ARGUMENT
 from chip_chat.vision.testing import (
     CONFIDENT_MEAL,
     STUB_PHOTO_REF,
@@ -72,7 +74,7 @@ def run(
     invocation = ToolInvocation(
         call_id="c1",
         name=ToolName.MATCH_MEAL_FROM_PHOTO.value,
-        arguments={"blob_ref": blob_ref},
+        arguments={PHOTO_REF_ARGUMENT: blob_ref},
     )
     with (
         span_recorder("agent") as spans,
@@ -104,7 +106,26 @@ def test_the_photo_tool_takes_a_reference_and_nothing_else(lane: PhotoLane) -> N
         for definition in offered_schemas(lane=lane)
         if definition["function"]["name"] == ToolName.MATCH_MEAL_FROM_PHOTO.value
     )
-    assert set(schema["function"]["parameters"]["properties"]) == {"blob_ref"}
+    assert set(schema["function"]["parameters"]["properties"]) == {PHOTO_REF_ARGUMENT}
+
+
+def test_the_surface_and_the_lane_agree_on_the_arguments_name() -> None:
+    """One tool, one argument name, in both packages that write it on a span.
+
+    ``vision/`` records the argument on ``tool.match_meal_from_photo`` for its
+    own callers -- a batch evaluation, a script -- and ``agent/`` reads it from
+    the surface for the model's calls. It cannot import back into ``agent/`` to
+    find out what it is called, so the name is a constant there and this is what
+    fails if the surface renames the parameter. Two names for one argument is
+    two vocabularies for one tool, and Phase 9's tool-selection evals read
+    exactly this attribute.
+    """
+    declared = set(
+        spec(ToolName.MATCH_MEAL_FROM_PHOTO).as_tool_definition()["function"][
+            "parameters"
+        ]["properties"]
+    )
+    assert declared == {PHOTO_REF_ARGUMENT}
 
 
 # --- what comes back --------------------------------------------------------

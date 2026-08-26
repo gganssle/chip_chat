@@ -42,7 +42,7 @@ from chip_chat.otel import (
 )
 from chip_chat.vision.describe import Description, MealDescriber
 from chip_chat.vision.matcher import MealMatcher, Resolution
-from chip_chat.vision.store import BlobRef
+from chip_chat.vision.store import PHOTO_REF_ARGUMENT, BlobRef
 
 __all__ = ["PhotoLane", "PhotoMatch"]
 
@@ -159,7 +159,7 @@ class PhotoLane:
                 # The ref, and only the ref: RFC-001 section 07 is explicit that
                 # the image itself does not cross a tool boundary, and tool
                 # arguments are recorded on the span.
-                arguments={"image_ref": str(ref)},
+                arguments={PHOTO_REF_ARGUMENT: str(ref)},
             ) as recorder,
         ):
             match = self.match(ref)

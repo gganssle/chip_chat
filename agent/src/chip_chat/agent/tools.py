@@ -72,7 +72,7 @@ from chip_chat.otel.spans import ToolRecorder
 from chip_chat.vision.describe import DescribeError
 from chip_chat.vision.lane import PhotoLane, PhotoMatch
 from chip_chat.vision.matcher import Outcome, Resolution
-from chip_chat.vision.store import BlobRef
+from chip_chat.vision.store import PHOTO_REF_ARGUMENT, BlobRef
 
 __all__ = [
     "PHOTO_UNAVAILABLE_MESSAGE",
@@ -308,7 +308,9 @@ def _run(
         case ToolName.PLACE_ORDER:
             return _place_order(str(arguments.get("draft_id", "")), session_id, desk)
         case ToolName.MATCH_MEAL_FROM_PHOTO if lane is not None:
-            return _match_meal_from_photo(str(arguments.get("blob_ref", "")), lane)
+            return _match_meal_from_photo(
+                str(arguments.get(PHOTO_REF_ARGUMENT, "")), lane
+            )
         case _:  # pragma: no cover - dispatch refuses these before _run is reached
             return _not_implemented(tool, lane=lane)
 
