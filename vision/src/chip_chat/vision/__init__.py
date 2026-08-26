@@ -1,10 +1,11 @@
-"""Photo pipeline: validate, moderate, describe, match.
+"""Photo pipeline: validate, moderate, describe, match, answer.
 
 Six stages, and RFC-001 section 07 is explicit that their ordering is the
 design. Moderation happens before inference so nothing unmoderated reaches a
 model; SKU resolution happens after inference so no model output is trusted as
-a product identifier. What lives here today is stages 0 to 5 -- the whole path
-from a hostile upload to a draft of real catalogue rows:
+a product identifier. What lives here today is stages 0 to 5 plus the sentence
+stage 5 hands to the visitor -- the whole path from a hostile upload to a draft
+of real catalogue rows, or to the question or the offer that replaces one:
 
 =========== ================================================= ==================
 Stage       What it does                                      Where
@@ -15,8 +16,13 @@ Stage       What it does                                      Where
 3 Moderate  Content Safety, then the write                    ``moderation``
 4 Describe  Structured slots, no free text                    ``describe``
 5 Resolve   Deterministic catalogue match                     ``matcher``
+5 Answer    The sentence the visitor reads                     ``reply``
 6 Propose   Priced, confirmable draft                         issue #62
 =========== ================================================= ==================
+
+``reply`` shares stage 5's number because it is not a stage: it names no item
+the matcher did not resolve, and it is what issue #55 adds on top of a
+:class:`~chip_chat.vision.matcher.Resolution`.
 
 The first four decide whether a hostile upload ever reaches a model, so they are
 written to be the boring part: no inference, one entry point, and an order it
@@ -93,9 +99,21 @@ it. A required slot below its floor becomes a question rather than a guess. See
     resolution = matcher.resolve(          # the meal. There are no notes on it.
         description.meal, content_version=description.content_version
     )
+
+**The three photographs that are not the happy path each have a behaviour.**
+Food this restaurant does not serve is told so *and* offered the closest thing
+it does; a component the model was unsure of becomes a question naming that
+slot; several meals in one frame become a count and a question, never a draft.
+:func:`~chip_chat.vision.reply.reply_for` is total over the four outcomes, and
+holds no catalogue -- every food word in what it says came off a row the matcher
+resolved. See :mod:`chip_chat.vision.reply`.
+
+.. code-block:: python
+
+    answer = reply_for(resolution)
+    say(answer.text)                       # every menu word in it is a real row
     if resolution.resolved:
-        return card(resolution.items(), resolution.total())
-    return ask(resolution)                 # issue #55 writes the sentence
+        card(answer.items, resolution.total())   # issue #62
 """
 
 from chip_chat.otel import service_name
@@ -117,6 +135,7 @@ from chip_chat.vision.describe import (
 from chip_chat.vision.intake import PhotoIntake, StoredPhoto
 from chip_chat.vision.limits import SUPPORTED_MEDIA_TYPES, UploadLimits
 from chip_chat.vision.matcher import (
+    NOTHING_SEEN,
     REQUIRED_SLOTS,
     CatalogueDriftError,
     Clarification,
@@ -126,6 +145,7 @@ from chip_chat.vision.matcher import (
     Outcome,
     Resolution,
     ResolvedItem,
+    SeenSlot,
     SlotRule,
     SlotRules,
 )
@@ -146,6 +166,13 @@ from chip_chat.vision.reader import (
     content_length,
     read_upload,
     read_upload_async,
+)
+from chip_chat.vision.reply import (
+    SLOT_NOUNS,
+    Reply,
+    ReplyKind,
+    reply_for,
+    slot_noun,
 )
 from chip_chat.vision.retention import (
     RETENTION_CEILING_HOURS,
@@ -171,12 +198,14 @@ from chip_chat.vision.vocabulary import SchemaViolationError, Vocabulary, Vocabu
 __all__ = [
     "DESCRIBE_UNAVAILABLE_MESSAGE",
     "NORMALIZED_MEDIA_TYPE",
+    "NOTHING_SEEN",
     "REQUIRED_SLOTS",
     "RETENTION_CEILING_HOURS",
     "RETENTION_NOTICE",
     "RETENTION_NOTICE_LONG",
     "SERVICE_NAME",
     "SEVERITY_LEVELS",
+    "SLOT_NOUNS",
     "SUPPORTED_MEDIA_TYPES",
     "SYSTEM_PROMPT",
     "AsyncByteStream",
@@ -208,10 +237,13 @@ __all__ = [
     "Outcome",
     "PhotoIntake",
     "RejectionReason",
+    "Reply",
+    "ReplyKind",
     "Resolution",
     "ResolvedItem",
     "SafetyCategory",
     "SchemaViolationError",
+    "SeenSlot",
     "SlotRule",
     "SlotRules",
     "SlotValue",
@@ -229,7 +261,9 @@ __all__ = [
     "normalize",
     "read_upload",
     "read_upload_async",
+    "reply_for",
     "service_name",
+    "slot_noun",
     "sniff",
     "validate",
 ]
