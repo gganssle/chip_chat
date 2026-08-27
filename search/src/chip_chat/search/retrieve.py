@@ -249,6 +249,10 @@ class Retrieval:
         confidence: See :class:`Confidence`.
         reranked: Whether the semantic ranker ordered these. ``False`` is the
             degrade path, not a failure.
+        halves: Which halves of the hybrid query ran. Always
+            :attr:`~chip_chat.search.query.Halves.HYBRID` on any path that
+            serves a visitor; carried so that #50's ablation cannot label a
+            single-half run as a hybrid one.
         constraints: What was read out of the query, including what could not
             be applied.
         floor: The reranker floor this result was judged against, so a later
@@ -265,6 +269,7 @@ class Retrieval:
     passages: tuple[Passage, ...] = ()
     confidence: Confidence = Confidence.NONE
     reranked: bool = False
+    halves: query_module.Halves = query_module.Halves.HYBRID
     constraints: query_module.Constraints = field(
         default_factory=query_module.Constraints
     )
@@ -408,6 +413,7 @@ class Retriever:
         top: int | None = None,
         constraints: query_module.Constraints | None = None,
         rerank: bool = True,
+        halves: query_module.Halves = query_module.Halves.HYBRID,
     ) -> Retrieval:
         """Search the corpus and return citable passages, best first.
 
@@ -421,6 +427,10 @@ class Retriever:
                 exercises the degrade path deliberately — which is the point of
                 being able to say so, since the path is otherwise reached only
                 by a ceiling nobody wants to hit to test it.
+            halves: Which halves of the hybrid query to send. The default is the
+                only value any serving path may pass; the other two exist for
+                #50's ablation and :class:`chip_chat.search.query.Halves` is
+                where the argument for them lives.
 
         Returns:
             The retrieval. Never ``None`` and never partially populated: a
@@ -441,7 +451,7 @@ class Retriever:
         if rerank and not reranked:
             notes.append(_DEGRADED_NOTE)
         request = query_module.body(
-            text, constraints=narrowing, top=wanted, rerank=reranked
+            text, constraints=narrowing, top=wanted, rerank=reranked, halves=halves
         )
         try:
             response = self._service.search(self._alias, request)
@@ -457,7 +467,13 @@ class Retriever:
             reranked = False
             response = self._service.search(
                 self._alias,
-                query_module.body(text, constraints=narrowing, top=wanted, rerank=False),
+                query_module.body(
+                    text,
+                    constraints=narrowing,
+                    top=wanted,
+                    rerank=False,
+                    halves=halves,
+                ),
             )
 
         passages, uncitable = self._passages(text, response)
@@ -474,6 +490,7 @@ class Retriever:
             passages=passages,
             confidence=confidence,
             reranked=reranked,
+            halves=halves,
             constraints=narrowing,
             floor=self._floor,
             notes=tuple(notes),

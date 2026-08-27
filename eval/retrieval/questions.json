@@ -1,0 +1,561 @@
+{
+  "version": 1,
+  "questions": [
+    {
+      "id": "ing-bowl-contents",
+      "question": "what's actually in a burrito bowl",
+      "category": "ingredients",
+      "answerable": true,
+      "golden_case": "k1-bowl-ingredients",
+      "relevant": [
+        {
+          "kind": "MENU_ITEM",
+          "item_type": "Bowl",
+          "why": "The bowl rows are where the published composition of a bowl is; any one of them answers what a bowl is made of."
+        }
+      ],
+      "why": "The plainest knowledge question there is, and the golden set's first knowledge case. It is here as the floor: a retriever that misses this misses everything below it."
+    },
+    {
+      "id": "ing-steak-burrito",
+      "question": "what comes on a steak burrito",
+      "category": "ingredients",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "MENU_ITEM",
+          "item_id": "CMG-2",
+          "why": "The Steak Burrito's own row."
+        }
+      ],
+      "why": "Two proper nouns in five words, which is the shape RFC-001 section 08 built the keyword half for. If the ablation's arms differ anywhere, they differ here."
+    },
+    {
+      "id": "ing-rice-choices",
+      "question": "what kinds of rice do you have",
+      "category": "ingredients",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "MENU_ITEM",
+          "item_type": "Rice",
+          "why": "The rice rows are the published choices."
+        }
+      ],
+      "why": "A category question rather than an item question: the answer is a family, and any member of it is a correct first hit."
+    },
+    {
+      "id": "ing-beans-choices",
+      "question": "what beans do you serve",
+      "category": "ingredients",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "MENU_ITEM",
+          "item_type": "Beans",
+          "why": "The bean rows are the published choices."
+        }
+      ],
+      "why": "The same shape as the rice question, on a family the vision lane also has a slot for -- so a retrieval regression here shows up twice."
+    },
+    {
+      "id": "ing-guacamole",
+      "question": "do you have guacamole",
+      "category": "ingredients",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "MENU_ITEM",
+          "item_id": "CMG-1001",
+          "why": "Guacamole's own row."
+        }
+      ],
+      "why": "A one-word question whose whole content is a proper noun. The vector half has an opinion about the Spanish word; only the lexical half has one about this menu."
+    },
+    {
+      "id": "ing-barbacoa",
+      "question": "what is barbacoa",
+      "category": "ingredients",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "MENU_ITEM",
+          "primary_filling": "Barbacoa",
+          "why": "The barbacoa rows: the fillings whose published primary_filling is it."
+        }
+      ],
+      "why": "RFC-001 section 08 names barbacoa by name as the token embeddings place badly. It is in the set so that claim has a number attached to it, and it is expected to go unscored against any corpus slice that does not carry the item -- which is the resolution check working, not a miss."
+    },
+    {
+      "id": "neg-bean-pot",
+      "question": "are the black beans cooked in the same pot as the chicken",
+      "category": "ingredients",
+      "answerable": false,
+      "golden_case": "k3-preparation-not-published",
+      "why": "Preparation is not something Chipotle publishes. The corpus holds the beans row and the chicken row, so the retriever will find plausible neighbours -- which is exactly the near-miss the confidence rule is supposed to catch rather than rank."
+    },
+    {
+      "id": "neg-halal",
+      "question": "is the chicken halal",
+      "category": "ingredients",
+      "answerable": false,
+      "golden_case": "k3-halal-not-published",
+      "why": "A published-certification question the published pages do not answer. The chicken row is a very good lexical match and a very bad answer."
+    },
+    {
+      "id": "neg-vegetarian",
+      "question": "what's vegetarian here",
+      "category": "ingredients",
+      "answerable": false,
+      "golden_case": "k4-constrained-vegetarian",
+      "why": "The diet tag `vege` is published on Chipotle's chart and is not a column of the chunk schema, so chip_chat.search.query puts it in `unapplied` rather than approximating it. This question is in the negative set to hold that refusal to a number: a confident answer here would be a dietary claim about food that nobody published."
+    },
+    {
+      "id": "nut-chicken-bowl-calories",
+      "question": "how many calories are in a chicken bowl",
+      "category": "nutrition",
+      "answerable": true,
+      "golden_case": "k1-nutrition-calories",
+      "relevant": [
+        {
+          "kind": "MENU_ITEM",
+          "item_id": "CMG-101",
+          "why": "The Chicken Bowl row carries the published figure."
+        }
+      ],
+      "why": "The golden set's nutrition case. Calories are a filterable column of the chunk schema, so this is also the question whose answer a constrained query would have to narrow on."
+    },
+    {
+      "id": "nut-steak-burrito-calories",
+      "question": "how many calories in a steak burrito",
+      "category": "nutrition",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "MENU_ITEM",
+          "item_id": "CMG-2",
+          "why": "The Steak Burrito row carries the published figure."
+        }
+      ],
+      "why": "The second half of the comparative below, asked on its own, so that a failure on the comparison can be told apart from a failure on either item."
+    },
+    {
+      "id": "nut-comparative",
+      "question": "which has fewer calories, the chicken bowl or the steak burrito",
+      "category": "nutrition",
+      "answerable": true,
+      "golden_case": "k4-comparative-calories",
+      "relevant": [
+        {
+          "kind": "MENU_ITEM",
+          "item_id": "CMG-101",
+          "why": "One side of the comparison."
+        },
+        {
+          "kind": "MENU_ITEM",
+          "item_id": "CMG-2",
+          "why": "The other side."
+        }
+      ],
+      "why": "#49 calls out the comparative case, and it is the clearest question in the set for why recall is counted over labels: an answer that found one of the two items is half right, and a hit-or-miss score would call it right."
+    },
+    {
+      "id": "nut-chips-calories",
+      "question": "how many calories are in the chips",
+      "category": "nutrition",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "MENU_ITEM",
+          "item_id": "CMG-1002",
+          "why": "The Chips row."
+        }
+      ],
+      "why": "A side rather than an entree. The menu's non-entree rows are shorter and carry fewer searchable words, which is where a lexical half has least to work with."
+    },
+    {
+      "id": "nut-guacamole-calories",
+      "question": "how many calories does guac add",
+      "category": "nutrition",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "MENU_ITEM",
+          "item_id": "CMG-1001",
+          "why": "Guacamole's row carries the published figure."
+        }
+      ],
+      "why": "`guac` is what a visitor types and `Guacamole` is what the menu publishes. The one question in the nutrition category where the lexical half is at a disadvantage and the vector half should earn its place."
+    },
+    {
+      "id": "neg-calories-last-year",
+      "question": "how many calories were in a chicken bowl last year",
+      "category": "nutrition",
+      "answerable": false,
+      "why": "The corpus is one harvest. It has no history, so a question about a past figure has no answer in it however good the retrieval is -- and the chicken bowl row is a near-perfect lexical match for it."
+    },
+    {
+      "id": "alg-cheese-dairy",
+      "question": "does the cheese have dairy in it",
+      "category": "allergens",
+      "answerable": true,
+      "golden_case": "k1-allergen-cheese",
+      "relevant": [
+        {
+          "kind": "MENU_ITEM",
+          "item_id": "CMG-5252",
+          "why": "Cheese's row carries the published dairy mark."
+        }
+      ],
+      "why": "The golden set's allergen case, and the one every allergen number in this report is anchored to. Note that the question mentions the allergen without negating it -- chip_chat.search.query refuses to build a filter from a mention, and this is the question that would break if it ever stopped refusing."
+    },
+    {
+      "id": "alg-guacamole-dairy",
+      "question": "is the guacamole dairy free",
+      "category": "allergens",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "MENU_ITEM",
+          "item_id": "CMG-1001",
+          "why": "Guacamole's row carries its published marks."
+        }
+      ],
+      "why": "The negated phrasing of the question above, on an item whose answer is the other one. A retriever that returns the cheese row here has answered a different question confidently."
+    },
+    {
+      "id": "alg-chips-allergens",
+      "question": "are the chips ok if i'm allergic to dairy",
+      "category": "allergens",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "MENU_ITEM",
+          "item_id": "CMG-1002",
+          "why": "The Chips row carries its published marks."
+        }
+      ],
+      "why": "Phrased as a person actually asks it, with the allergy in the second clause. The published marks are the only thing that can answer it and they are on one row."
+    },
+    {
+      "id": "alg-white-rice",
+      "question": "does the white rice have anything in it i should know about",
+      "category": "allergens",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "MENU_ITEM",
+          "item_id": "CMG-5001",
+          "why": "The White Rice row carries its published marks."
+        }
+      ],
+      "why": "An allergen question that never says the word. If the lexical half is carrying the allergen category on the word `allergy`, this is the question that shows it."
+    },
+    {
+      "id": "alg-steak-soy",
+      "question": "will the steak be safe for my severe soy allergy",
+      "category": "allergens",
+      "answerable": true,
+      "golden_case": "k3-allergen-safety-judgement",
+      "relevant": [
+        {
+          "kind": "MENU_ITEM",
+          "item_id": "CMG-2",
+          "why": "The Steak Burrito row carries the published marks for the steak the question is about."
+        }
+      ],
+      "why": "The golden set scores this on the agent's refusal to make a safety judgement. Here it is scored on the half that has to work first: the published marks have to be in front of the model before it can decline to go beyond them."
+    },
+    {
+      "id": "alg-no-dairy",
+      "question": "what can i get without any dairy",
+      "category": "allergens",
+      "answerable": true,
+      "golden_case": "k4-constrained-no-dairy",
+      "constraint": {
+        "without_allergens": [
+          "dair"
+        ]
+      },
+      "why": "Scored on the filter rather than on the ranking, because a filter is what #49 answers it with. It carries no relevant place on purpose: the correct answer set is every published item whose marks exclude dairy, and labelling three of them would be picking favourites among interchangeable rows."
+    },
+    {
+      "id": "alg-no-dairy-bowl",
+      "question": "can i get a bowl with no dairy",
+      "category": "allergens",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "MENU_ITEM",
+          "item_type": "Bowl",
+          "why": "The bowl rows: the question is about bowls, and the filter decides which of them may be offered."
+        }
+      ],
+      "constraint": {
+        "without_allergens": [
+          "dair"
+        ]
+      },
+      "why": "The one question in the set scored on both mechanisms at once. A retriever can rank the bowls perfectly and still hand back one it should have filtered out, and only a question with both labels can show that."
+    },
+    {
+      "id": "alg-caveat",
+      "question": "how do i know if something is safe with my allergy",
+      "category": "allergens",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "ALLERGEN_CAVEAT",
+          "contains": "allerg",
+          "why": "Chipotle's own caveat about what its marks do and do not promise. The published sentence, not a paraphrase of it."
+        }
+      ],
+      "why": "The published caveat is a chunk kind of its own in the schema, so this question is how the set finds out whether the corpus under test actually carries one. Against a corpus that does not, it goes unscored and says so, which is more useful than a miss nobody can act on."
+    },
+    {
+      "id": "neg-gluten-cross-contact",
+      "question": "is the kitchen free of gluten cross contact",
+      "category": "allergens",
+      "answerable": false,
+      "why": "A preparation question wearing an allergen question's clothes. The safety-critical negative: every word in it matches the corpus and none of the corpus answers it, so a retriever that reports this as grounded has produced the most dangerous kind of near-miss this project has."
+    },
+    {
+      "id": "neg-peanut-safe",
+      "question": "which items are safe for a peanut allergy",
+      "category": "allergens",
+      "answerable": false,
+      "why": "Chipotle publishes four allergen marks and peanut is not one of them, so there is no published answer -- and an unmarked item is not a promise. docs/decisions/allergen-absence.md is the argument; this is the number."
+    },
+    {
+      "id": "rew-how-points-work",
+      "question": "how do points work",
+      "category": "rewards_policy",
+      "answerable": true,
+      "golden_case": "k1-rewards-programme",
+      "relevant": [
+        {
+          "kind": "FAQ_ENTRY",
+          "heading": "Okay, so how does Chipotle Rewards work?",
+          "why": "The FAQ entry that answers it in one paragraph."
+        },
+        {
+          "kind": "POLICY_SECTION",
+          "document_id": "rewards",
+          "why": "The rewards page's own explanation of the earn rate.",
+          "contains": "Every dollar spent"
+        }
+      ],
+      "why": "The golden set's rewards case. Two published places answer it and they are in two different documents, which is what makes it worth more than a hit-or-miss score."
+    },
+    {
+      "id": "rew-points-expire",
+      "question": "do my points expire",
+      "category": "rewards_policy",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "FAQ_ENTRY",
+          "heading": "Do points expire?",
+          "why": "The FAQ entry, in the visitor's words."
+        },
+        {
+          "kind": "POLICY_SECTION",
+          "document_id": "rewards-terms",
+          "why": "The terms' own section, which is where the 365 days is binding.",
+          "heading": "TRACKING YOUR ACCOUNT; POINTS EXPIRATION"
+        },
+        {
+          "kind": "POLICY_SECTION",
+          "document_id": "rewards",
+          "why": "The rewards page's shorter answer to the same question.",
+          "contains": "Do points and rewards expire?"
+        }
+      ],
+      "why": "Three published places, in three documents, saying the same thing at three levels of formality. The question in the set with the most to recall, and the one where a top-3 that spends all three slots in one document is visible."
+    },
+    {
+      "id": "rew-redeem",
+      "question": "what can i redeem my points for",
+      "category": "rewards_policy",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "FAQ_ENTRY",
+          "heading": "What can I redeem my points for?",
+          "why": "The FAQ entry."
+        },
+        {
+          "kind": "POLICY_SECTION",
+          "document_id": "rewards",
+          "why": "The rewards exchange section.",
+          "contains": "REWARDS EXCHANGE"
+        }
+      ],
+      "why": "Nearly the FAQ heading verbatim, which is the easiest thing a lexical half can be asked to do. It is in the set as the ceiling: if the keyword arm misses this, the index is wrong rather than the ranking."
+    },
+    {
+      "id": "rew-eligibility",
+      "question": "who is allowed to join chipotle rewards",
+      "category": "rewards_policy",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "POLICY_SECTION",
+          "document_id": "rewards-terms",
+          "why": "The terms' eligibility section.",
+          "heading": "ELIGIBILITY"
+        }
+      ],
+      "why": "A one-word heading in a long legal document. The heading is searchable and weighted, so this is the question that says whether that weighting is doing anything."
+    },
+    {
+      "id": "rew-accumulating",
+      "question": "which purchases earn points",
+      "category": "rewards_policy",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "POLICY_SECTION",
+          "document_id": "rewards-terms",
+          "why": "The terms' section on accumulating points.",
+          "heading": "ACCUMULATING POINTS"
+        }
+      ],
+      "why": "The visitor's words and the document's words share no content word. Where the vector half is supposed to earn its place inside a policy document rather than on a menu row."
+    },
+    {
+      "id": "rew-catering-points",
+      "question": "do catering orders earn rewards points",
+      "category": "rewards_policy",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "FAQ_ENTRY",
+          "heading": "How do I get Chipotle Rewards points for my catering orders?",
+          "why": "The FAQ entry about exactly this."
+        }
+      ],
+      "why": "Sits between the rewards and ordering categories, which is why it is worth having: a retriever that has learned `catering` means the ordering FAQ will get this one wrong in a way no single-category question shows."
+    },
+    {
+      "id": "rew-arbitration",
+      "question": "if i have a dispute do i have to go to arbitration",
+      "category": "rewards_policy",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "POLICY_SECTION",
+          "document_id": "rewards-terms",
+          "why": "The terms' arbitration agreement.",
+          "heading": "ARBITRATION AGREEMENT"
+        }
+      ],
+      "why": "The longest and least food-like passage in the corpus. It is here so the set is not made entirely of short rows, which is the shape a chunking regression shows up in first."
+    },
+    {
+      "id": "ord-cancel-online",
+      "question": "can i cancel an order after i've placed it",
+      "category": "ordering_policy",
+      "answerable": true,
+      "golden_case": "k1-cancel-policy",
+      "relevant": [
+        {
+          "kind": "FAQ_ENTRY",
+          "heading": "Can I cancel my online or mobile order after I've submitted it?",
+          "why": "The FAQ entry for an online or mobile order."
+        },
+        {
+          "kind": "FAQ_ENTRY",
+          "heading": "Can I cancel my delivery after I've submitted my order?",
+          "why": "The FAQ entry for a delivery order, which is the same question asked about the other channel and is genuinely an answer to a visitor who did not say which they placed."
+        }
+      ],
+      "why": "The golden set's cancellation case. The visitor did not say which kind of order, and two published entries answer it -- so a correct retrieval surfaces both rather than picking one and sounding certain."
+    },
+    {
+      "id": "ord-cancel-delivery",
+      "question": "can i cancel a delivery once it's on its way",
+      "category": "ordering_policy",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "FAQ_ENTRY",
+          "heading": "Can I cancel my delivery after I've submitted my order?",
+          "why": "The FAQ entry for a delivery order."
+        }
+      ],
+      "why": "The same question with the channel named. The pair with the one above is how the set tells `found the right document` apart from `found the right half of it`."
+    },
+    {
+      "id": "ord-refund-delivery",
+      "question": "how do i get a refund on a delivery order",
+      "category": "ordering_policy",
+      "answerable": true,
+      "golden_case": "k1-refund-policy",
+      "relevant": [
+        {
+          "kind": "FAQ_ENTRY",
+          "heading": "Who do I contact regarding delivery payment issues, including refund requests?",
+          "why": "The FAQ entry that covers refund requests on delivery orders."
+        }
+      ],
+      "why": "The golden set's refund case, narrowed to the channel the published pages actually answer for. Asking it unqualified would be labelling a question whose answer is not in the corpus as though it were."
+    },
+    {
+      "id": "ord-catering",
+      "question": "do you do catering",
+      "category": "ordering_policy",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "FAQ_ENTRY",
+          "heading": "Does Chipotle cater?",
+          "why": "The FAQ entry."
+        }
+      ],
+      "why": "Four words, all of them common. Nothing here is a proper noun, so it is the ordering category's version of the question the vector half should be best at."
+    },
+    {
+      "id": "ord-catering-contact",
+      "question": "who do i talk to about a catering order i already placed",
+      "category": "ordering_policy",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "FAQ_ENTRY",
+          "heading": "Who do I reach out to for questions regarding my catering order?",
+          "why": "The FAQ entry for questions about a placed catering order."
+        }
+      ],
+      "why": "Its near-neighbour is the question above, and both contain `catering`. A pair that shares its rarest word is how a set measures ranking rather than matching."
+    },
+    {
+      "id": "ord-gift-card",
+      "question": "can i get cash back for the balance on my gift card",
+      "category": "ordering_policy",
+      "answerable": true,
+      "relevant": [
+        {
+          "kind": "FAQ_ENTRY",
+          "heading": "How do I get cash back for my Chipotle gift card balance?",
+          "why": "The FAQ entry."
+        }
+      ],
+      "why": "A corner of the corpus nothing else in the set touches, which is what keeps the ordering category from being four questions about cancelling."
+    },
+    {
+      "id": "neg-store-hours",
+      "question": "what time does the store on market street close today",
+      "category": "ordering_policy",
+      "answerable": false,
+      "why": "Store hours are not in the published corpus this project harvests, and they are the single most likely thing a visitor asks that it cannot answer. A confident answer here is an invented fact about a real place."
+    },
+    {
+      "id": "neg-crew-pay",
+      "question": "how much do you pay the people who work here",
+      "category": "ordering_policy",
+      "answerable": false,
+      "why": "Far outside the corpus in subject matter, so it is the negative that says whether the confidence rule is doing anything at all or whether the corpus is simply always a bit relevant."
+    }
+  ]
+}

@@ -542,6 +542,7 @@ dependencies = [
     { name = "chip-chat-catalog" },
     { name = "chip-chat-harvest" },
     { name = "chip-chat-otel" },
+    { name = "chip-chat-search" },
     { name = "chip-chat-vision" },
 ]
 
@@ -551,6 +552,7 @@ requires-dist = [
     { name = "chip-chat-catalog", editable = "catalog" },
     { name = "chip-chat-harvest", editable = "harvest" },
     { name = "chip-chat-otel", editable = "otel" },
+    { name = "chip-chat-search", editable = "search" },
     { name = "chip-chat-vision", editable = "vision" },
 ]
 

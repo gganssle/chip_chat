@@ -315,6 +315,69 @@ grounding-baseline: ## Refresh eval/grounding/BASELINE.md from that same free ru
 #
 #     uv run python -m chip_chat.eval.grounding --out eval/grounding/BASELINE.md
 
+# --- Retrieval, on its own ---------------------------------------------------
+#
+# Issue #50, and the one eval in the tree that runs with no model anywhere in
+# it. The first two targets are free and need no credential; the third is what
+# wrote the committed baseline and spends 40 semantic requests.
+#
+# `retrieval-check` loads the labeled set, refuses one that contradicts itself,
+# and reports which of #50's scope clauses it meets. It reads no corpus.
+#
+# `retrieval` additionally resolves every label against the committed 31-chunk
+# corpus and sweeps all four arms of the ablation against an in-memory index.
+# READ THE FIRST PARAGRAPH OF THE REPORT BEFORE ITS TABLES: the offline index's
+# vector half is an order by chunk id carrying no relevance, so its ablation
+# cells are not evidence about retrieval. What the run really measures is the
+# RESOLUTION -- which of the set's labels name a place the corpus actually holds
+# -- and that is #50's chunking-regression check, which needs no model at all.
+#
+# Two labels do not resolve against that fixture and are expected not to: it is
+# a slice of the published pages. The run is green anyway and says so; a THIRD
+# one appearing is the regression, and `eval/tests` fails on it by name.
+#
+# The regression check itself is not this target's exit status but
+# `eval/tests/test_retrieval_corpus.py`, which names the two labels the fixture
+# does not hold. A byte-comparison of the report would be weaker: it would go
+# red on a wording change and could not say which label moved.
+
+.PHONY: retrieval-check retrieval retrieval-baseline
+
+CORPUS_FIXTURE = search/tests/fixtures/chunks.jsonl
+CORPUS_FIXTURE_RUN_ID = 20260827T053000Z
+
+retrieval-check: ## Check the labeled retrieval set's coverage, free
+	$(UV) run python -m chip_chat.eval.retrieval --check
+
+retrieval: ## Resolve the labels and sweep the ablation offline, free
+	$(UV) run python -m chip_chat.eval.retrieval --offline \
+		--chunks $(CORPUS_FIXTURE) --run-id $(CORPUS_FIXTURE_RUN_ID)
+
+# `retrieval-baseline` is the only target here that talks to anything, and it is
+# what wrote the committed report. It needs `az login` and the data-plane role
+# `search.tf` grants, and the endpoint is the whole of its environment -- no
+# embedding deployment and no Key Vault read, for the same reason
+# `search-retrieve` needs neither: the INDEX holds the vectorizer, so a query is
+# text.
+#
+# IT SPENDS 40 OF THE MONTH'S 1,000 SEMANTIC REQUESTS -- one per question for
+# the one arm that reranks. `--arms serving` costs exactly the same, because
+# that is the arm. The count is printed and `--yes` is required before anything
+# is sent, and it counts into the same `landing/semantic-allowance.json` that
+# `make search-retrieve` uses, so a sweep and a hand-run query cannot each be
+# right about half the month.
+#
+# `--from-index` reads the corpus back off the live alias instead of off a
+# release under the landing zone, which costs no semantic request and is the
+# stricter reading: what a resolution answers is *can the retriever return this
+# place*, and that is a question about what the index holds. Drop it once the
+# landing zone here has a release in it.
+
+retrieval-baseline: ## Sweep the live alias and write the baseline. Spends 40 of 1,000
+	AZURE_SEARCH_ENDPOINT="$(SEARCH_ENDPOINT)" $(UV) run python -m chip_chat.eval.retrieval \
+		--alias $(ALIAS) --from-index --landing $(LANDING) --yes \
+		--out eval/retrieval/BASELINE.md
+
 # --- The versioned dataset --------------------------------------------------
 #
 # Issue #72. Both sets, promoted into one dataset with a content hash for a

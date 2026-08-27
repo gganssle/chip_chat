@@ -52,6 +52,7 @@ impossible.
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Final
 
 from chip_chat.search import chunks
@@ -67,6 +68,7 @@ __all__ = [
     "VECTOR_CANDIDATES",
     "Bound",
     "Constraints",
+    "Halves",
     "body",
     "filter_expression",
     "overlap",
@@ -102,6 +104,43 @@ answer, written by the service, competing with the one the agent is about to
 write from the same passages, and two answers on one turn is a groundedness
 question nobody needs to have.
 """
+
+
+class Halves(StrEnum):
+    """Which halves of the hybrid query to send. Production sends both, always.
+
+    This exists for **one caller**, and saying so here is what keeps it from
+    becoming a knob. RFC-001 §08 does not offer hybrid retrieval as a default to
+    be tuned away from -- *keyword recall matters here more than usual, because
+    item names are proper nouns that embeddings handle poorly* -- and the module
+    docstring above says neither half is optional and neither is a fallback for
+    the other. That is a design decision, and issue #50 is the issue that asks
+    for it to be **defended by data** rather than by an argument: *"run it as an
+    ablation across configurations -- keyword only, vector only, hybrid, hybrid
+    + reranker -- so the design choice is defended by data and so the fallback
+    plan is already measured if the reranker turns out to be unavailable."*
+
+    An ablation that built its own request bodies would be measuring a copy of
+    this module rather than this module, which is the one thing that would make
+    its numbers not about the product. So the two single-half queries are
+    expressible here, :data:`HYBRID` is the default everywhere, and
+    :mod:`chip_chat.eval.retrieval` is the only caller that passes anything
+    else. Nothing on the serving path may.
+
+    Attributes:
+        KEYWORD: BM25 over :data:`chip_chat.search.chunks.SEARCHABLE` alone. No
+            ``vectorQueries``, so a question phrased in none of the corpus's
+            words gets nothing.
+        VECTOR: The index's own vectorizer alone. No ``search`` string, so
+            *barbacoa* is placed by an embedding that has opinions about
+            Spanish words and none about this menu.
+        HYBRID: Both, fused by reciprocal rank. What production sends.
+    """
+
+    KEYWORD = "keyword"
+    VECTOR = "vector"
+    HYBRID = "hybrid"
+
 
 PUBLISHED_DISCLOSURE: Final = "PUBLISHED"
 """The ``allergen_disclosure`` value that means Chipotle published marks for an
@@ -503,15 +542,18 @@ def body(
     top: int = TOP,
     k: int = VECTOR_CANDIDATES,
     rerank: bool,
+    halves: Halves = Halves.HYBRID,
 ) -> dict[str, Any]:
     """Return the request body for one hybrid query.
 
-    Both halves, always. The ``search`` string is scored by BM25 over the five
-    searchable fields with the index's ``heading``-weighted profile; the
-    ``vectorQueries`` entry is ``kind: "text"``, so the **service** embeds it
-    with the deployment named on the index — the application never embeds a
-    query, which is the one thing integrated vectorization exists to prevent it
-    doing (``docs/retrieval-index.md`` §3).
+    Both halves, always, unless an ablation asks for one — see :class:`Halves`,
+    which is the whole of the argument for that parameter existing. The
+    ``search`` string is scored by BM25 over the five searchable fields with the
+    index's ``heading``-weighted profile; the ``vectorQueries`` entry is
+    ``kind: "text"``, so the **service** embeds it with the deployment named on
+    the index — the application never embeds a query, which is the one thing
+    integrated vectorization exists to prevent it doing
+    (``docs/retrieval-index.md`` §3).
 
     No ``select``. Every field of this index is retrievable except the vector,
     which is also ``stored: false``, so "everything retrievable" is exactly the
@@ -528,18 +570,26 @@ def body(
         rerank: Whether to ask for semantic reranking. ``False`` is the degrade
             path of :mod:`chip_chat.search.allowance`, not an error path — the
             query is still hybrid and still answers.
+        halves: Which halves to send. :attr:`Halves.HYBRID` on every path that
+            serves a visitor; the other two are #50's ablation and nothing else.
 
     Returns:
-        A JSON-ready search request.
+        A JSON-ready search request. On :attr:`Halves.VECTOR` it carries no
+        ``search`` key at all rather than an empty one: Azure AI Search reads an
+        absent ``search`` as *no lexical half*, and an empty string as a lexical
+        query matching everything — which would leave the fusion with a second
+        order in it and quietly stop being an ablation.
     """
     request: dict[str, Any] = {
-        "search": query,
         "queryType": "semantic" if rerank else "simple",
         "top": top,
-        "vectorQueries": [
-            {"kind": "text", "text": query, "fields": VECTOR_FIELD, "k": k}
-        ],
     }
+    if halves is not Halves.VECTOR:
+        request["search"] = query
+    if halves is not Halves.KEYWORD:
+        request["vectorQueries"] = [
+            {"kind": "text", "text": query, "fields": VECTOR_FIELD, "k": k}
+        ]
     if rerank:
         request["semanticConfiguration"] = SEMANTIC_CONFIGURATION
         request["captions"] = CAPTIONS

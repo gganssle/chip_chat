@@ -20,6 +20,7 @@ from chip_chat.search.query import (
     VECTOR_CANDIDATES,
     Bound,
     Constraints,
+    Halves,
     body,
     filter_expression,
     overlap,
@@ -332,3 +333,40 @@ def test_overlap_counts_a_plural_as_its_singular() -> None:
 
 def test_overlap_of_a_query_with_no_content_words_is_zero() -> None:
     assert overlap(terms("is it?"), "anything at all") == 0.0
+
+
+# --- The ablation's halves ---------------------------------------------------
+
+
+def test_the_default_query_carries_both_halves() -> None:
+    # RFC-001 section 08's design, as the shape of the request rather than as a
+    # sentence in a docstring. Nothing on a serving path passes `halves`.
+    request = body("barbacoa", rerank=True)
+    assert request["search"] == "barbacoa"
+    assert request["vectorQueries"][0]["text"] == "barbacoa"
+
+
+def test_the_keyword_arm_sends_no_vector_half() -> None:
+    request = body("barbacoa", rerank=False, halves=Halves.KEYWORD)
+    assert request["search"] == "barbacoa"
+    assert "vectorQueries" not in request
+
+
+def test_the_vector_arm_omits_the_search_key_rather_than_emptying_it() -> None:
+    # An empty `search` is a lexical query that matches everything, which would
+    # leave a second order in the fusion and quietly stop being an ablation.
+    request = body("barbacoa", rerank=False, halves=Halves.VECTOR)
+    assert "search" not in request
+    assert request["vectorQueries"][0]["text"] == "barbacoa"
+
+
+def test_a_filter_applies_to_every_arm() -> None:
+    # The constrained cases are exactly where the arms are expected to differ,
+    # so a filter that only fired on one of them would make that difference
+    # unreadable.
+    constraints = read("under 500 calories")
+    for halves in Halves:
+        request = body(
+            "under 500 calories", constraints=constraints, rerank=False, halves=halves
+        )
+        assert request["filter"] == "calories lt 500"

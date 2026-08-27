@@ -76,6 +76,17 @@ extractive `answer` would be a second answer, written by the service, competing
 with the one the agent is about to write from the same passages — which is a
 groundedness question nobody needs to have.
 
+**One half alone is expressible, and only an eval may ask for it.** *Hybrid is
+not a hedge* is an argument, and #50 asks for it to be defended by data — so
+`chip_chat.search.query.Halves` lets a query drop the `search` string or the
+`vectorQueries` entry, and `eval/retrieval` sweeps all four arms. It is not a
+knob: the default is both halves everywhere, that enum's docstring says who may
+pass anything else, and nothing on a path that serves a visitor does. A vector
+arm carries **no** `search` key rather than an empty one — Azure AI Search reads
+an absent `search` as *no lexical half* and an empty string as a lexical query
+matching everything, which would leave a second order in the fusion and quietly
+stop being an ablation.
+
 ---
 
 ## 3. The three things it refuses to guess
@@ -313,14 +324,45 @@ in-memory menu items. Wiring `KnowledgeLane` into it belongs to
 unblocks; the interface it will call is `KnowledgeLane.search(query)` and the
 span it already opens is the right one.
 
-**Nothing here measures recall.** The floor above, the constraint reader's
-coverage, and the *"top-3 recall on your allergen questions, measured, with
-numbers"* the system design asks for are all
-[#50](https://github.com/gganssle/chip_chat/issues/50)'s — evaluating the
-retriever on its own, before it ever touches the agent. This layer's job was to
-make that evaluation cheap: every score is on the payload and on the span, the
-allowance is countable, and `rerank=False` makes the degraded arm of the sweep
-free.
+**Nothing here measures recall — and [#50](https://github.com/gganssle/chip_chat/issues/50)
+now does.** `eval/retrieval` is the labeled set and the ablation: forty
+questions, the published places that answer each one, and `recall@3`, `hit@3`,
+MRR and P@1 per category under keyword only, vector only, hybrid, and hybrid +
+reranker. Read [`eval/retrieval/README.md`](../eval/retrieval/README.md) before
+its numbers.
+
+The ablation needed two configurations this layer could not express, so
+`chip_chat.search.query.Halves` exists — its docstring is the argument for its
+own existence and names the one caller allowed to pass it; nothing on a serving
+path may.
+
+**Section 2's claim is confirmed.** `recall@3`, measured against
+`corpus-20260827t060000z-2`: keyword-only is at 100% on ingredients and
+allergens and 64% on the rewards policy; vector-only is at **0%** on all three
+menu-row categories and 86–100% on the two policy ones. Hybrid is not a hedge,
+and the two halves are complementary along exactly the line RFC-001 §08 drew.
+
+**Section 6's degrade path is more expensive than it looked.** `hybrid` without
+the reranker scores 0% on ingredients and nutrition — where keyword-only alone
+scores 100% and 80%. Reciprocal rank fusion scores *rank*, the vector half
+contributes `VECTOR_CANDIDATES = 50` neighbours to a 30-chunk corpus, and its
+order crowds the keyword half's correct hits out of the five returned; the
+semantic ranker rescues it by reordering the union. So the fallback that was
+designed as *"a valid query that returns real passages"* returns the wrong ones
+on the questions this restaurant is mostly asked about. Filed as **cc-t1o1**,
+whose most interesting candidate is falling back to *keyword* rather than to
+*hybrid* — a trade the ablation now prices.
+
+**And section 5's floor is too low.** Restraint on the eight questions the corpus
+cannot answer measured 25% / 50% / 38% / **12%** across the four arms, worst
+under the one production sends: seven of eight came back grounded, including
+*"which items are safe for a peanut allergy"* against four published marks that
+do not include peanut. `PROVISIONAL_RERANKER_FLOOR = 1.5` is what that is,
+and this is the measurement its docstring was waiting for. Filed as **cc-sans**;
+**cc-mpdu** is the same question on the degrade path, where confidence comes from
+the lexical floor instead. The two are thresholds on one question and should be
+chosen together, over three or four sweeps at three or four floors — `--floor` is
+a run parameter, recorded at the top of every report, for exactly that.
 
 **Chunk ids are assumed stable across a rebuild, and nothing checks it.** D9
 raises it directly: a rebuilt index that renumbered chunks would invalidate
@@ -329,3 +371,13 @@ re-harvested weekly and the index is rebuilt rather than patched. Nothing in thi
 package can settle it — `chunk_id` is minted by the gold layer's chunk renderers
 (#35), which are not on `main` yet, and the assertion belongs where the ids are
 made rather than where they are read. Filed as **cc-g9bm**.
+
+The eval does *not* wait for it, and the way it does not is worth knowing about.
+A chunk id is a content hash, so a labeled retrieval set keyed on ids would go
+uniformly wrong on exactly the rebuild that is at issue here. `eval/retrieval`
+therefore labels a **place** — a kind plus the published fields that identify the
+passage a person would point at — and resolves those against the corpus at run
+time. A label that stops resolving is the regression, by name, in a diff of the
+committed baseline. That is a check on the *corpus*; cc-g9bm is still the check
+on the ids a conversation is already holding, and neither substitutes for the
+other.

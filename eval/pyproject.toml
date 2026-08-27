@@ -15,11 +15,20 @@ requires-python = ">=3.13"
 # checks is `chip_chat.agent.envelope`'s -- a citation is an id the retriever
 # returned, and a copy of that rule here could disagree with the renderer.
 # One way only: nothing in `agent/` imports `eval`.
+#
+# The retrieval eval holds `search` for the third version of the same reason,
+# and it is the sharpest one. Issue #50's ablation runs the retriever in
+# configurations the product never sends -- keyword only, vector only -- and an
+# eval that built those request bodies itself would be measuring a copy of
+# `chip_chat.search.query` rather than `chip_chat.search.query`. So the halves
+# are expressible in that module, behind an argument that says who may pass
+# them, and the eval calls the real `Retriever`.
 dependencies = [
     "chip-chat-agent",
     "chip-chat-catalog",
     "chip-chat-harvest",
     "chip-chat-otel",
+    "chip-chat-search",
     "chip-chat-vision",
 ]
 
@@ -48,4 +57,5 @@ chip-chat-agent = { workspace = true }
 chip-chat-catalog = { workspace = true }
 chip-chat-harvest = { workspace = true }
 chip-chat-otel = { workspace = true }
+chip-chat-search = { workspace = true }
 chip-chat-vision = { workspace = true }

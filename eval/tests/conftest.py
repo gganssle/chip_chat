@@ -21,6 +21,13 @@ The synthetic set and the scripted describer ship in
 module's docstring gives: the arithmetic has to be driven at the size it will
 really run at, and a set of thirty is a fixture two other test modules want.
 
+The fourth set is the labeled retrieval set and its corpus, and the pair is the
+same arrangement one layer down: ``retrieval_questions`` is the manifest this
+repository ships and ``corpus_fixture`` is the committed 31-chunk export those
+labels are resolved against. They are not interchangeable with anything above --
+a retrieval label names a place in a *corpus*, and the catalogue is a different
+register.
+
 ``rows`` is not a fourth set but a reading of the third: the dataset's routing
 rows as expectations, which is what :mod:`chip_chat.eval.trajectory` scores a
 span tree against. ``asked`` is a second reading of the same dataset -- its rows
@@ -54,12 +61,22 @@ from chip_chat.eval.grounding.questions import Question, questions
 from chip_chat.eval.photos.__main__ import DEFAULT_MANIFEST as PHOTOS_MANIFEST
 from chip_chat.eval.photos.labels import LabeledSet
 from chip_chat.eval.photos.testing import synthetic_set
+from chip_chat.eval.retrieval.__main__ import DEFAULT_MANIFEST as RETRIEVAL_MANIFEST
+from chip_chat.eval.retrieval.questions import RetrievalSet
 from chip_chat.eval.trajectory.expectations import Expectation, expectations
 from chip_chat.harvest.blobs import LocalBlobStore
 from chip_chat.otel.testing import SpanRecorder, span_recorder
+from chip_chat.search.corpus import ChunkSet, from_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CATALOG_FIXTURE = _REPO_ROOT / "catalog" / "tests" / "fixtures"
+CORPUS_RUN_ID = "20260827T053000Z"
+"""What the committed chunk fixture's release is called.
+
+The same string ``search/tests/test_retrieve.py`` builds its index under. A run
+id is the corpus's identity, and two files naming the same corpus two things
+would make two reports look incomparable when they are not.
+"""
 
 
 @pytest.fixture
@@ -142,3 +159,26 @@ def asked(shipped: Dataset) -> tuple[Question, ...]:
 def suite() -> AdversarialSuite:
     """The adversarial suite that ships, loaded from its manifest."""
     return AdversarialSuite.load(_REPO_ROOT / ADVERSARIAL_MANIFEST)
+
+
+@pytest.fixture(scope="session")
+def retrieval_questions() -> RetrievalSet:
+    """The labeled retrieval set that ships, loaded from its manifest."""
+    return RetrievalSet.load(_REPO_ROOT / RETRIEVAL_MANIFEST)
+
+
+@pytest.fixture(scope="session")
+def corpus_fixture() -> ChunkSet:
+    """The committed 31-chunk corpus, read the way a build reads one.
+
+    ``search/tests/fixtures`` rather than a corpus built here, for the reason
+    ``catalog`` above is read off disk: the point of resolving a label is that
+    it is resolved against a real chunk export, and the one this repository
+    commits is the only real one a test can have. It is a **slice** of the
+    published pages -- two of the set's labels name places it has never held --
+    which is why the resolution tests assert on named ids rather than on a
+    count.
+    """
+    return from_path(
+        _REPO_ROOT / "search" / "tests" / "fixtures" / "chunks.jsonl", CORPUS_RUN_ID
+    )

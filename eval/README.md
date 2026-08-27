@@ -2,7 +2,10 @@
 
 Golden set, labeled photo set, adversarial suite, Arize experiments. Three of
 those ship today, the first two are promoted into one versioned dataset, and the
-dataset is what the trajectory and grounding evals score against.
+dataset is what the trajectory and grounding evals score against. One more set
+sits below all of them and holds no model at all: the labeled **retrieval** set,
+which scores the knowledge lane's retriever before anything can paraphrase over
+it.
 
 **The golden set** — issue [#29](https://github.com/gganssle/chip_chat/issues/29).
 Thirty-four questions across the five lanes, each carrying the lane it should
@@ -150,13 +153,45 @@ metrics never share an average, why the allergen and dietary category is held to
 counts rather than to a higher percentage, and why three of its five findings
 report *unmeasured* rather than a number.
 
-All three sets live beside their code — [`golden/`](golden/),
-[`photos/`](photos/) and [`adversarial/`](adversarial/) — each with a
-`README.md` to read before adding an entry and a `BASELINE.md` for what has
-and has not been measured. Adding to the first two changes the dataset's
-version, and `make dataset` is how the committed build catches up; the
-adversarial suite is not in the dataset, because an attack has no expected
-output for an experiment to be scored against.
+**The labeled retrieval set** — issue
+[#50](https://github.com/gganssle/chip_chat/issues/50). Forty questions, the
+published places that answer each one, and the ablation RFC-001 §08's design
+choice is defended by. The only eval here with **no model anywhere in it**, which
+is the whole of its argument: *"retrieval bugs are nearly impossible to diagnose
+once a model is paraphrasing over them."*
+
+```
+chip_chat.eval.retrieval
+├── questions       the set: questions, and the places that answer them
+├── corpus          those places, resolved against a corpus release
+├── configurations  the four arms: keyword, vector, hybrid, + reranker
+├── run             every question through a retriever, per arm
+├── scoring         recall@3, hit@3, MRR, P@1; restraint; breaches
+├── coverage        #50's scope, as clauses
+├── report          the baseline, as Markdown
+└── testing         an index in memory, so the sweep is free
+```
+
+```bash
+python -m chip_chat.eval.retrieval --check                    # free
+python -m chip_chat.eval.retrieval --offline --chunks <path>  # free, and the one to run
+```
+
+[`retrieval/README.md`](retrieval/README.md) is the write-up: why a label names a
+*place* rather than a chunk id, why recall is counted over labels, and what the
+first measured sweep found — the demo bar at **100%**, RFC-001 §08's hybrid
+argument confirmed with vector-only at **0%** on every menu-row category, and two
+thresholds that turn out to be too low.
+
+All four sets live beside their code — [`golden/`](golden/),
+[`photos/`](photos/), [`adversarial/`](adversarial/) and
+[`retrieval/`](retrieval/) — each with a `README.md` to read before adding an
+entry and a `BASELINE.md` for what has and has not been measured. Adding to the
+first two changes the dataset's version, and `make dataset` is how the committed
+build catches up; the adversarial suite is not in the dataset, because an attack
+has no expected output for an experiment to be scored against, and neither is the
+retrieval set, because its expected output is a *passage* rather than a response
+and an experiment over a prompt has nothing to do with it.
 
 [`trajectory/`](trajectory/) and [`grounding/`](grounding/) are on the same
 terms and hold no set of their own: both score the dataset's rows, so there is
@@ -205,6 +240,30 @@ means the published data answers this row, `declines` means it does not, and the
 pair is what makes over-refusal and under-refusal two different findings rather
 than one. The golden set says whether a case passed. This says which way it was
 wrong, in a category where the direction is the whole point.
+`eval/retrieval` sits **below** all of them rather than beside any, and the one
+it is nearest to is `eval/grounding` — near enough to be worth saying where they
+part. Both are about what the retriever returned. Grounding reads the
+`retriever.search` span and asks whether *the answer the model wrote* is attached
+to what came back; this asks whether what came back was the right thing in the
+first place, with no model in the loop to write anything. A turn that retrieved
+three wrong passages and answered faithfully from them is perfectly grounded and
+completely wrong, and grounding is structurally blind to that by design: it holds
+the response to the evidence, and cannot hold the evidence to the question.
+
+So it runs the retriever directly — no agent, no lane, no model — and every
+number in it is a property of the index, the chunking and the query construction.
+Nothing here can be fixed or broken by a prompt. That is not a smaller version of
+the golden set's knowledge cases either; it is the half of them every whole-turn
+set is blind to. Task completion, groundedness and a human reading the transcript
+all report success on a fluent, cited answer drawn from the wrong three passages.
+The failure is invisible from up there and trivially visible from down here.
+
+So the golden set keeps six knowledge cases for *routing and answer shape* and
+delegates *did retrieval find it* here — twelve of the retrieval set's questions
+carry the golden case they came from, and `retrieval.coverage` requires that they
+do. It is the same division `eval/photos` draws in the vision lane, one layer
+further down: run the lane directly, score the thing the whole-turn set cannot
+see.
 
 `eval/adversarial` is divided from both on a different axis. It does not ask
 *what is the right answer* — it asks *what does it take to get a wrong one*, and

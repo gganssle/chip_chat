@@ -21,6 +21,7 @@ from chip_chat.search.build import build
 from chip_chat.search.client import ServiceError
 from chip_chat.search.corpus import from_path
 from chip_chat.search.embedding import EmbeddingDeployment
+from chip_chat.search.query import Halves
 from chip_chat.search.retrieve import (
     MEASURED_GOOD_RERANKER_SCORE,
     PROVISIONAL_RERANKER_FLOOR,
@@ -374,3 +375,50 @@ def test_the_alias_is_the_only_name_the_retriever_knows() -> None:
     fake = service()
     retriever(fake).search(ANSWERABLE)
     assert fake.calls[-1] == f"search:{schema.ALIAS}"
+
+
+# --- The ablation's halves ---------------------------------------------------
+
+
+def test_a_single_half_run_says_which_half_it_was() -> None:
+    # The label travels on the result rather than being remembered by whoever
+    # started the sweep, so a table of four arms cannot mislabel one of them.
+    for halves in Halves:
+        result = retriever().search(ANSWERABLE, rerank=False, halves=halves)
+        assert result.halves is halves
+
+
+def test_a_serving_path_result_is_labelled_hybrid_without_being_told() -> None:
+    assert retriever().search(ANSWERABLE).halves is Halves.HYBRID
+
+
+def test_the_keyword_arm_reaches_the_service_without_a_vector_half() -> None:
+    fake = service()
+    retriever(fake).search(ANSWERABLE, rerank=False, halves=Halves.KEYWORD)
+    assert "vectorQueries" not in fake.queries[-1]
+
+
+def test_the_vector_arm_reaches_the_service_without_a_lexical_half() -> None:
+    fake = service()
+    retriever(fake).search(ANSWERABLE, rerank=False, halves=Halves.VECTOR)
+    assert "search" not in fake.queries[-1]
+
+
+def test_every_arm_still_returns_only_citable_passages() -> None:
+    # The property PRD K2 sets a zero target on is a property of the type, so
+    # it cannot be one of the things the ablation trades away.
+    for halves in Halves:
+        result = retriever().search(ANSWERABLE, rerank=False, halves=halves)
+        assert result.passages
+        for passage in result.passages:
+            assert passage.source_url.startswith("https://")
+
+
+def test_a_degraded_arm_that_matched_no_word_is_low_confidence() -> None:
+    # The vector-only arm on a question the corpus cannot answer is the exact
+    # near-miss RFC-001 section 08 warns about: neighbours came back, none of
+    # them shares a content word with the question, and the fused score cannot
+    # tell you so. The lexical floor can, which is why it is not the ranker.
+    result = retriever().search(UNANSWERABLE, rerank=False, halves=Halves.VECTOR)
+    assert result.passages
+    assert result.confidence is Confidence.LOW

@@ -35,6 +35,14 @@ fused ``@search.score`` is a rank score with almost no spread, which is why
 :mod:`chip_chat.search.retrieve` refuses to threshold it. A semantic query
 additionally carries ``@search.rerankerScore`` on 0-4 and an extractive caption.
 
+It models the *shape* of the request in one more respect, for #50: a body with
+no ``search`` key ranks by the vector order alone and a body with no
+``vectorQueries`` ranks by the lexical order alone, so the ablation's four arms
+are four different orders here rather than four labels on one. What it cannot
+model is which of them is *better*, because the vector order is a stand-in --
+see :func:`_ranked`, and see ``eval/retrieval/BASELINE.md``, which says so where
+its numbers are.
+
 It does **not** evaluate ``filter``. An OData evaluator here would be a small
 parser nobody asked for, and it would be marking its own homework: what the
 filter has to be right about is its *text*, which ``test_query.py`` asserts
@@ -171,12 +179,21 @@ class FakeSearchService:
         if semantic and self.semantic_refusal is not None:
             raise ServiceError(self.semantic_refusal)
         documents = list(self.docs[index].values())
+        lexical = "search" in query
+        vector = bool(query.get("vectorQueries"))
         text = str(query.get("search", "*") or "*")
+        if not lexical and vector:
+            # #50's vector-only ablation. The request carries no `search` key at
+            # all, and the query text the vector half is embedding is the one on
+            # the `vectorQueries` entry -- which is the same string, but reading
+            # it from there is what makes this arm really run without a lexical
+            # half rather than with one nobody noticed.
+            text = str(query["vectorQueries"][0].get("text", "*") or "*")
         top = int(query.get("top", 50))
         if text == "*":
             ranked = [(1.0, document) for document in documents]
         else:
-            ranked = _fused(_words(text), documents)
+            ranked = _ranked(_words(text), documents, lexical=lexical, vector=vector)
         return {
             "@odata.count": len(ranked),
             "value": [
@@ -186,27 +203,42 @@ class FakeSearchService:
         }
 
 
-def _fused(
-    query_words: set[str], documents: Sequence[Mapping[str, Any]]
+def _ranked(
+    query_words: set[str],
+    documents: Sequence[Mapping[str, Any]],
+    *,
+    lexical: bool,
+    vector: bool,
 ) -> list[tuple[float, Mapping[str, Any]]]:
-    """Return ``(score, document)`` by reciprocal rank fusion of two orders.
+    """Return ``(score, document)`` by reciprocal rank fusion of the orders sent.
 
     The lexical order is by how much of the query a document contains. The
     stand-in for the vector order is by chunk id, which is deterministic and
     carries no relevance at all — which is the honest model of what the vector
     half does for a query about something the corpus has never heard of: it
     returns its nearest neighbours anyway.
+
+    **Fusing one order is still fusion**, and that is why the two single-half
+    arms of #50's ablation go through the same arithmetic rather than a branch:
+    reciprocal rank fusion over one order is ``1 / (k + rank)``, which preserves
+    that order exactly and keeps the score on the same scale as the hybrid arm's.
+    Two arms whose scores were on different scales would look like a finding.
     """
-    lexical = sorted(
-        documents,
-        key=lambda document: (
-            -_matched(query_words, document),
-            str(document["chunk_id"]),
-        ),
-    )
-    vector = sorted(documents, key=lambda document: str(document["chunk_id"]))
+    orders: list[Sequence[Mapping[str, Any]]] = []
+    if lexical:
+        orders.append(
+            sorted(
+                documents,
+                key=lambda document: (
+                    -_matched(query_words, document),
+                    str(document["chunk_id"]),
+                ),
+            )
+        )
+    if vector:
+        orders.append(sorted(documents, key=lambda document: str(document["chunk_id"])))
     scores: dict[str, float] = {}
-    for order in (lexical, vector):
+    for order in orders:
         for rank, document in enumerate(order, start=1):
             key = str(document["chunk_id"])
             scores[key] = scores.get(key, 0.0) + 1.0 / (RRF_K + rank)
