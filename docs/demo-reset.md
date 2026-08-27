@@ -329,24 +329,80 @@ happened.
 
 ---
 
-## 8. What has not been measured
+## 8. The first live run, 2026-08-27
 
-The trial expires 30 days from 2026-08-25 and the reset has not yet been run
-against a live account with live-band rows in it, because there are none: the
-ops API's write path reaches Snowflake through #46's procedures and no visitor
-has used it. Everything above is checked offline by `make ci` — the SQL against
-`reset.py`, in both directions — and the live half is `snowflake-verify`'s kind
-of question.
+Everything above used to end at "and it has not been run against the live
+account, because no visitor has ever written to it". It has now, deliberately:
+a real fixture customer was dirtied through the shipping procedures, aged out,
+and reset, and the four acceptance criteria were asked of the rows rather than
+of the SQL.
 
-Three things a first live run should be watched for, in the order they would
-surface:
+The customer was `demo-0006` — Camille Gallego, 42 generated orders, 99 lines,
+61 ledger entries, a 2,098-point balance and a `last_seen` of 2026-07-18. What
+was done to her, in order: `update_preferences` renamed her, `place_order`
+placed `ord-9001001` at restaurant 679 and accrued 23 points, a thread id was
+pinned on her, and every clock she owns — `last_seen`, the receipts'
+`created_at`, the live order's `placed_at` — was wound back five days. That last
+step is the one that is easy to get wrong and is the reason the first attempt
+aged nobody: `last_active` is the **greatest** of the visitor's clock and every
+live row's timestamp, so a visitor whose `last_seen` says last week and whose
+receipt says one minute ago is a visitor who is still here. The reset reported
+her `dirty` and skipped her, correctly, and said so in the receipt.
 
-1. **The escape inside a task.** The procedure sets `ALL_VISITORS` itself, via
-   `EXECUTE IMMEDIATE`, and runs `EXECUTE AS CALLER` so that it reads the task's
-   session rather than the owner's. If a task's session refuses the `SET`, the
-   run fails loudly with `RESET_FAILED` rather than quietly with a clean report
-   — which is why the refusal in §4 is written the way it is.
-2. **`held_no_clock` on the first run.** It should equal the number of visitors
-   who have a conversation and no write, and it is the app tier's bill.
-3. **Lock waits against the ops API.** The per-visitor transaction is short, but
-   `orders` is a table two writers now share.
+Then `make snowflake-demo-reset`:
+
+```json
+{"action": "RESET_DEMO_SESSIONS", "cutoff": "2026-08-25 18:58:06.018",
+ "dirty_visitors": 1, "visitors_aged": 1, "orders_deleted": 1,
+ "order_items_deleted": 1, "ledger_entries_deleted": 1, "receipts_deleted": 3,
+ "threads_retired": ["thread_issue47_live"], "held_no_clock": 0,
+ "held_no_baseline": 0, "ttl_days": 2, "ok": true}
+```
+
+**Restored exactly.** Afterwards `demo_visitors` for `demo-0006` matched
+`demo_visitor_baseline` on every restored column — the name back to "Camille
+Gallego", the stated preferences unchanged, `last_seen` back to
+2026-07-18T20:26:00 rather than to now — with `thread_id` null and
+`action_receipts` empty. The counts went back to 42 orders, 99 lines, 61 ledger
+entries and a 2,098-point balance: the same four numbers as before the exercise,
+which is what "the band held" means. One live order, one live line, one live
+accrual and three spent retry keys went; eighteen months of generated history did
+not.
+
+**Safe during live traffic.** A second session ran the read lane bound to
+`demo-0048` continuously across the reset — 20 queries in the window, every one
+returning the same count of 80 orders, no errors and no lock waits. The reset's
+per-visitor transaction is short and it never touched a visitor it was not
+ageing, which is the property the concurrency rests on rather than luck about
+timing.
+
+**`held_no_baseline` is zero because it was fixed that morning.** It was not
+zero when the day started. `demo_visitor_baseline` arrived with #47, *after* the
+population had been loaded, and `load.py` fills the baseline from
+`demo_visitors.jsonl` in the same run as `demo_visitors` itself — so there had
+never been a run in which to fill it. Every table existed, every policy was
+attached and every offline test passed, and the nightly task would have aged
+nobody out for as long as nobody looked, because a visitor with no baseline row
+drops out of the cursor's join rather than raising. It was recoverable only
+because no visitor had ever written: the live `demo_visitors` was still the
+loaded generation exactly, so the baseline could be filled from it without
+inventing a second generation. `make snowflake-verify` now fails by name on an
+unfilled baseline — *"every visitor has the baseline the reset restores them
+to"* — so the next occurrence is loud.
+
+### What is still not measured
+
+1. **The escape inside a task.** The runs above called the procedure directly.
+   The nightly task calls the same procedure with the same arguments, but it
+   does so from a task's own session: the procedure sets `ALL_VISITORS` itself,
+   via `EXECUTE IMMEDIATE`, and runs `EXECUTE AS CALLER` so that it reads that
+   session rather than the owner's. If a task session refuses the `SET`, the run
+   fails loudly with `RESET_FAILED` rather than quietly with a clean report —
+   which is why the refusal in §4 is written the way it is, and the 09:00 UTC
+   run is where that gets confirmed.
+2. **`held_no_clock` against real visitors.** It was zero here because the
+   exercise wrote through the procedures, which leave receipts. The number that
+   matters is the one after a real conversation that never wrote anything, and
+   it is the app tier's bill.
+3. **Contention with the ops API at load.** One reader is not two writers.
+   `orders` is a table the reset and the action lane now share.

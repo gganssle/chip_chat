@@ -684,7 +684,7 @@ snowflake-demo-reset-plan: ## Show which demo sessions would be aged out -- chan
 snowflake-demo-reset: ## Age demo sessions out and restore them to generated state -- #47
 	$(UV) run python -m chip_chat.snowflake.reset
 
-snowflake-verify: ## Check the live account against issues #41 through #45, and #88
+snowflake-verify: ## Check the live account against issues #41 through #47, and #88
 	$(UV) run python -m chip_chat.snowflake.verify
 
 snowflake-verify-fast: ## The same, minus the minute spent watching it suspend
