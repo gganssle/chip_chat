@@ -17,6 +17,12 @@ dependencies = [
     # The draft store prices from the catalogue and validates against it, so
     # `drafts.py` holds a `MenuCatalog`. Nothing else in this package does.
     "chip-chat-catalog",
+    # The ops API calls the stored procedures of #46 and writes no SQL of its
+    # own, so `ops.py` reads their names, argument order and arity off
+    # `chip_chat.snowflake.procedures`. A declaration, not a driver: nothing in
+    # this package opens a Snowflake connection, and `WriteBackend` is the seam
+    # where the Functions host supplies one.
+    "chip-chat-snowflake",
     "fastapi>=0.115",
     # [standard] brings httptools and uvloop. The container runs one process
     # with a handful of workers; the difference is not academic there.
@@ -34,5 +40,6 @@ packages = ["src/chip_chat"]
 chip-chat-agent = { workspace = true }
 chip-chat-catalog = { workspace = true }
 chip-chat-otel = { workspace = true }
+chip-chat-snowflake = { workspace = true }
 chip-chat-vision = { workspace = true }
 chip-chat-web = { workspace = true }

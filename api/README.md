@@ -146,6 +146,57 @@ PRD requirement S4. One definition, `STOP_STATE_MESSAGE`, served on entry and
 mid-conversation alike. Never a 4xx or 5xx, never the word "quota", and never an
 apology for a failure — because nothing failed. The cap worked.
 
+## The second thing in this package: the ops API
+
+The cap is about money. The ops API is about consent, and it is the second
+launch gate: **zero account writes executed without explicit confirmation.**
+
+| File | Holds |
+| --- | --- |
+| `drafts.py` | the confirmation flag for orders (#62) |
+| `confirmations.py` | the same record for the three actions that have no draft |
+| `ops.py` | the gate, the retry key, and the `ops.<action>` span |
+| `../functions/` | the Azure Functions host, and the only Snowflake write role |
+
+The rule, in one sentence: **a write claims something the visitor was shown and
+confirmed, and sends the procedure what was on that record rather than what
+arrived with the call.** So there is no argument anywhere in the write path
+through which a model could alter an order between the card the visitor read and
+the row that gets written — not because the service compares them, but because it
+never looks at the second one.
+
+```python
+service = OpsService(backend, drafts, confirmations)
+
+# While the card is being composed — which is what lets the card render *and*
+# report that ordering is off, per RFC-001 §10.
+card = drafts.card(draft)
+if not service.available():
+    card = unavailable_card(card)
+
+# The visitor presses Confirm. This is a request carrying the session cookie,
+# and it is the only thing in the system that can set the flag.
+drafts.confirm(demo_id, draft_id)
+
+# The write. No method on OpsSession takes a visitor identifier.
+receipt = service.session(demo_id).place_order(draft_id)
+```
+
+`docs/ops-api.md` has the whole argument: which tier is allowed to know what, why
+the retry key is the record's own id, and what a trace has to carry for the gate
+to be auditable in it.
+
+### Not callable — unclaimable-without
+
+The same shape the spend cap uses, for the same reason:
+
+| Fact | Where |
+| --- | --- |
+| An `OpsService` cannot be built without both ledgers — required positional | `ops.py` |
+| No write method takes an identifier; `test_ops.py` holds all four to `IDENTITY_VOCABULARY` | `ops.py` |
+| The procedure name, argument order and arity come from #46's declaration | `ops.py`, `../functions/function_app.py` |
+| A claimed record is retired, so one card is at most one write | `drafts.py`, `confirmations.py` |
+
 ## Configuration
 
 Every ceiling is an environment variable, all optional, all defaulted small:
@@ -164,6 +215,13 @@ Every ceiling is an environment variable, all optional, all defaulted small:
 | `CHIP_CHAT_TURN_TOKEN_RESERVATION` | `8000` |
 | `CHIP_CHAT_BUDGET_RESET_TIMEZONE` | `UTC` |
 | `CHIP_CHAT_KILL_SWITCH` | unset |
+
+The ops API's own settings live on the Functions app rather than on the
+container, because that is where the write role is: `CHIP_CHAT_OPS_KEY` (the
+shared secret the chat app presents, and whose absence refuses every write),
+`SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER` and `SNOWFLAKE_PRIVATE_KEY` as a Key Vault
+reference, and optional `SNOWFLAKE_WRITE_ROLE`, `SNOWFLAKE_WAREHOUSE`,
+`SNOWFLAKE_DATABASE` and `SNOWFLAKE_SCHEMA`.
 
 `CHIP_CHAT_BUDGET_RESET_TIMEZONE` is named rather than assumed because "daily"
 means nothing without it, and a ceiling that rolls over at five in the afternoon

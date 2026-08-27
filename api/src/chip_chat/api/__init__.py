@@ -28,6 +28,13 @@ model is called, in the request path, synchronously.
 lives in the app tier where no tool argument and no model output can reach it --
 and the ops API's refusal of an unconfirmed draft is then a fact about the
 system rather than an instruction in a prompt.
+
+:mod:`chip_chat.api.ops` is the refusal itself, and the second launch gate.
+Together with :mod:`chip_chat.api.confirmations` -- the same record for the three
+writes that have no draft -- it is the only path in the system that writes, and
+the only place the confirmation rule is enforced. ``api/functions/`` is the
+Azure Functions host that runs it; nothing else in this package imports that
+directory.
 """
 
 from chip_chat.api.app import (
@@ -41,6 +48,14 @@ from chip_chat.api.app import (
     default_kill_switch,
 )
 from chip_chat.api.clock import Clock, SystemClock
+from chip_chat.api.confirmations import (
+    DEFAULT_CONFIRMATION_TTL_SECONDS,
+    Confirmation,
+    ConfirmationCode,
+    ConfirmationLedger,
+    ConfirmationRejectedError,
+    preferences_reference,
+)
 from chip_chat.api.drafts import (
     DEFAULT_DRAFT_TTL_SECONDS,
     Draft,
@@ -63,6 +78,21 @@ from chip_chat.api.killswitch import (
 )
 from chip_chat.api.ledger import BudgetLedger, Reservation
 from chip_chat.api.limits import SpendLimits
+from chip_chat.api.ops import (
+    OPS_UNAVAILABLE_MESSAGE,
+    SESSION_HEADER,
+    OpsRejectedError,
+    OpsService,
+    OpsSession,
+    OpsUnavailableError,
+    Receipt,
+    WriteBackend,
+    WriteSession,
+    offer_cancellation,
+    offer_preferences,
+    offer_redemption,
+    unavailable_card,
+)
 from chip_chat.api.outcome import (
     STOP_STATE_MESSAGE,
     BudgetScope,
@@ -76,10 +106,13 @@ from chip_chat.api.uploads import UploadLimiter
 from chip_chat.otel import service_name
 
 __all__ = [
+    "DEFAULT_CONFIRMATION_TTL_SECONDS",
     "DEFAULT_DRAFT_TTL_SECONDS",
     "KILL_SWITCH_VARIABLE",
+    "OPS_UNAVAILABLE_MESSAGE",
     "SERVICE_NAME",
     "SESSION_COOKIE",
+    "SESSION_HEADER",
     "STOP_STATE_MESSAGE",
     "BudgetLedger",
     "BudgetScope",
@@ -87,6 +120,10 @@ __all__ = [
     "ChatReply",
     "ChatRequest",
     "Clock",
+    "Confirmation",
+    "ConfirmationCode",
+    "ConfirmationLedger",
+    "ConfirmationRejectedError",
     "Draft",
     "DraftLine",
     "DraftRejectedError",
@@ -96,7 +133,12 @@ __all__ = [
     "FundedTurn",
     "KillSwitch",
     "ManualKillSwitch",
+    "OpsRejectedError",
+    "OpsService",
+    "OpsSession",
+    "OpsUnavailableError",
     "OrderType",
+    "Receipt",
     "RejectionCode",
     "Reservation",
     "Selection",
@@ -113,12 +155,19 @@ __all__ = [
     "UnfundedTurnError",
     "UploadLimiter",
     "Usage",
+    "WriteBackend",
+    "WriteSession",
     "__version__",
     "any_of",
     "build_service",
     "create_app",
     "default_kill_switch",
+    "offer_cancellation",
+    "offer_preferences",
+    "offer_redemption",
+    "preferences_reference",
     "service_name",
+    "unavailable_card",
 ]
 
 __version__ = "0.0.0"
