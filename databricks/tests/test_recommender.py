@@ -819,9 +819,11 @@ def test_the_training_run_moves_an_alias_and_never_a_stage() -> None:
 
 
 def test_the_alias_only_moves_when_the_run_beat_the_baseline() -> None:
+    """Or when there is no champion to beat -- see `takes_the_alias`, which is
+    `beats_baseline` plus that one case and no other."""
     body = code(TRAIN)
-    assert "recommender.beats_baseline(" in body
-    assert body.index("recommender.beats_baseline(") < body.index(
+    assert "recommender.takes_the_alias(" in body
+    assert body.index("recommender.takes_the_alias(") < body.index(
         "set_registered_model_alias"
     )
 
@@ -1116,3 +1118,47 @@ def test_the_fitted_pair_has_no_dict_to_take_the_easy_way_out_of() -> None:
     for notebook in NOTEBOOKS:
         source = notebook.read_text(encoding="utf-8")
         assert "vars(" not in source, notebook.name
+
+
+# --- The first version, which has nothing to beat -----------------------------
+
+
+def test_the_first_version_takes_the_alias_whatever_it_scored() -> None:
+    """The case the promotion rule does not cover, found by running it.
+
+    `beats_baseline` stops a run *replacing* a good incumbent with a popularity
+    list wearing a hat. With no incumbent there is nothing to protect, and what
+    the gate protects instead is an empty serving table: `recommender_publish`
+    loads `@champion` and nothing else, so the first run that ties the baseline
+    leaves a version in the registry, no alias, and a publish task dying on
+    `RESOURCE_DOES_NOT_EXIST`.
+    """
+    assert not recommender.beats_baseline(0.1078, 0.1078)
+    assert recommender.takes_the_alias(0.1078, 0.1078, has_champion=False)
+    assert recommender.takes_the_alias(0.0, 0.9, has_champion=False)
+
+
+def test_every_version_after_the_first_is_held_to_the_margin() -> None:
+    """The bootstrap widens the rule by exactly one case and not one more."""
+    for novel, baseline in ((0.1078, 0.1078), (0.0, 0.9), (0.5, 0.495)):
+        assert not recommender.takes_the_alias(novel, baseline, has_champion=True)
+    assert recommender.takes_the_alias(0.51, 0.5, has_champion=True)
+    assert recommender.takes_the_alias(
+        0.51, 0.5, has_champion=True
+    ) == recommender.beats_baseline(0.51, 0.5)
+
+
+def test_the_notebook_asks_the_registry_rather_than_assuming() -> None:
+    """`has_champion` is read off the registry, because this module cannot.
+
+    `recommender.py` may not import MLflow -- it is uploaded as a flat
+    workspace file and logged into a version as `code_paths` -- so the caller
+    resolves the alias and the rule takes the answer as an argument.
+    """
+    source = code(TRAIN)
+    assert "get_model_version_by_alias(MODEL, recommender.CHAMPION_ALIAS)" in source
+    assert "has_champion=has_champion" in source
+    assert "recommender.takes_the_alias(" in source
+    assert source.index("has_champion = False") < source.index(
+        "recommender.takes_the_alias("
+    )
