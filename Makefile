@@ -320,7 +320,7 @@ trajectory-baseline: ## Refresh eval/trajectory/BASELINE.md from that same free 
 # number a free run really produces is `supported`: a turn that made a claim
 # having retrieved nothing at all.
 
-.PHONY: grounding-check grounding grounding-baseline
+.PHONY: grounding-check grounding grounding-baseline grounding-judged
 
 grounding-check: ## Check the dataset can support #75's numbers, free
 	$(UV) run python -m chip_chat.eval.grounding --check
@@ -330,6 +330,17 @@ grounding: ## Score groundedness and citations against the slice, free
 
 grounding-baseline: ## Refresh eval/grounding/BASELINE.md from that same free run
 	$(UV) run python -m chip_chat.eval.grounding --ceiling --out eval/grounding/BASELINE.md
+
+# The credentialed run WITH a judge, and the one that turns the two judged
+# findings from `unscored` into numbers. It spends one model call per row plus
+# two per scoreable row, and it is what eval/grounding/BASELINE.md holds today.
+#
+# BASELINE.md holds whichever of the two last ran and always says which: its
+# header names the source and the judge, so a ceiling document and a judged one
+# are never confused for each other.
+
+grounding-judged: ## Run against a real deployment with a judge, and write the baseline
+	$(UV) run python -m chip_chat.eval.grounding --judge --out eval/grounding/BASELINE.md
 
 # The credentialed run is the same command with neither flag. It needs
 # CHIP_CHAT_FOUNDRY_ENDPOINT and CHIP_CHAT_FOUNDRY_API_KEY and costs at least
@@ -460,6 +471,110 @@ dataset: ## Rebuild eval/dataset/DATASET.json after adding a case or a frame
 
 dataset-upload: ## Create the Arize dataset, or add a version holding the new entries
 	$(UV) run --with arize python -m chip_chat.eval.dataset --upload
+
+# --- Experiments -------------------------------------------------------------
+#
+# Issue #73, and the thing that turns "I tweaked the prompt and it feels better"
+# into a number. An experiment takes a CONFIGURATION -- a prompt revision, a
+# model deployment, retrieval settings, matcher thresholds -- from
+# eval/experiments/CONFIGURATIONS.json and scores it against the versioned
+# dataset. Nothing being experimented on is in the code.
+#
+# Both free targets belong in CI. `experiment-check` loads the configurations,
+# refuses one that contradicts itself, and prints each arm's fingerprint beside
+# the prompt version it resolves to; it exits non-zero on fewer than two arms,
+# because with one arm there is nothing to compare and #73's demo criterion
+# cannot be met.
+#
+# `experiment-ceiling` runs an arm against the slice with routing handed to it.
+# Read its first paragraph before its table and read it twice: the routing
+# oracle answers from the golden set and NEVER READS THE SYSTEM PROMPT, so the
+# prompt axis is inert here and two arms differing only in their prompt produce
+# identical numbers. That is what nothing-read-the-change looks like, and it is
+# not what no-difference looks like. The report says so above its own table.
+#
+# `experiment-compare` is the demo criterion and it costs money: two arms, one
+# model call per row each, plus two judge calls per scoreable row with --judge.
+# It needs CHIP_CHAT_FOUNDRY_ENDPOINT and the two deployment names.
+
+.PHONY: experiment-check experiment-ceiling experiment-baseline experiment-compare
+
+experiment-check: ## Load the configurations and the dataset without running anything, free
+	$(UV) run python -m chip_chat.eval.experiment --check
+
+experiment-ceiling: ## Score an arm with routing handed to it. Free, and blind to the prompt
+	$(UV) run python -m chip_chat.eval.experiment --ceiling --run shipped
+
+experiment-baseline: ## Record the current build as the baseline the launch criteria are checked against
+	$(UV) run python -m chip_chat.eval.experiment --run shipped --judge \
+		--record eval/experiments/results/shipped.json \
+		--capture eval/experiments/captures/shipped.json \
+		--out eval/experiments/BASELINE.md
+
+experiment-compare: ## Two prompt versions, same dataset, comparison rendered -- #73's demo
+	$(UV) run python -m chip_chat.eval.experiment --compare shipped lean-lanes \
+		--judge --results eval/experiments/results \
+		--capture eval/experiments/captures/lean-lanes.json \
+		--out eval/experiments/COMPARISON.md
+
+# --- Online evals and monitors ------------------------------------------------
+#
+# Issue #76, and the piece that only matters because you went public. Three of
+# the six monitors need no model and therefore run on EVERY turn rather than on
+# the sampled fifth -- a cross-visitor disclosure monitor sampling 20% of
+# traffic misses four disclosures in five.
+#
+# `online-check` prints the sampling policy, every monitor with the sentence
+# from #76 it implements, and the judges' share of the daily token ceiling. It
+# EXITS NON-ZERO when CHIP_CHAT_DAILY_TOKEN_CEILING is unset, deliberately: a
+# monitoring loop whose token spend is unaccounted is the hole in the cap that
+# #76's last acceptance criterion names, and a check that shrugged at it would
+# be the criterion satisfied by a paragraph. Pass MEASURED_TOKENS the per-judged
+# turn cost from a real run -- `make experiment-baseline` prints it.
+#
+# `online-drill` produces every feared condition deliberately and reports which
+# monitor caught it. Free, no model, no credentials, and non-zero if any monitor
+# fails to fire on its own condition. That is #76's "each monitor tested by
+# producing the condition" as a command rather than as a claim.
+
+MEASURED_TOKENS ?= 916
+
+.PHONY: online-check online-drill
+
+online-check: ## Policy, monitors and the judges' share of the daily cap. Free
+	$(UV) run python -m chip_chat.eval.online --check --measured-tokens $(MEASURED_TOKENS)
+
+online-drill: ## Produce every feared condition and show which monitor caught it. Free
+	$(UV) run python -m chip_chat.eval.online --drill
+
+# --- Promotion ----------------------------------------------------------------
+#
+# Issue #77. A production trace into a dataset entry in under two minutes, or it
+# will not happen -- so everything the trace can supply is filled in and the
+# three things it cannot (which requirements, what has to be observed, and why)
+# are left as TODO, which the apply step refuses.
+#
+# `promote-check` is free and belongs in CI. It reports how many entries came
+# from real traffic and holds every PERMANENT source to its manifest: an attack
+# added to the adversarial suite without being recorded in
+# eval/dataset/PROVENANCE.json is a build failure rather than a promise that
+# quietly stopped being kept.
+#
+# The two-step path, with a capture from `make experiment-baseline`:
+#
+#     python -m chip_chat.eval.promote --drafts eval/experiments/captures/shipped.json > /tmp/cases.json
+#     $EDITOR /tmp/cases.json          # tool+lane, requirements, why
+#     python -m chip_chat.eval.promote --apply /tmp/cases.json
+#     make dataset                     # the version moves, once, visibly
+
+.PHONY: promote-check promote-drafts
+
+promote-check: ## Report the provenance ledger and hold permanent sources to their manifests, free
+	$(UV) run python -m chip_chat.eval.promote --check
+
+promote-drafts: ## Draft cases from a capture. CAPTURE=<path>
+	@test -n "$(CAPTURE)" || { echo "set CAPTURE=<capture.json>"; exit 1; }
+	$(UV) run python -m chip_chat.eval.promote --drafts $(CAPTURE)
 
 # --- The corpus -------------------------------------------------------------
 #

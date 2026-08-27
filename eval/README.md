@@ -233,6 +233,92 @@ could be compared to.
 terms and hold no set of their own: both score the dataset's rows, so there is
 nothing in either to add an entry to.
 
+**Experiments** — issue
+[#73](https://github.com/gganssle/chip_chat/issues/73). The thing that turns *"I
+tweaked the prompt and it feels better"* into a number. An experiment takes a
+**configuration** -- a prompt revision, a model deployment, retrieval settings,
+matcher thresholds -- from `eval/experiments/CONFIGURATIONS.json` and scores it
+against the versioned dataset, per lane *and* per requirement, because an
+aggregate that improved while a lane fell is a regression the aggregate calls an
+improvement.
+
+```
+chip_chat.eval.experiment
+├── configurations  the four axes, as data with a fingerprint
+├── turns           one pass over the rows, read three ways
+├── run             a configuration and a factory in, an experiment out
+├── results         the flattened form two runs can be compared in
+├── compare         what moved, per metric, per lane, per requirement
+└── report          both documents, caveats above the numbers
+```
+
+```bash
+python -m chip_chat.eval.experiment --check                  # free
+python -m chip_chat.eval.experiment --ceiling --run shipped  # free, blind to the prompt
+make experiment-compare                                      # two prompts, one dataset
+```
+
+[`experiments/README.md`](experiments/README.md) is the write-up: what an arm is,
+why the prompt enters the fingerprint as a digest rather than as a name, why the
+runner spends one model call per row rather than three, and what a comparison
+under the routing oracle is and is not evidence of.
+
+**Online evals and monitors** — issue
+[#76](https://github.com/gganssle/chip_chat/issues/76), and the only set here
+that scores questions nobody wrote down. There is no expected lane on a
+stranger's question, so a monitor may fire only on something wrong **on its
+face**: a claim with nothing retrieved, a photo match that resolved nothing and
+escalated nothing, a refusal on a turn whose own retrieval answered it, an
+identifier belonging to somebody else, a turn over its latency or cost ceiling.
+
+```
+chip_chat.eval.online
+├── signals   one live turn, as the thing a monitor may look at
+├── sampling  which turns get a judge, and the arithmetic behind the rate
+├── monitors  the six fears, each as a condition that can fire
+├── budget    judge tokens, inside the daily cap rather than beside it
+├── run       sample, judge, monitor, alert -- and count what it cost
+└── testing   each condition produced deliberately, so each monitor is demonstrated
+```
+
+```bash
+python -m chip_chat.eval.online --check   # free, and non-zero while spend is unaccounted
+python -m chip_chat.eval.online --drill   # free: every condition, produced
+```
+
+[`online/README.md`](online/README.md) is the write-up: why the rate is 20%,
+which three classes ignore it, why four of the six monitors run on every turn
+rather than on the sample, and what a drill is and is not evidence of.
+
+**Promotion** — issue
+[#77](https://github.com/gganssle/chip_chat/issues/77). The loop that makes going
+public pay for itself: a production trace the monitors flagged, into a golden-set
+entry, in under two minutes. Everything the trace can supply is derived;
+everything that is a judgement -- which requirements, what has to be observed,
+why the case is worth having -- is left as `TODO` and refused if it stays.
+
+```
+chip_chat.eval.promote
+├── candidates  a flagged turn, and the draft it becomes
+├── ledger      where every entry came from, and which sources are permanent
+└── apply       validation, the append, and the provenance row -- in that order
+```
+
+```bash
+python -m chip_chat.eval.promote --check                         # free, and in CI
+python -m chip_chat.eval.promote --drafts capture.json > cases.json
+python -m chip_chat.eval.promote --apply cases.json && make dataset
+```
+
+Provenance lives in `eval/dataset/PROVENANCE.json`, **beside** the dataset and
+never inside it: a `provenance` column on a dataset entry would rebase every
+existing digest and move the version for a reason that has nothing to do with the
+rows. The same file records the **permanent** sources -- the adversarial suite's
+twenty-eight attacks, run by `make adversarial-redteam`, which CI blocks on -- and
+`promote-check` fails when an attack is added to the manifest without being
+recorded there. That is #77's *each attack you survive becomes a permanent eval*
+with a check behind it rather than a promise in a document.
+
 ## Where the line between them is
 
 They overlap nowhere and between them there is no gap, which is not a
