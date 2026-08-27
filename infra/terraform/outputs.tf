@@ -319,6 +319,16 @@ output "databricks_gold_verify_job_id" {
   value       = var.databricks_unity_catalog_enabled ? databricks_job.gold_verify[0].id : null
 }
 
+output "databricks_gold_chunk_pipeline_id" {
+  description = "The gold chunking pipeline (gh-35). Start an update with: databricks pipelines start-update <id>. Run it after the silver pipeline; it reads silver and never bronze, and writes only into gold_harvested. Distinct from databricks_gold_pipeline_id, which is gh-36's marts over the synthetic stream. Null while var.databricks_unity_catalog_enabled is false."
+  value       = var.databricks_unity_catalog_enabled ? databricks_pipeline.gold_chunk[0].id : null
+}
+
+output "databricks_gold_chunk_verify_job_id" {
+  description = "Asserts gh-35's acceptance criteria against the gold chunk table, and prints the deterministic twenty chunks the hand review reads. Run it after the gold chunking pipeline with: databricks jobs run-now <id>"
+  value       = var.databricks_unity_catalog_enabled ? databricks_job.gold_chunk_verify[0].id : null
+}
+
 output "databricks_recommender_job_id" {
   description = "Trains, registers and publishes the item-affinity recommender (gh-37). Weekly, and PAUSED until var.databricks_recommender_schedule_enabled is true. Run it by hand with: databricks jobs run-now <id>. Run it after the gold pipeline -- the training run compares its own refit to the published item_affinity mart."
   value       = var.databricks_unity_catalog_enabled ? databricks_job.recommender[0].id : null

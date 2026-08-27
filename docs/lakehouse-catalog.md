@@ -227,7 +227,10 @@ that table-to-table lineage alone would not have shown.
 
 - **No tables.** The `lineage_probe` tables are evidence, not data. #33 has
   since landed bronze from ADLS with Auto Loader — see
-  [bronze-ingestion.md](bronze-ingestion.md) — and #34 builds silver and gold.
+  [bronze-ingestion.md](bronze-ingestion.md) — #34 builds silver, see
+  [silver-conformance.md](silver-conformance.md), #35 fills `gold_harvested`
+  with the chunk table, see [corpus-chunking.md](corpus-chunking.md), and #36
+  fills `gold_synthetic` with the marts, see [gold-marts.md](gold-marts.md).
 - **No MLflow model registry.** The recommender registered in Unity Catalog is
   later in Phase 3 — [#37](https://github.com/gganssle/chip_chat/issues/37) has
   since landed it, at a three-level name inside `gold_synthetic` so that the

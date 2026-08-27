@@ -1,21 +1,21 @@
 """What a chunk carries, restated here so the index can be built from it.
 
 Issue #35 fixed the chunk metadata schema and put it in
-``chip_chat.databricks.gold.FIELDS`` — name, type, and what a search index may
-do with each column — precisely so that #48 would not invent a second one. This
-module is that tuple again, minus the prose, and
+``chip_chat.databricks.gold_chunks.FIELDS`` — name, type, and what a search index
+may do with each column — precisely so that #48 would not invent a second one.
+This module is that tuple again, minus the prose, and
 ``search/tests/test_chunk_contract.py`` asserts the two are the same list.
 
 **Why a copy rather than an import**, since the obvious reading of "one copy" is
-that this file should not exist. ``gold.py`` is a *Spark driver* module: a
-Lakeflow pipeline runs a notebook in the workspace rather than an installed
+that this file should not exist. ``gold_chunks.py`` is a *Spark driver* module:
+a Lakeflow pipeline runs a notebook in the workspace rather than an installed
 wheel, so Terraform uploads that exact file beside the notebook and it imports
-two ways — as ``chip_chat.databricks.gold`` under pytest and as a flat top-level
-``gold`` on the driver. Its own docstring is explicit that the constants it
-shares with ``silver.py``, ``catalog.py`` and ``chip_chat.data_gen`` are
-"spelled out again below and asserted equal to theirs in the tests rather than
-imported". This is that same convention applied one layer further out, and the
-test is what makes it a convention rather than a duplicate.
+two ways — as ``chip_chat.databricks.gold_chunks`` under pytest and as a flat
+top-level ``gold_chunks`` on the driver. Its own docstring is explicit that the
+constants it shares with ``silver.py``, ``catalog.py`` and ``chip_chat.data_gen``
+are "spelled out again below and asserted equal to theirs in the tests rather
+than imported". This is that same convention applied one layer further out, and
+the test is what makes it a convention rather than a duplicate.
 
 There is a second reason, and it is the one that would matter even if the driver
 constraint went away. An index schema and a table schema are allowed to
@@ -58,7 +58,7 @@ __all__ = [
     "retrievable",
 ]
 
-# --- The kinds, copied from gold.KINDS --------------------------------------
+# --- The kinds, copied from gold_chunks.KINDS -------------------------------
 
 MENU_ITEM: Final = "MENU_ITEM"
 POLICY_SECTION: Final = "POLICY_SECTION"
@@ -75,7 +75,7 @@ KINDS: Final[tuple[str, ...]] = (
     DOCUMENT_BLOCK,
     NUTRITION_ROW,
 )
-"""Every kind of chunk. Asserted equal to ``gold.KINDS``."""
+"""Every kind of chunk. Asserted equal to ``gold_chunks.KINDS``."""
 
 # --- Field names that are referenced by name elsewhere in this package ------
 
@@ -98,7 +98,8 @@ CITATIONS: Final = "citations"
 class ChunkField:
     """One column of the chunk table, and what the index may do with it.
 
-    The four flags are ``gold.Field``'s, unchanged and in the same sense.
+    The four flags are ``gold_chunks.Field``'s, unchanged and in the same
+    sense.
 
     Attributes:
         name: The column name. The same string in Delta and in the index.
@@ -166,7 +167,7 @@ FIELDS: Final[tuple[ChunkField, ...]] = (
     ChunkField("character_count", "INT"),
     ChunkField("chunked_at", "TIMESTAMP"),
 )
-"""The chunk metadata schema, in ``gold.FIELDS``' order.
+"""The chunk metadata schema, in ``gold_chunks.FIELDS``' order.
 
 #48's first scope bullet is that the index carries *every* chunk metadata field
 and that the citation fields are "retrievable and not merely filterable". That

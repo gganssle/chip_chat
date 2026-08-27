@@ -15,6 +15,7 @@ contributor — human or agent — has them locally. Read them in this order.
 | [lakehouse-catalog.md](lakehouse-catalog.md) | The Unity Catalog layout — six medallion schemas, who may write to them, and the two jobs that check both claims against the live workspace |
 | [bronze-ingestion.md](bronze-ingestion.md) | How both streams get out of ADLS and into bronze — the Auto Loader options, what a row carries, where a malformed document goes, and the run that checked all four claims |
 | [silver-conformance.md](silver-conformance.md) | How both streams stop being what arrived and start being what is true — what is deduplicated and on which key, what counts as boilerplate and how its removal is checked, and which violations stop the pipeline |
+| [corpus-chunking.md](corpus-chunking.md) | Where a fact ends — what one chunk is, the metadata schema the retrieval index is built from, and the fixed-window chunker kept in the test suite so the two required tests can be run over it and required to fail |
 | [gold-marts.md](gold-marts.md) | The four personalization marts — what every number in them means, how `usual_order.confidence` is defined so a low value hedges honestly, and why no mart reads the table holding the fields a visitor may edit |
 | [recommender.md](recommender.md) | The item-affinity recommender — what it scores, why it refuses to suggest anything a visitor has ever ordered, and why a run only takes the `@champion` alias by beating a popularity baseline on *novel* hits |
 | [retrieval-index.md](retrieval-index.md) | The knowledge lane's index — what a chunk becomes, the one alias write that makes a corpus live, which half of integrated vectorization this estate can have and why, and four things the live service does that its documentation does not say |
@@ -63,8 +64,15 @@ asks for, and the job that asserts each of them against the live workspace. The
 silver-conformance guide continues it one further, and is the first of them that
 has to argue rather than record — which key a duplicate is collapsed on, what
 counts as boilerplate, and why every expectation in that layer stops the pipeline
-instead of writing a warning nobody reads. The gold-marts guide is the last of the
-four and argues hardest, because a mart is a *definition* rather than a
+instead of writing a warning nobody reads. The corpus-chunking guide is the
+medallion's other gold half and has the sharpest single decision in the set:
+RFC-001 §08 says chunking follows structure rather than length, so that guide
+records what a chunk is, what metadata it carries into the search index, and why
+the fixed-window chunker nobody should use is kept in the test suite — the issue
+asks that the two required tests *would fail if fixed-window chunking were
+substituted*, and the only way to know that is to substitute it. The gold-marts
+guide is the last of the five and argues hardest, because a mart is a
+*definition* rather than a
 transformation: what a usual order is, what a confidence of 0.31 licenses the
 assistant to say, and which table the whole layer refuses to read so that a
 visitor editing their display name cannot invalidate an answer. The recommender

@@ -315,12 +315,14 @@ is how every run in this document was made, against
 in the live landing zone, with real item names, real FAQ questions and real
 `source_url` values.
 
-**The contract test skips.** `search/tests/test_chunk_contract.py` asserts that
-this package's chunk schema is `gold.FIELDS`, field for field. `gold.py` on
-`main` is #36's four marts; #35's chunk renderers are on
-`polecat/mica/cc-zix`, and the two landed in a module of the same name. The test
-skips with that reason and becomes live the moment the merge queue resolves it.
-Tracked as **cc-6rb**.
+**The contract test is live.** `search/tests/test_chunk_contract.py` asserts
+that this package's chunk schema is `chip_chat.databricks.gold_chunks.FIELDS`,
+field for field. It used to skip: `gold.py` on `main` was #36's four marts and
+#35's chunk renderers were on an unmerged branch under the same module name, so
+the index was being built against a chunk schema nothing verified it matched.
+#35 has since landed as `gold_chunks.py` — see
+[corpus-chunking.md](corpus-chunking.md) — the test imports it directly, and any
+drift between the two schemas now fails `make ci`. That was **cc-6rb**.
 
 **Hybrid retrieval and the reranker are #49's, and they have landed.** The index
 carries the semantic configuration and the scoring profile — an index is rebuilt
