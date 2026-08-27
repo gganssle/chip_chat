@@ -18,22 +18,35 @@ sql/02_database.sql       CHIP_CHAT, three managed-access schemas, PUBLIC droppe
 sql/03_grants.sql         the security boundary. Read this one first
 sql/04_users.sql          three service users, no credentials
 sql/05_resource_monitors  a daily credit ceiling per warehouse, and why they differ
+sql/06_catalogue.sql      the real half: menu_items, item_prices, modifiers, stores
+sql/07_accounts.sql       the synthetic half. Every table here carries demo_id
+sql/08_marts.sql          the four marts Databricks publishes overnight
+sql/09_audit.sql          the demo_id rule, as a view that must return no rows
 sql/optional/             never run by an apply: reset.sql, network_policy.sql,
                           trial_credit_cap.sql
 
 src/chip_chat/snowflake/account.py   the layout as data. Creates nothing
+src/chip_chat/snowflake/schema.py    the tables as data. Also creates nothing
 src/chip_chat/snowflake/snow.py      the `snow` CLI, wrapped
 src/chip_chat/snowflake/apply.py     `make snowflake-apply`
+src/chip_chat/snowflake/load.py      `make snowflake-load-sample`
 src/chip_chat/snowflake/verify.py    `make snowflake-verify`
 ```
 
 ```bash
 make snowflake-apply         # create or re-assert every object. Safe to repeat
 make snowflake-cap QUOTA=60  # cap the whole trial. The one number nothing here knows
-make snowflake-verify        # 30 checks against the live account, ~3 minutes
-make snowflake-verify-fast   # 29 of them, skipping the minute of watching
+make snowflake-load-sample   # the committed catalogue fixture, 60 rows
+make snowflake-verify        # 62 checks against the live account, ~3 minutes
+make snowflake-verify-fast   # 61 of them, skipping the minute of watching
 make snowflake-rebuild       # drop it all, build it back, verify
 ```
+
+The tables are `CREATE OR ALTER TABLE`, which converges an existing table to the
+declaration and **keeps its rows** — and keeps a row access policy attached to
+it, which is what makes a routine apply safe once [#43] lands. Changing that one
+word to `OR REPLACE` would empty every table on the next apply, so
+`test_account_layout.py` fails on it.
 
 `snowflake-cap` is the odd one out. Everything else here is a file an apply runs;
 that target sets a credit quota on the whole account, and the quota is the one
@@ -56,13 +69,35 @@ privileges, and `tests/test_account_layout.py` fails in `make ci` if a `GRANT`
 appears that the table does not permit. Widening the ops API's reach to the
 personalization marts is a failing test, not a line nobody re-reads.
 
+## One column, and the view that will not let it slip
+
+Every visitor-scoped table carries `demo_id`. That is a schema requirement
+rather than a convention: a row access policy filters **one** table against a
+session variable and cannot follow a join, so a visitor-scoped table without the
+column is one [#43] cannot protect at all.
+
+```sql
+SELECT * FROM CHIP_CHAT.ACCOUNTS.tables_missing_demo_id;   -- empty is a pass
+```
+
+It defaults to deny — a new table in `ACCOUNTS` or `MARTS` is presumed
+visitor-scoped until somebody exempts it by name in `09_audit.sql` and writes
+down why. Two are: `personas`, which is a kind of person rather than a person,
+and `item_affinity`, which is about two items and nobody. `verify` also creates
+a table without the column and requires the audit to notice, because an audit
+that has quietly stopped looking reports a clean account forever.
+
+`visitor_scoped_tables`, beside it, is the list [#43]'s coverage test needs:
+every table on it must carry a policy.
+
 ## Two files, two different questions
 
-`tests/` asks whether the **SQL** still says what `account.py` says. Free,
-offline, in `make ci`, and it is what catches a renamed warehouse, a widened
-grant or a credit quota that stopped matching its monitor at the moment somebody
-writes it. `test_credit_cap.py` is the exception that proves the rule: it is the
-only test here that exercises Python rather than SQL, because the guard that
+`tests/` asks whether the **SQL** still says what `account.py` and `schema.py`
+say. Free, offline, in `make ci`, and it is what catches a renamed warehouse, a
+widened grant, a dropped column or a credit quota that stopped matching its
+monitor at the moment somebody writes it. `test_credit_cap.py` is the exception
+that proves the rule: it is the only test here that exercises Python rather than
+SQL, because the guard that
 refuses a quota the account has already spent past is the one check the SQL
 cannot make about itself.
 
@@ -79,3 +114,12 @@ user holds as a secondary role, so any check of a role boundary that omits
 others of the same kind, are written up in
 [docs/snowflake-account.md](../docs/snowflake-account.md) §8 — which is the file
 to read before extending this package.
+
+[docs/snowflake-schema.md](../docs/snowflake-schema.md) is the same thing for
+the tables: the ten columns RFC-001 §04 does not print and why each is
+unavoidable, why nothing is clustered (the whole database is 193 KB, and a
+micro-partition holds 16 MB), and six more findings of the same kind — including
+that `INFORMATION_SCHEMA` is filtered by the querying role *even through a
+view*, so an audit run as the wrong role passes by not looking.
+
+[#43]: https://github.com/gganssle/chip_chat/issues/43

@@ -422,13 +422,25 @@ search-verify: ## Hold the live index to #48.3 and #48.4 -- costs a minute
 # that suspends every warehouse the moment you press return. A rebuild drops the
 # cap and does not put it back, and `snowflake-verify` fails on that by name.
 #
+# `snowflake-load` and `snowflake-load-sample` are issue #42's third criterion:
+# the schema loaded with published data and queryable. They are the developer
+# path deliberately -- #39 publishes the marts and the catalogue nightly out of
+# Databricks, and this reads JSONL out of a directory. One transaction per
+# table, TRUNCATE and COPY together, so a conversation querying mid-load sees
+# one generation or the other and never half of either.
+#
+# `snowflake-load-sample` takes the catalogue fixture committed by #24, which is
+# real harvested data and needs no landing zone. `snowflake-load` takes one that
+# has been harvested and generated.
+#
 # None of these are in `make ci`. They need a `snow` connection and a live trial,
 # and a gate that needs a credential and a credit balance is not a gate. What is
 # in CI is `snowflake/tests/`, which holds the SQL to `chip_chat.snowflake.account`
-# for free.
+# and `chip_chat.snowflake.schema` for free.
 
 .PHONY: snowflake-plan snowflake-apply snowflake-cap snowflake-verify \
-        snowflake-verify-fast snowflake-rebuild
+        snowflake-verify-fast snowflake-rebuild snowflake-load \
+        snowflake-load-sample
 
 snowflake-plan: ## Print the SQL files an apply would run, in order
 	$(UV) run python -m chip_chat.snowflake.apply --plan
@@ -445,7 +457,14 @@ snowflake-cap: ## Cap the whole trial: make snowflake-cap QUOTA=<credits>
 		exit 2; }
 	$(UV) run python -m chip_chat.snowflake.apply --cap $(QUOTA)
 
-snowflake-verify: ## Check the live account against issues #41 and #88
+snowflake-load-sample: ## Load the committed catalogue fixture -- #42 criterion 3
+	$(UV) run python -m chip_chat.snowflake.load catalog/tests/fixtures/catalog
+
+snowflake-load: ## Load a harvested and generated landing zone into the serving layer
+	$(UV) run python -m chip_chat.snowflake.load \
+		$(LANDING)/catalog $(LANDING)/accounts/synthetic
+
+snowflake-verify: ## Check the live account against issues #41, #42 and #88
 	$(UV) run python -m chip_chat.snowflake.verify
 
 snowflake-verify-fast: ## The same, minus the minute spent watching it suspend

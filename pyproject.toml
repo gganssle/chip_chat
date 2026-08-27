@@ -146,6 +146,7 @@ mypy_path = [
     "catalog/tests",
     "harvest/tests",
     "search/tests",
+    "snowflake/tests",
     "agent/src",
     "api/src",
     "catalog/src",

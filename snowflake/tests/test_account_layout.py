@@ -7,7 +7,9 @@ in `make ci`, which is where a renamed warehouse or a widened grant should be
 caught -- not by a conversation, and not by a trial that expired before anybody
 ran `make snowflake-verify` again.
 
-The parsing is deliberately crude, and fails loudly rather than quietly: a
+The parsing lives in `sql_text.py` beside this file, shared with
+`test_schema_layout.py`. It is deliberately crude and fails loudly rather than
+quietly: a
 regular expression that stops matching because a file was reformatted produces
 an assertion about a missing grant, which is a bad afternoon; a test that
 silently matches nothing produces a green tick over an account nobody checked,
@@ -25,6 +27,9 @@ line nobody re-reads.
 import re
 
 import pytest
+from sql_text import flat as _flat
+from sql_text import privileges as _privileges
+from sql_text import statements as _statements
 
 from chip_chat.snowflake import account
 from chip_chat.snowflake.apply import CAP_FILE, SQL_DIRECTORY, ordered_files
@@ -72,39 +77,6 @@ def reset_sql() -> str:
     path = SQL_DIRECTORY / "optional" / "reset.sql"
     assert path.exists(), f"{path} is missing -- `make snowflake-rebuild` needs it"
     return path.read_text()
-
-
-def _statements(source: str) -> list[str]:
-    """Return ``source``'s statements, comments stripped and whitespace collapsed.
-
-    Comments are most of these files by volume and all of the words "GRANT" that
-    are not grants, so removing them first is what keeps the grant parser from
-    reading the prose above it.
-    """
-    uncommented = "\n".join(
-        line for line in source.splitlines() if not line.lstrip().startswith("--")
-    )
-    return [
-        re.sub(r"\s+", " ", statement).strip()
-        for statement in uncommented.split(";")
-        if statement.strip()
-    ]
-
-
-def _flat(source: str) -> str:
-    """Return ``source``'s statements as one string, whitespace collapsed.
-
-    The SQL is column-aligned so that the grant table reads as a table, which
-    means ``GRANT ROLE CHIP_CHAT_WRITE   TO USER`` has three spaces in it and a
-    naive substring check misses. Every existence assertion below runs against
-    this rather than against the file.
-    """
-    return " ; ".join(_statements(source))
-
-
-def _privileges(clause: str) -> set[str]:
-    """Split the privilege list of a GRANT into its parts."""
-    return {part.strip().upper() for part in clause.split(",") if part.strip()}
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +517,13 @@ def test_an_apply_never_destroys(sql: dict[str, str]) -> None:
     monitor is how you accidentally reset ``used_credits`` to zero, so a
     ``CREATE OR REPLACE`` here would be an apply that hands a runaway a fresh
     quota rather than an apply that destroys something.
+
+    TABLE joins the list from #42 onward. The tables are written as ``CREATE OR
+    ALTER TABLE``, which converges an existing table to the declaration and
+    keeps its rows; the one-word edit to ``OR REPLACE`` would empty every one of
+    them on the next apply while reading almost identically in a diff. VIEW is
+    deliberately absent -- a view holds nothing, and `09_audit.sql` replaces two
+    of them precisely so that a reworded definition reaches the account.
     """
     allowed = {f"DROP SCHEMA IF EXISTS {account.DATABASE}.PUBLIC"}
     for name, source in sql.items():
@@ -553,7 +532,7 @@ def test_an_apply_never_destroys(sql: dict[str, str]) -> None:
                 pytest.fail(f"{name} drops something on a routine apply: {statement}")
             if re.match(
                 r"CREATE OR REPLACE "
-                r"(DATABASE|SCHEMA|WAREHOUSE|USER|ROLE|RESOURCE MONITOR)",
+                r"(DATABASE|SCHEMA|WAREHOUSE|USER|ROLE|TABLE|RESOURCE MONITOR)",
                 statement,
             ):
                 pytest.fail(

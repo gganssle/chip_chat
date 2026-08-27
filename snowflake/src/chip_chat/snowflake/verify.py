@@ -1,20 +1,29 @@
-"""Hold the live Snowflake account to issue #41's four acceptance criteria.
+"""Hold the live Snowflake account to what `snowflake/sql/` says it is.
 
 Every check here runs against the real account. None of them reads
-`snowflake/sql/` -- `tests/test_account_layout.py` does that, for free, in CI,
-and it answers a different question. That test asks whether the checked-in SQL
-still says what `chip_chat.snowflake.account` says. This asks whether the
-account is what the SQL says, which is the question a UI click, a widened grant
-or an expired trial can change without anybody editing a file.
+`snowflake/sql/` -- `tests/test_account_layout.py` and
+`tests/test_schema_layout.py` do that, for free, in CI, and they answer a
+different question. Those tests ask whether the checked-in SQL still says what
+`chip_chat.snowflake.account` and `chip_chat.snowflake.schema` say. This asks
+whether the account is what the SQL says, which is the question a UI click, a
+widened grant, a hand-made table or an expired trial can change without anybody
+editing a file.
 
     #41.1  the warehouse auto-suspends within 60 seconds of going idle
     #41.2  the read role cannot write
     #41.3  the write role cannot read another visitor's rows either
     #41.4  the account is rebuildable from snowflake/ in one run
+    #42    the schema is the fourteen tables the DDL declares, every one of
+           them commented, and every visitor-scoped one carrying demo_id
 
-The first three are checked here. The fourth is checked by running
+#41's first three are checked here. Its fourth is checked by running
 `make snowflake-rebuild`, which tears the account down and builds it back before
 this runs -- a claim about a rebuild is not something a query can answer.
+
+#42's checks run first, before the fixture below is built: the probe table
+lives in CHIP_CHAT.ACCOUNTS, and "nothing is in these schemas that
+`snowflake/sql` did not create" would otherwise report the probe as exactly the
+thing it is looking for.
 
 #88 adds the other half of the cost story, and it is a different kind of claim:
 #41 is about what one query costs, #88 is about what a day of them costs. The
@@ -78,7 +87,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from chip_chat.snowflake import account, snow
+from chip_chat.snowflake import account, schema, snow
 
 __all__ = ["REFUSALS", "Check", "main", "run"]
 
@@ -96,6 +105,11 @@ would be one release note away from being recognised by accident.
 PROBE_TABLE = account.table("ACCOUNTS", "_VERIFY_PROBE")
 PROBE_POLICY = account.table("ACCOUNTS", "_VERIFY_PROBE_POLICY")
 PROBE_MART = account.table("MARTS", "_VERIFY_PROBE_MART")
+
+# The three schemas, quoted, for the INFORMATION_SCHEMA predicates in #42's
+# checks. Built from account.SCHEMAS so a fourth schema is covered by adding
+# it there rather than by remembering this line.
+_SCHEMA_LIST = ", ".join(f"'{name}'" for name in account.SCHEMAS)
 
 # Two visitors. The whole of criterion 3 is that a session which is one of them
 # cannot see the other, and cannot change the other's row by naming it.
@@ -797,6 +811,304 @@ def _check_resource_monitors() -> list[Check]:
 
 
 # ---------------------------------------------------------------------------
+# #42 -- the schema is what the DDL says, and every visitor-scoped table
+# carries demo_id
+# ---------------------------------------------------------------------------
+
+
+def _live_columns() -> dict[tuple[str, str], list[dict[str, Any]]]:
+    """Return INFORMATION_SCHEMA's columns, keyed by ``(schema, table)``.
+
+    Base tables only. ``INFORMATION_SCHEMA.COLUMNS`` describes views as well,
+    so without the predicate the two audit views of `09_audit.sql` arrive as
+    two tables `schema.py` has never heard of -- which is a true statement
+    about the query and a false one about the account.
+
+    Read as CHIP_CHAT_ADMIN, and that is not incidental: INFORMATION_SCHEMA
+    shows a session only the objects its role may see. The write role cannot
+    see MARTS, so the same query run as CHIP_CHAT_WRITE returns five tables
+    where the admin sees eight -- and every check below would pass by not
+    looking at three of them.
+    """
+    rows = snow.query(
+        f"{_preamble(account.ADMIN_ROLE, account.SERVING_WAREHOUSE)}\n"
+        "SELECT table_schema, table_name, column_name, ordinal_position, "
+        "data_type, numeric_precision, numeric_scale, is_nullable, comment\n"
+        f"FROM {account.DATABASE}.INFORMATION_SCHEMA.COLUMNS\n"
+        f"WHERE table_schema IN ({_SCHEMA_LIST})\n"
+        "  AND (table_schema, table_name) IN (\n"
+        "    SELECT table_schema, table_name\n"
+        f"    FROM {account.DATABASE}.INFORMATION_SCHEMA.TABLES\n"
+        "    WHERE table_type = 'BASE TABLE')\n"
+        "ORDER BY table_schema, table_name, ordinal_position;"
+    )[-1]
+    found: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        key = (str(row["TABLE_SCHEMA"]).upper(), str(row["TABLE_NAME"]).upper())
+        found.setdefault(key, []).append(row)
+    return found
+
+
+def _live_type(row: dict[str, Any]) -> str:
+    """Return one live column's type, spelled the way the DDL spells it.
+
+    Snowflake reports ``VARCHAR`` as ``TEXT`` and every fixed-point type as
+    ``NUMBER`` with the precision and scale in separate columns, so a
+    comparison against the DDL has to put them back together. Anything else --
+    ARRAY, BOOLEAN, FLOAT, TIMESTAMP_NTZ -- comes back as itself.
+    """
+    data_type = str(row["DATA_TYPE"]).upper()
+    if data_type == "TEXT":
+        return "VARCHAR"
+    if data_type == "NUMBER":
+        return f"NUMBER({row['NUMERIC_PRECISION']},{row['NUMERIC_SCALE']})"
+    return data_type
+
+
+def _check_schema() -> list[Check]:
+    """Check every declared table exists, with the columns and comments it declares.
+
+    `tests/test_schema_layout.py` holds the DDL to `chip_chat.snowflake.schema`
+    for free. This asks the other question: whether the account is what the DDL
+    says. The two diverge for exactly the reasons #41's checks do -- a table
+    created by hand, a column added in Snowsight, a `CREATE OR ALTER TABLE`
+    edited and never applied.
+
+    Comments are checked as strictly as columns, because they are not
+    documentation here: #45's semantic view retrieves against them, and a
+    comment that has drifted still answers.
+    """
+    live = _live_columns()
+    checks: list[Check] = []
+
+    views = snow.query(
+        f"{_preamble(account.ADMIN_ROLE, account.SERVING_WAREHOUSE)}\n"
+        "SELECT table_name FROM "
+        f"{account.DATABASE}.INFORMATION_SCHEMA.VIEWS\n"
+        f"WHERE table_schema = 'ACCOUNTS';"
+    )[-1]
+    found_views = {str(row["TABLE_NAME"]).upper() for row in views}
+    expected_views = {name.upper() for name in schema.AUDIT_VIEWS}
+    checks.append(
+        Check(
+            "#42",
+            "the two audit views exist and no others",
+            passed=found_views == expected_views,
+            detail=(
+                ", ".join(sorted(found_views))
+                if found_views == expected_views
+                else f"found {sorted(found_views)}, expected "
+                f"{sorted(expected_views)}. The audit is how #42's second "
+                "criterion is asked of the live account"
+            ),
+        )
+    )
+
+    unexpected = set(live) - {
+        (table.schema, table.name.upper()) for table in schema.TABLES
+    }
+    checks.append(
+        Check(
+            "#42",
+            "nothing is in these schemas that snowflake/sql did not create",
+            passed=not unexpected,
+            detail=(
+                "only the fourteen declared tables"
+                if not unexpected
+                else "also present: "
+                + ", ".join(f"{s}.{t}" for s, t in sorted(unexpected))
+                + ". A table created by hand is invisible to every test in "
+                "make ci, and if it is visitor-scoped it is invisible to #43's "
+                "policies too"
+            ),
+        )
+    )
+
+    for table in schema.TABLES:
+        rows = live.get((table.schema, table.name.upper()), [])
+        if not rows:
+            checks.append(
+                Check(
+                    "#42",
+                    f"{table.qualified()} exists",
+                    passed=False,
+                    detail="not in INFORMATION_SCHEMA. Run `make snowflake-apply`.",
+                )
+            )
+            continue
+
+        found = [
+            (str(row["COLUMN_NAME"]).upper(), _live_type(row), row["IS_NULLABLE"] == "NO")
+            for row in rows
+        ]
+        expected = [
+            (column.name.upper(), column.sql_type, column.required)
+            for column in table.columns
+        ]
+        differences = [
+            f"{was[0]}: {was[1:]} not {should[1:]}"
+            for was, should in zip(found, expected, strict=False)
+            if was != should
+        ]
+        if len(found) != len(expected):
+            differences.append(f"{len(found)} columns, not {len(expected)}")
+        checks.append(
+            Check(
+                "#42",
+                f"{table.qualified()} has the columns and types it declares",
+                passed=not differences,
+                detail=(
+                    f"{len(expected)} columns, in order"
+                    if not differences
+                    else "; ".join(differences[:4])
+                ),
+            )
+        )
+
+        uncommented = [
+            str(row["COLUMN_NAME"])
+            for row in rows
+            if not str(row["COMMENT"] or "").strip()
+        ]
+        checks.append(
+            Check(
+                "#42",
+                f"{table.qualified()} carries a comment on every column",
+                passed=not uncommented,
+                detail=(
+                    "every column describes itself"
+                    if not uncommented
+                    else "no comment on: " + ", ".join(uncommented)
+                ),
+            )
+        )
+    return checks
+
+
+def _check_demo_id_audit() -> list[Check]:
+    """Run issue #42's second acceptance criterion against the live account.
+
+    The criterion asks for "a query that fails if [a visitor-scoped table] is
+    added without [demo_id]", and `sql/09_audit.sql` is that query. Two checks,
+    and the second is the one that matters:
+
+    **The audit is empty.** No visitor-scoped table is missing the column.
+
+    **The audit bites.** A table with no demo_id is created in ACCOUNTS and the
+    audit is asked again; it has to name it. Without this, an audit that had
+    silently stopped seeing anything -- a view rewritten, a schema renamed,
+    INFORMATION_SCHEMA read as too narrow a role -- would report a clean
+    account forever, which is the same failure mode as a security check that
+    passes because it is broken.
+    """
+    audit = account.table("ACCOUNTS", "tables_missing_demo_id")
+    canary = account.table("ACCOUNTS", "_VERIFY_NO_DEMO_ID")
+    preamble = _preamble(account.ADMIN_ROLE, account.SERVING_WAREHOUSE)
+
+    def offenders() -> tuple[bool, list[str]]:
+        try:
+            rows = snow.query(f"{preamble}\nSELECT * FROM {audit};")[-1]
+        except snow.SnowError as error:
+            return False, [_refusal_line(str(error))]
+        return True, [f"{row['TABLE_SCHEMA']}.{row['TABLE_NAME']}" for row in rows]
+
+    ran, named = offenders()
+    checks = [
+        Check(
+            "#42",
+            "every visitor-scoped table carries demo_id",
+            passed=ran and not named,
+            detail=(
+                "the audit returns no rows"
+                if ran and not named
+                else f"missing demo_id: {', '.join(named)}"
+                if ran
+                else f"the audit did not run: {named[0]}"
+            ),
+        )
+    ]
+
+    snow.run_statements(
+        f"{preamble}\nCREATE OR REPLACE TABLE {canary} (order_id STRING, note STRING);"
+    )
+    try:
+        ran, named = offenders()
+        caught = ran and any(name.endswith("_VERIFY_NO_DEMO_ID") for name in named)
+        checks.append(
+            Check(
+                "#42",
+                "the audit names a visitor-scoped table that has no demo_id",
+                passed=caught,
+                detail=(
+                    "created a table without demo_id and the audit reported it"
+                    if caught
+                    else "created a table without demo_id and the audit stayed "
+                    "empty. It is not looking at anything, and every clean run "
+                    "of the check above meant nothing"
+                ),
+            )
+        )
+    finally:
+        snow.run_statements(f"{preamble}\nDROP TABLE IF EXISTS {canary};")
+    return checks
+
+
+def _check_the_serving_joins_answer() -> list[Check]:
+    """Ask the two questions the schema was shaped around, and report the counts.
+
+    Issue #42's third criterion is that the schema is "loaded with published
+    data and queryable", and queryable is a thing to demonstrate rather than
+    assert. Both queries succeed against empty tables, so the row counts are
+    reported either way -- zero is a load that has not happened yet
+    (`make snowflake-load-sample`, or #39's nightly publish), not a broken
+    schema.
+    """
+    catalogue = account.table("CATALOGUE", "menu_items")
+    prices = account.table("CATALOGUE", "item_prices")
+    orders = account.table("ACCOUNTS", "orders")
+    lines = account.table("ACCOUNTS", "order_items")
+    preamble = _preamble(account.ADMIN_ROLE, account.SERVING_WAREHOUSE)
+
+    probes = (
+        (
+            "an order line resolves to a catalogue item",
+            f"SELECT COUNT(*) AS n FROM {lines} l JOIN {catalogue} m "
+            "ON m.item_id = l.item_id;",
+        ),
+        (
+            "an order prices against the restaurant that published the price",
+            f"SELECT COUNT(*) AS n FROM {orders} o JOIN {lines} l "
+            "ON l.order_id = o.order_id "
+            f"JOIN {prices} p ON p.item_id = l.item_id "
+            "AND p.restaurant_id = o.priced_restaurant_id;",
+        ),
+    )
+    checks: list[Check] = []
+    for name, sql in probes:
+        try:
+            rows = snow.query(f"{preamble}\n{sql}")[-1]
+            count = int(next(iter(rows[0].values()))) if rows else 0
+            checks.append(
+                Check(
+                    "#42",
+                    name,
+                    passed=True,
+                    detail=(
+                        f"{count} rows"
+                        if count
+                        else "the join runs and matches nothing -- these tables "
+                        "are empty. `make snowflake-load-sample` fills them"
+                    ),
+                )
+            )
+        except snow.SnowError as error:
+            checks.append(
+                Check("#42", name, passed=False, detail=_refusal_line(str(error)))
+            )
+    return checks
+
+
+# ---------------------------------------------------------------------------
 # The fixture, and the run
 # ---------------------------------------------------------------------------
 
@@ -863,6 +1175,12 @@ def run(*, watch_suspend: bool = True) -> list[Check]:
             suspend in 63".
     """
     checks = _check_warehouse_settings()
+    # Before the fixture, deliberately: the probe table lives in ACCOUNTS, and
+    # "nothing is in these schemas that snowflake/sql did not create" would
+    # report the probe as the thing it is looking for.
+    checks += _check_schema()
+    checks += _check_demo_id_audit()
+    checks += _check_the_serving_joins_answer()
     _build_fixture()
     try:
         checks += _check_read_role()

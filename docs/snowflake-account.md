@@ -460,9 +460,11 @@ adding it to the `ALTER` in good faith.
 
 ## 9. What this deliberately does not do
 
-- **No tables.** [#42] adds them, into the schemas and the grants that already
-  exist. `SELECT` on `FUTURE TABLES` is granted in every schema, so [#42] does
-  not also mean re-running a grants file nobody remembers is required.
+- **~~No tables.~~** [#42] added them — fourteen, into the schemas and the
+  grants that already existed. `SELECT` on `FUTURE TABLES` was granted in every
+  schema, so it did not also mean re-running a grants file nobody remembers is
+  required, and it did not. See
+  [docs/snowflake-schema.md](snowflake-schema.md).
 - **No row access policies on real tables.** [#43]. The throwaway one in
   `verify` proves a fact about the roles and is dropped in the same run.
 - **No stored procedures.** [#46]. `USAGE ON FUTURE PROCEDURES IN SCHEMA
@@ -480,10 +482,12 @@ adding it to the `ALTER` in good faith.
 - **No `make ci` integration.** These targets need a `snow` connection and a live
   trial, and a gate that needs a credential and a credit balance is not a gate.
   What *is* in CI is `snowflake/tests/`, which holds the SQL to
-  `chip_chat.snowflake.account` for free and offline: that no `GRANT` contradicts
-  the access table, that no lane role can apply a policy or own anything, that
-  each lane holds exactly one warehouse, that an apply cannot destroy, and that
-  no monitor re-asserts the property that would zero its own counter.
+  `chip_chat.snowflake.account` and `chip_chat.snowflake.schema` for free and
+  offline: that no `GRANT` contradicts the access table, that no lane role can
+  apply a policy or own anything, that each lane holds exactly one warehouse,
+  that an apply cannot destroy, that no monitor re-asserts the property that
+  would zero its own counter, and — from [#42] — that every visitor-scoped table
+  carries `demo_id` and every column carries a comment.
 
 [#39]: https://github.com/gganssle/chip_chat/issues/39
 [#41]: https://github.com/gganssle/chip_chat/issues/41
