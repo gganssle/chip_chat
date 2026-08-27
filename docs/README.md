@@ -28,9 +28,14 @@ contributor — human or agent — has them locally. Read them in this order.
 | [snowflake-semantic-view.md](snowflake-semantic-view.md) | The account lane's semantic view — five of the serving layer's tables and two of `menu_items`' nine columns, the nine tables left out and the argument for each, why a semantic view is not a view and `COPY GRANTS` is load-bearing, and the measured latency the PRD's turn targets are being re-baselined against |
 | [ops-api.md](ops-api.md) | The only path that writes — the confirmation rule as a precondition rather than an instruction, the record each of the four actions claims before it writes, why the retry key is the card's own id and never the caller's, and what a trace has to carry for the launch gate to be auditable in it |
 | [failure-isolation.md](failure-isolation.md) | The seven ways a dependency goes away and what each one is allowed to break — how every row of RFC-001 §10's table is verified by breaking that dependency for real, the three places the account lane's refusal to write its own SQL is asserted in code rather than in behaviour, why a stale mart is a nightly job that is down and not a lane that is, and the surface that turns "the demo is broken" into a lane name |
+| [corpus-freshness.md](corpus-freshness.md) | Keeping the harvested corpus from going quietly stale — what a re-harvest re-fetches and what it gets a 304 for, why the weekly run is a free GitHub runner rather than a job cluster, and the freshness check that fails when the corpus has stopped moving |
+| [red-team.md](red-team.md) | Both launch gates, attacked rather than argued — the write gate hit directly at the ops API with no model and no browser, the spend ceiling tripped by talking until it stopped, the five refusals that look identical and the two of them that are the finding, and what each gate asks for that is still not true |
+| [phase-0-verification.md](phase-0-verification.md) | What Phase 0 actually proved against live services — the model deployments answering, the image-token arithmetic behind not thumbnailing an upload, and the thread-retention probe that ships an instrument instead of a claim |
 | [content-safety.md](content-safety.md) | Moderation on inbound text and the prompt shield beside it — why the check being private to the spend gate is what makes "nothing unmoderated reaches a model" a property of the type rather than of a function's control flow, why the retrieved-content envelope carries a per-turn nonce that a planted document cannot close, the two failures that look identical to a visitor and must never be confused in a trace, and which analyzer is actually running |
 | [public-demo.md](public-demo.md) | The tier a stranger touches — why the persona arrives on the second request and not in the HTML, the per-archetype grammar that keeps the opening message from reading like a template, PRD Flow 3's card and the edit that mints a new draft rather than mutating one, what the switch actually releases, the branding review, and exactly how far the streaming goes |
 | [deployment.md](deployment.md) | Getting the chat app onto the public URL — the procedure, the eleven things that surprised the people who did it, the measured cold start and turn latency, and the runbook for rollback, scale-to-one and takedown |
+| [runbook.md](runbook.md) | The procedures you will want at the moment you cannot look them up — kill switch, rollback, scale, demo reset, teardown, rebuild from cold and incident triage, each with the elapsed time it actually took, each written twice because `make` does not work from a phone and the raw `az` command does |
+| [cost.md](cost.md) | What one conversation costs across four platforms — the token half that falls out of the spans, the one lane that is four hundred times the others, the standing infrastructure that outweighs both, and the guardrail audit of everything that is supposed to be keeping the bill down |
 | [chipotle-nutrition-spot-check.md](chipotle-nutrition-spot-check.md) | What the harvested nutrition and allergen data was checked against by hand, and when |
 | [chipotle-policy-spot-check.md](chipotle-policy-spot-check.md) | The same, for the harvested rewards, FAQ, catering and store data |
 | [chipotle-pdf-spot-check.md](chipotle-pdf-spot-check.md) | The same, for the PDF path — including the finding that Chipotle publishes none, and the live Document Intelligence round trip that checks the reader anyway |
@@ -118,10 +123,30 @@ so a green suite proves the harvester is self-consistent rather than that it sti
 with what Chipotle published this afternoon. Those files record hand comparisons against
 the live pages, and the dates on which they were true.
 
-The `decisions/` directory is a seventh: one file per question that was open when the
+The two **operations** documents are an eighth kind, and they are a pair. The runbook
+holds procedures and no arguments: it is written for the moment you cannot look
+anything up, so every command appears twice — the raw `az` or `snow` form with the
+resource names spelled out, because `make` needs an initialised Terraform directory and
+therefore does not work from a phone, and the `make` target beside it for when you are
+at a laptop. Each procedure carries the elapsed time it actually took, and the ones that
+have *not* been run are listed at the end rather than left to look executed. The cost
+document holds the arguments and no procedures: it is where the token counts on the
+spans, the credits in `ACCOUNT_USAGE`, the DBUs and the gateway-hours are reconciled
+into a number for one conversation, and where the guardrails that are supposed to keep
+the bill down are audited against the running system rather than against the intention.
+
+The `decisions/` directory is the last: one file per question that was open when the
 planning documents were written and has since been settled. A decision record carries
 the choice, the rationale, and what it costs — and the document it amends is edited in
-the same commit, so the RFC never disagrees with the record that changed it.
+the same commit, so the RFC never disagrees with the record that changed it. A record
+may be filed against any issue, not only one titled `Decision:`; what makes it a record
+is that a question was open and now is not. Two records are deliberately filed against
+issues that are still **open**, because the choice is made and only a measurement is
+outstanding — [`observability-backend.md`](decisions/observability-backend.md) and
+[`snowflake-region.md`](decisions/snowflake-region.md) — and each says so in its own
+first lines. The RFC's named revisit triggers are not gaps in this directory: they are
+questions deliberately deferred past V0 and they belong on their issues until something
+trips them.
 
 ## Repository conventions
 
@@ -129,8 +154,8 @@ Decided in [issue #6](https://github.com/gganssle/chip_chat/issues/6) and inheri
 by everything built after it.
 
 - **Python 3.13**, managed by [uv](https://docs.astral.sh/uv/). One lockfile at the
-  repository root; each of the twelve directories is a uv workspace member with its
-  own `pyproject.toml`.
+  repository root; each of the thirteen directories is a uv workspace member with its
+  own `pyproject.toml` and its own `README.md`.
 - **ruff** for both formatting and linting. **mypy** for type checking, strict on
   `otel/` and `agent/`. **pytest** for tests.
 - **Package layout.** Each directory is `src/chip_chat/<name>/`, importable as

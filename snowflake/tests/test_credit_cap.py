@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from chip_chat.snowflake import account, apply
+from chip_chat.snowflake import account, apply, verify
 
 
 @pytest.fixture
@@ -88,3 +88,32 @@ def test_the_monitor_the_guard_reads_is_the_one_the_file_creates() -> None:
         f"CREATE RESOURCE MONITOR IF NOT EXISTS {account.TRIAL_MONITOR}"
         in apply.CAP_FILE.read_text()
     )
+
+
+def test_trigger_percentages_compare_as_a_set_and_not_as_a_list() -> None:
+    """`SHOW RESOURCE MONITORS` does not print the triggers in ascending order.
+
+    On 2026-08-27 the live account returned ``100%,50%,80%`` for
+    ``CHIP_CHAT_SERVING_MONITOR`` -- the same three triggers
+    ``05_resource_monitors.sql`` asks for, in an order nothing promises. The
+    monitor check compared the parsed tuple against ``account.py``'s constant,
+    which is written ascending, so it failed on a monitor that was correct.
+
+    A trigger set is a set: two monitors that notify at the same three
+    thresholds are the same guardrail whichever order they come back in. This
+    is the regression test for that, and it exists because a check that fails
+    on something which is not drift is worse than no check -- the next person
+    reads ``100/101`` and stops reading, which is how the empty ``NOTIFY_USERS``
+    beside it went unnoticed. See ``docs/cost.md`` section 14.
+    """
+    assert verify._percentages("100%,50%,80%") == (50, 80, 100)
+    assert verify._percentages("50%,80%,100%") == (50, 80, 100)
+
+    # And against the constant it is actually compared with, so a retune of the
+    # thresholds moves this test rather than leaving it passing about nothing.
+    serving = next(m for m in account.MONITORS if m.name.endswith("SERVING_MONITOR"))
+    assert verify._percentages("100%,50%,80%") == serving.notify_at_percent
+
+    # The three shapes the column arrives in when there is nothing to report.
+    assert verify._percentages("") == ()
+    assert verify._percentages(None) == ()
