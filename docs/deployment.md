@@ -8,8 +8,11 @@ asks for exactly this and says why:
 > enough to debug. […] write down anything that surprised you, because that is
 > the deliverable that makes this issue worth doing early.
 
-Ten things surprised me. They are in section 3. Sections 1 and 2 are the
-procedure, so that the next deploy is not also an investigation.
+Ten things surprised me. They are in section 3, and Phase 8 added an eleventh
+(§3.11) which cost a deploy and is the most expensive lesson in the file.
+Sections 1 and 2 are the procedure, so that the next deploy is not also an
+investigation; sections 6 and 7 are the measurements and the runbook, added when
+the public demo landed.
 
 ---
 
