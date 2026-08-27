@@ -12,13 +12,15 @@ Everything below is `infra/terraform/databricks_recommender.tf`,
 `databricks/src/chip_chat/databricks/recommender_model.py`. Nothing was made by
 hand in the workspace UI.
 
-> **Status.** Run. `chip-chat-recommender` fitted, evaluated, registered
-> **version 3** in Unity Catalog and moved `@champion` to it on 2026-08-27, then
-> batch-scored 160 recommendations for 138 visitors into
-> `gold_synthetic.recommendations`. §6 has the metrics, including the two that
-> tie and what that says about a ten-item catalogue. `make ci` is green over the
-> rest — including the scoring rule and the two hit rates, which are *run*
-> rather than described.
+> **Status.** Run, and verified. `chip-chat-recommender` fitted, evaluated,
+> registered **version 3** in Unity Catalog and moved `@champion` to it on
+> 2026-08-27, then batch-scored 160 recommendations for 138 visitors into
+> `gold_synthetic.recommendations`; `chip-chat-recommender-verify` returned
+> SUCCESS over all four of §9's criteria. §6 has the metrics, including the two
+> that tie and what that says about a ten-item catalogue, and §9.1 is the hand
+> review the second criterion asks for. `make ci` is green over the rest —
+> including the scoring rule and the two hit rates, which are *run* rather than
+> described.
 >
 > Getting there took five attempts and each failure is recorded where it
 > belongs. Three were Unity Catalog privileges that no test could have

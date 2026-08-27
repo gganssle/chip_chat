@@ -214,6 +214,12 @@ databricks jobs run-now $(terraform output -raw databricks_publish_job_id) \
 The run fails on the first connection, the notification fires, and nothing was
 written — the swap comes after the staging write, which never happened.
 
+Done, 2026-08-27. The run died on `o570.save`, which is the first staging write
+and the first thing that touches the account; `CHIP_CHAT.STAGING` was empty
+afterwards and `MARTS.item_affinity` still held its twelve rows. Eleven tables of
+the previous generation, untouched, and one failed run in the history — which is
+the behaviour §2 argues for, produced on demand rather than argued about.
+
 ---
 
 ## 4. How a value crosses
