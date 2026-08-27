@@ -332,9 +332,23 @@ the reason belongs beside the policy rather than here.
 
 **#47 and this job both write the account tables.** #47 restores the synthetic
 sandbox to its generated state on a schedule; this job puts the generated state
-there in the first place, and a publish *is* a restore. The two are not in
-conflict today because nothing writes `ACCOUNTS.orders` at runtime yet — #46's
-action lane is not landed. When it is, "tonight's publish erases the order a
-visitor placed this afternoon" becomes a real sentence, and deciding whether that
-is right is #47's job, not this one's. It is a demo sandbox and the answer is
-probably yes; it should still be decided rather than discovered.
+there in the first place, and a publish *is* a restore. The two were not in
+conflict while nothing wrote `ACCOUNTS.orders` at runtime — #46's action lane
+was not landed. It is now, "tonight's publish erases the order a visitor placed
+this afternoon" is a real sentence, and #47 has decided it.
+
+**Decided: no. A visitor's live rows survive until that visitor ages out.**
+[docs/demo-reset.md](demo-reset.md) §6 is the argument, and it is #9's: a cookie
+means Sam comes back tomorrow to the order they placed today, and a publish that
+erases it overnight makes the persistence decision true only within a calendar
+day. The guess recorded here — "it is a demo sandbox and the answer is probably
+yes" — was the other way, and was wrong for that reason.
+
+So this job is what has to change: the swap for the three ACCOUNTS tables has to
+leave rows above the `ord-9000001` / `loy-9000001` band alone. That is not a
+small edit — `INSERT OVERWRITE` being one statement is exactly what buys the
+atomicity §2 argues for, and preserving a band means it stops being one
+statement over a connector that opens a new JDBC session per call. It is cc-fxf4
+and it is this job's, not #47's. Until it lands the reset still
+behaves correctly — it deletes what is there — and `orders_deleted` reads zero
+most mornings for a reason that is not "nothing happened".

@@ -20,15 +20,18 @@ sql/04_users.sql          three service users, no credentials
 sql/05_resource_monitors  a daily credit ceiling per warehouse, and why they differ
 sql/06_catalogue.sql      the real half: menu_items, item_prices, modifiers,
                           stores, and the published rewards #46 reads
-sql/07_accounts.sql       the synthetic half. Every table here carries demo_id
+sql/07_accounts.sql       the synthetic half. Every table here carries demo_id,
+                          #47's demo_visitor_baseline included
 sql/08_marts.sql          the four marts Databricks publishes overnight
 sql/09_audit.sql          the demo_id rule, as a view that must return no rows
 sql/10_policies.sql       the isolation mechanism. Two row access policies and
-                          the nine tables they are attached to
-sql/11_semantic_view.sql  the account lane, five tables out of seventeen
+                          the ten tables they are attached to
+sql/11_semantic_view.sql  the account lane, five tables out of eighteen
 sql/12_procedures.sql     the write path: place_order, redeem_points,
                           update_preferences
 sql/13_cancel_order.sql   cancel_order, alone, and why it is alone
+sql/14_demo_reset.sql     #47's nightly reset: age a session out, put that
+                          visitor back, and the task that runs it at 09:00
 sql/optional/             never run by an apply: reset.sql, network_policy.sql,
                           trial_credit_cap.sql
 
@@ -41,6 +44,8 @@ src/chip_chat/snowflake/analyst.py     answer, or say so. No network call
 src/chip_chat/snowflake/snow.py        the `snow` CLI, wrapped
 src/chip_chat/snowflake/apply.py       `make snowflake-apply`
 src/chip_chat/snowflake/load.py        `make snowflake-load-sample`
+src/chip_chat/snowflake/reset.py       #47's reset as data, and
+                                       `make snowflake-demo-reset`
 src/chip_chat/snowflake/verify.py      `make snowflake-verify`
 ```
 
@@ -50,6 +55,7 @@ make snowflake-cap QUOTA=60  # cap the whole trial. The one number nothing here 
 make snowflake-load-sample   # the committed catalogue fixture, 60 rows
 make snowflake-verify        # 99 checks against the live account, ~5 minutes
 make snowflake-verify-fast   # 98 of them, skipping the minute of watching
+make snowflake-demo-reset    # age demo sessions out now. Plan it first
 make snowflake-rebuild       # drop it all, build it back, verify
 ```
 
@@ -126,7 +132,7 @@ signature has to carry a visitor identifier and no injected instruction has a
 field to populate.
 
 ```sql
-visitor_isolation   demo_id = the bound visitor. Seven tables. DEFAULT DENY:
+visitor_isolation   demo_id = the bound visitor. Nine tables. DEFAULT DENY:
                     an unset variable returns zero rows, never all of them
 entry_roster        persona_fixtures only, and open while nothing is bound —
                     entry chooses a visitor's customer from it before there
@@ -257,6 +263,50 @@ database to make structural is the other thing, and that is here: **no SKU in
 any response that does not exist in the catalogue**, checked at the row that
 would have to exist rather than at the matcher.
 
+## The reset, and the two things it is careful about
+
+`sql/14_demo_reset.sql` is [#47]: one procedure, one task at 09:00 UTC, and a
+manual trigger that runs the same procedure with the same arguments.
+
+It **ages sessions out** rather than truncating, because [#9] decided a
+visitor's state persists between visits — so emptying the tables nightly would
+empty the account of somebody who is coming back tomorrow, which is the
+cold-start failure the PRD is most afraid of, on a schedule. What it deletes is
+only what a visitor added, which is identifiable without a diff: every row above
+the `ord-9000001` / `loy-9000001` band, plus every `action_receipts` row. What
+it restores is only what a visitor could edit, out of `demo_visitor_baseline` —
+the eighth table in `07_accounts.sql`, filled from the generator's own
+`demo_visitors.jsonl` in the same run as `demo_visitors` itself, which is what
+makes "restores generated state exactly" checkable rather than assertable.
+
+```bash
+make snowflake-demo-reset-plan   # who would be aged out. Changes nothing
+make snowflake-demo-reset        # do it
+```
+
+The two failures worth knowing about both look like success:
+
+* **A reset with no maintenance escape deletes nothing.** #43's policies filter
+  `DELETE` and `UPDATE`, so an admin session that has bound no visitor changes
+  no rows and reports a clean run. The procedure sets `ALL_VISITORS` — the
+  escape's second caller, as `10_policies.sql` says — and then *checks that it
+  took*, refusing outright if it did not.
+* **A `DELETE` that lost its band predicate empties a persona** and leaves a
+  perfectly plausible row count behind it. `tests/test_demo_reset.py` reads
+  every `DELETE` in the file and fails on the missing predicate.
+
+A visitor with no dated activity at all — a `thread_id` and nothing else — is
+**held rather than guessed about**, and the count comes back as `held_no_clock`.
+That number is the app tier's bill: only `update_preferences` writes `last_seen`
+today, and whatever writes `thread_id` when a session binds is the thing that
+should write `last_seen` beside it.
+
+[docs/demo-reset.md](../docs/demo-reset.md) is the write-up — the four clocks,
+why the two-day TTL is derived from the session cookie rather than chosen, and
+§6, which is the decision `docs/nightly-publish.md` §7 routed here: a visitor's
+live rows survive until that visitor ages out, so the nightly publish is what
+has to stop replacing three account tables wholesale.
+
 ## Two files, two different questions
 
 `tests/` asks whether the **SQL** still says what `account.py` and `schema.py`
@@ -300,3 +350,5 @@ being re-baselined against.
 [#43]: https://github.com/gganssle/chip_chat/issues/43
 [#45]: https://github.com/gganssle/chip_chat/issues/45
 [#46]: https://github.com/gganssle/chip_chat/issues/46
+[#47]: https://github.com/gganssle/chip_chat/issues/47
+[#9]: https://github.com/gganssle/chip_chat/issues/9

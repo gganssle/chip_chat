@@ -510,6 +510,20 @@ search-retrieve: ## Ask the live corpus a question. Q="..." [RERANK=0]
 # real harvested data and needs no landing zone. `snowflake-load` takes one that
 # has been harvested and generated.
 #
+# `snowflake-demo-reset` is #47's manual trigger, and the nightly task installed
+# by `snowflake-apply` calls the same procedure with the same arguments. It ages
+# sessions out rather than truncating -- #9 decided a visitor's state persists
+# between visits, so emptying the tables would empty the account of somebody who
+# is coming back tomorrow. What it deletes is only what a visitor added, and
+# what it restores is only what a visitor could edit.
+#
+#   make snowflake-demo-reset-plan   # who would be aged out, and nothing done
+#   make snowflake-demo-reset        # do it
+#
+# The plan variant exists because the reason to reach for this by hand is that a
+# demo just went badly, which is not the moment to run something destructive
+# without looking first. docs/demo-reset.md is the write-up.
+#
 # None of these are in `make ci`. They need a `snow` connection and a live trial,
 # and a gate that needs a credential and a credit balance is not a gate. What is
 # in CI is `snowflake/tests/`, which holds the SQL to `chip_chat.snowflake.account`
@@ -517,7 +531,7 @@ search-retrieve: ## Ask the live corpus a question. Q="..." [RERANK=0]
 
 .PHONY: snowflake-plan snowflake-apply snowflake-cap snowflake-verify \
         snowflake-verify-fast snowflake-rebuild snowflake-load \
-        snowflake-load-sample
+        snowflake-load-sample snowflake-demo-reset snowflake-demo-reset-plan
 
 snowflake-plan: ## Print the SQL files an apply would run, in order
 	$(UV) run python -m chip_chat.snowflake.apply --plan
@@ -540,6 +554,12 @@ snowflake-load-sample: ## Load the committed catalogue fixture -- #42 criterion 
 snowflake-load: ## Load a harvested and generated landing zone into the serving layer
 	$(UV) run python -m chip_chat.snowflake.load \
 		$(LANDING)/catalog $(LANDING)/accounts/synthetic
+
+snowflake-demo-reset-plan: ## Show which demo sessions would be aged out -- changes nothing
+	$(UV) run python -m chip_chat.snowflake.reset --dry-run
+
+snowflake-demo-reset: ## Age demo sessions out and restore them to generated state -- #47
+	$(UV) run python -m chip_chat.snowflake.reset
 
 snowflake-verify: ## Check the live account against issues #41 through #45, and #88
 	$(UV) run python -m chip_chat.snowflake.verify

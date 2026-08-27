@@ -113,7 +113,7 @@ def test_the_required_columns_are_the_ones_declared_not_null(
 
 
 def test_every_serving_table_is_published_or_argued_for() -> None:
-    """Seventeen tables exist and eleven are published. The six are the point.
+    """Eighteen tables exist and eleven are published. The seven are the point.
 
     `demo_visitors` holds all three columns a visitor may edit and is the one
     account table a visitor writes to, so a nightly overwrite would delete every
@@ -140,11 +140,20 @@ def test_every_serving_table_is_published_or_argued_for() -> None:
     at a table that does not exist is a nightly job that fails, which is worse
     than a table that is honestly empty -- and `place_order` refuses to accrue
     while it is empty rather than guessing, so the emptiness is loud.
+
+    The seventh arrived with #47. `demo_visitor_baseline` is what the nightly
+    reset restores an aged-out visitor to, and it is `demo_visitors`' argument
+    once more removed: the publisher cannot see the table it is the baseline for
+    and has no more business with the baseline. It reaches Snowflake by the same
+    operator path, out of the same `demo_visitors.jsonl`, which is the point of
+    it -- a baseline landed by a different job on a different schedule would be
+    a second generation nobody could compare against.
     """
     published = {candidate.table for candidate in publish.TARGETS}
     unpublished = {table.name for table in schema.TABLES} - published
     assert unpublished == {
         "demo_visitors",
+        "demo_visitor_baseline",
         "personas",
         "persona_fixtures",
         "action_receipts",

@@ -214,23 +214,34 @@ def test_the_audit_view_carries_the_same_exemptions(sql: dict[str, str]) -> None
 # ---------------------------------------------------------------------------
 
 
-def test_the_editable_columns_live_only_on_demo_visitors() -> None:
-    """The three fields a visitor may change are on one table and no other.
+def test_the_editable_columns_live_only_where_they_are_argued_for() -> None:
+    """The three fields a visitor may change are on two tables and no others.
 
     docs/decisions/persona-editing.md argues that this placement *is* the
     mechanism: marts are computed from orders, order_items and loyalty_ledger,
     so no editable field is an input to one and an edit cannot make a mart
     stale. A copy of `stated_preferences` on a table a nightly job reads would
     undo that quietly, which is why the assertion is about every other table
-    rather than about this one.
+    rather than about these.
+
+    `schema.EDITABLE_COLUMN_TABLES` is the closed list and it carries the
+    argument per table, so the second entry -- #47's baseline, which holds the
+    generated value of all three so that ageing a session out can put them
+    back -- had to be written down rather than skipped by name.
     """
     visitors = schema.table("demo_visitors")
     for name in schema.EDITABLE_COLUMNS:
         assert name in visitors.column_names(), (
             f"{name} is not on demo_visitors, and PRD Q2's answer says it is"
         )
+    for name, why in schema.EDITABLE_COLUMN_TABLES.items():
+        assert why, f"{name} may carry an editable column and gives no reason"
+        assert set(schema.EDITABLE_COLUMNS) <= set(schema.table(name).column_names()), (
+            f"{name} is allowed to carry the editable columns and does not "
+            "carry them all. An allowance nothing uses is one nobody rereads."
+        )
     for table in schema.TABLES:
-        if table.name == "demo_visitors":
+        if table.name in schema.EDITABLE_COLUMN_TABLES:
             continue
         overlap = set(schema.EDITABLE_COLUMNS) & set(table.column_names())
         assert not overlap, (

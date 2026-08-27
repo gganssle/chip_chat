@@ -1,4 +1,4 @@
--- The isolation mechanism. Two row access policies, and the nine tables they
+-- The isolation mechanism. Two row access policies, and the ten tables they
 -- are attached to. RFC-001 §05 is the section this file implements, and it is
 -- the section to read first.
 --
@@ -29,7 +29,7 @@
 --
 --   visitor_isolation   demo_id must equal the bound visitor. DEFAULT DENY: an
 --                       unset session variable returns ZERO rows, never all of
---                       them. Seven tables.
+--                       them. Nine tables.
 --   entry_roster        persona_fixtures only, and it is the one inversion in
 --                       this file. Argued below.
 --
@@ -152,6 +152,7 @@ DECLARE
         WITH wanted AS (
             SELECT * FROM VALUES
                 ('ACCOUNTS', 'DEMO_VISITORS',    'CHIP_CHAT.ACCOUNTS.VISITOR_ISOLATION'),
+                ('ACCOUNTS', 'DEMO_VISITOR_BASELINE', 'CHIP_CHAT.ACCOUNTS.VISITOR_ISOLATION'),
                 ('ACCOUNTS', 'PERSONA_FIXTURES', 'CHIP_CHAT.ACCOUNTS.ENTRY_ROSTER'),
                 ('ACCOUNTS', 'ORDERS',           'CHIP_CHAT.ACCOUNTS.VISITOR_ISOLATION'),
                 ('ACCOUNTS', 'ORDER_ITEMS',      'CHIP_CHAT.ACCOUNTS.VISITOR_ISOLATION'),

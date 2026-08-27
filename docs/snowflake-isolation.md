@@ -1,11 +1,11 @@
 # The isolation mechanism
 
-Two row access policies, nine tables, and one session variable. Issue
+Two row access policies, ten tables, and one session variable. Issue
 [#43](https://github.com/gganssle/chip_chat/issues/43), which is one of the two
 launch gates and the piece the rest of the system is only safe because of.
 
 [docs/snowflake-schema.md](snowflake-schema.md) is the schema this attaches to —
-seventeen tables, and `demo_id` on every one of the nine that belongs to a
+eighteen tables, and `demo_id` on every one of the ten that belongs to a
 visitor. That document ends with "no row access policies, [#43], and it is the
 launch gate". This is that ticket.
 
@@ -305,7 +305,7 @@ a lane role reports three unprotected marts as protected by not looking at them.
 ## 10. Running it
 
 ```bash
-make snowflake-apply         # create both policies and attach all nine tables
+make snowflake-apply         # create both policies and attach all ten tables
 make snowflake-verify-fast   # #41, #42, #43 and #88, without the minute of watching
 make ci                      # the coverage test, free and offline
 ```

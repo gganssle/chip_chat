@@ -1,9 +1,17 @@
--- The synthetic half. Seven tables, every one of them about a visitor.
+-- The synthetic half. Eight tables, every one of them about a visitor.
 --
 -- Six are RFC-001 §04's and are #42's. `action_receipts` arrived with #46,
 -- which cannot make a write idempotent without somewhere durable to remember
 -- that a retry key has been spent; its own header argues it, and
 -- `chip_chat.snowflake.schema` carries the argument per column.
+--
+-- `demo_visitor_baseline` arrived with #47 and is the eighth. #9 made visitor
+-- state persist between visits, so the nightly reset ages sessions out instead
+-- of truncating -- and putting a visitor back the way the generator made them
+-- needs somewhere to have kept the way the generator made them. The three
+-- editable columns are generated non-null for some customers, so "restore" is
+-- not "set to NULL", and no other table in this database carries a display
+-- name at all. `sql/14_demo_reset.sql` is the only thing that reads it.
 --
 -- The rule this file exists to make structural: EVERY VISITOR-SCOPED TABLE
 -- CARRIES demo_id. Not as a convention -- demo_id is the column #43's row
@@ -120,6 +128,50 @@ CREATE OR ALTER TABLE demo_visitors (
     CONSTRAINT fk_demo_visitors_persona FOREIGN KEY (persona_id) REFERENCES personas (persona_id)
 )
 COMMENT = 'The synthetic customers a public visitor is assigned one of, and the app''s own session state about them. THE THREE EDITABLE COLUMNS LIVE HERE AND NOWHERE ELSE -- display_name, home_store_override, stated_preferences -- and no gold mart reads this table. That containment is the mechanism, not a rule: there is no edit a visitor can make that a mart was computed against, so an edit cannot make one stale. Marts are computed from orders, order_items and loyalty_ledger only. docs/decisions/persona-editing.md.';
+
+-- --------------------------------------------------------------------------
+-- demo_visitor_baseline -- what the generator made, kept so the reset can put
+-- it back.
+--
+-- #47 ages a visitor's session out rather than truncating the table, which
+-- means it has to RESTORE five columns rather than delete a row. Three of them
+-- are EDITABLE_COLUMNS and data-gen produces two of those non-null for some
+-- customers, so "restore" is not "set to NULL"; and display_name exists
+-- nowhere else in this database -- persona_fixtures carries the narrative and
+-- deliberately no name.
+--
+-- IT IS LOADED FROM demo_visitors.jsonl, the same file and the same run as the
+-- table it is the baseline for. `chip_chat.snowflake.schema.Table.source` is
+-- where that is declared and `load.sources()` is what honours it. A baseline
+-- filled from a second generation would restore a visitor to a state that
+-- never existed, and nothing downstream could tell.
+--
+-- It is not published by #39. Neither is demo_visitors, and for the same
+-- reason: the publisher holds MART_INPUTS by name and nothing else in this
+-- schema. Both reach Snowflake through the operator path.
+--
+-- Visitor-scoped, because a baseline is as much a fact about one visitor as
+-- the row it restores. It carries demo_id and 10_policies.sql attaches
+-- visitor_isolation to it, so the reset reads it through the same maintenance
+-- escape it reads everything else through.
+-- --------------------------------------------------------------------------
+
+CREATE OR ALTER TABLE demo_visitor_baseline (
+    demo_id VARCHAR NOT NULL
+        COMMENT 'Which customer this is the generated state of. Joins to demo_visitors one to one, and is what #43''s row access policy compares against.',
+    display_name VARCHAR
+        COMMENT 'The invented name data-gen minted. The reset puts this back over whatever the visitor renamed themselves to, and there is no other row in this database it could be read from.',
+    home_store_override NUMBER(10,0)
+        COMMENT 'The generated value, which is a stores.store_id for the minority of customers the generator gave one and null for the rest. Restoring this column to null rather than to this value would be a reset that quietly edited customers it was supposed to leave alone.',
+    stated_preferences VARCHAR
+        COMMENT 'The generated value, held verbatim. The generator picked one of a fixed list at random and nothing downstream can work out which, so this is not re-derivable.',
+    created_at TIMESTAMP_NTZ NOT NULL
+        COMMENT 'When this customer''s history begins, UTC. Nothing edits it; it is here so that a reviewer comparing this table against demo_visitors compares whole rows rather than a projection.',
+    last_seen TIMESTAMP_NTZ
+        COMMENT 'The generated value -- their last generated order. Putting it back is what makes an aged-out visitor indistinguishable from one who was never assigned, rather than one who is simply due to be aged out again tomorrow.',
+    CONSTRAINT pk_demo_visitor_baseline PRIMARY KEY (demo_id)
+)
+COMMENT = 'The generated state of every column of demo_visitors a live demo can move. Loaded from the generator''s own demo_visitors.jsonl, in the same run as demo_visitors itself, which is what makes "the reset restores generated state exactly" a claim a reviewer can check rather than one they have to take. Read by sql/14_demo_reset.sql and by nothing else. Not published by #39: the publisher cannot see demo_visitors and has no more business with its baseline.';
 
 -- --------------------------------------------------------------------------
 -- persona_fixtures -- the particular customers a visitor is handed.

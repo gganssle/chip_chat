@@ -252,6 +252,14 @@ WITHHELD_TABLES: Final[dict[tuple[SchemaName, str], str]] = {
         "nameplate, and PRD A4's refusal is easier to keep when the table is "
         "not in the model at all"
     ),
+    ("ACCOUNTS", "demo_visitor_baseline"): (
+        "#47's record of what the generator made each customer, so that ageing "
+        "a session out can put the editable columns back. Withheld for "
+        "demo_visitors' reason and then one of its own: it is not the "
+        "visitor's account at all, it is the account they started from, and a "
+        "model that could reach both would let a question about 'my usual' be "
+        "answered from a row the visitor has already changed"
+    ),
     ("ACCOUNTS", "persona_fixtures"): (
         "the roster of which synthetic customer demonstrates which archetype, "
         "read at entry before a visitor is bound. It is about the demo rather "

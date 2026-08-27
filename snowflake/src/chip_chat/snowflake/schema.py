@@ -120,6 +120,29 @@ docs/decisions/persona-editing.md argues and the one a reviewer would otherwise
 have to check by reading every job.
 """
 
+EDITABLE_COLUMN_TABLES: Final[dict[str, str]] = {
+    "demo_visitors": (
+        "where a visitor's edit actually lands, and PRD Q2's answer is that it "
+        "lands here and nowhere a nightly job reads"
+    ),
+    "demo_visitor_baseline": (
+        "#47's copy of what the generator made, held so that ageing a session "
+        "out can put the three columns back. It carries them for the same "
+        "reason a backup carries what it backs up, and it is safe for the same "
+        "reason demo_visitors is: no mart is computed from it, no publish "
+        "reads it, and nothing writes it but a load. The direction that would "
+        "matter is the opposite one -- a THIRD table growing a copy of these "
+        "columns that some job does read"
+    ),
+}
+"""The tables :data:`EDITABLE_COLUMNS` may appear on, and why each may.
+
+Two, and the list is closed by `test_schema_layout.py` rather than by a name
+skipped in an assertion: a copy of ``stated_preferences`` on a table a nightly
+job reads would undo PRD Q2's containment quietly, and the check that catches
+that has to be about every other table rather than about these.
+"""
+
 MART_INPUTS: Final = ("orders", "order_items", "loyalty_ledger")
 """The only account tables the gold marts are computed from. Not
 ``demo_visitors``, and that absence is what the paragraph above is about."""
@@ -134,7 +157,7 @@ list and a pass it did not earn.
 """
 
 ISOLATION_POLICY: Final = "visitor_isolation"
-"""The row access policy eight of the nine visitor-scoped tables carry.
+"""The row access policy nine of the ten visitor-scoped tables carry.
 
 A row belongs to the visitor bound to the session and to nobody else, and an
 unbound session reads zero rows rather than all of them. `sql/10_policies.sql`
@@ -284,6 +307,12 @@ class Table:
             the empty string for a table the demo_id rule does not apply to.
             Visitor-scoped and unguarded is not a state
             `test_row_access_policies.py` allows, in either direction.
+        source: The ``<name>.jsonl`` `chip_chat.snowflake.load` fills it from,
+            when that is not the table's own name. Empty for every table but
+            one: ``demo_visitor_baseline`` is a second projection of the
+            generator's ``demo_visitors`` export, and a baseline copied from
+            anything other than the file the live table was loaded from would
+            be a baseline nobody could check.
     """
 
     name: str
@@ -294,10 +323,15 @@ class Table:
     visitor_scoped: bool
     additions: tuple[Addition, ...] = field(default_factory=tuple)
     policy: str = ""
+    source: str = ""
 
     def column_names(self) -> tuple[str, ...]:
         """Return the column names, in declaration order."""
         return tuple(column.name for column in self.columns)
+
+    def source_name(self) -> str:
+        """Return the export this table is loaded from: :attr:`source` or its name."""
+        return self.source or self.name
 
     def qualified(self) -> str:
         """Return ``CHIP_CHAT.ACCOUNTS.orders`` and the like."""
@@ -562,6 +596,64 @@ _DEMO_VISITORS = Table(
     ),
     visitor_scoped=True,
     policy=ISOLATION_POLICY,
+)
+
+_DEMO_VISITOR_BASELINE = Table(
+    name="demo_visitor_baseline",
+    schema="ACCOUNTS",
+    columns=(
+        Column("demo_id", "VARCHAR", required=True),
+        Column("display_name", "VARCHAR"),
+        Column("home_store_override", "NUMBER(10,0)"),
+        Column("stated_preferences", "VARCHAR"),
+        Column("created_at", "TIMESTAMP_NTZ", required=True),
+        Column("last_seen", "TIMESTAMP_NTZ"),
+    ),
+    key=("demo_id",),
+    rfc=(),
+    additions=(
+        Addition(
+            "demo_id",
+            "which customer this is the generated state of. Also what #43's "
+            "row access policy compares against: a baseline is as much a fact "
+            "about one visitor as the row it restores",
+        ),
+        Addition(
+            "display_name",
+            "the invented name data-gen minted for this customer. A visitor "
+            "may change it, and #47's reset has nowhere else to read the "
+            "original from -- persona_fixtures deliberately carries no name, "
+            "because a narrative with a name baked into it goes stale the "
+            "moment somebody edits one",
+        ),
+        Addition(
+            "home_store_override",
+            "and stated_preferences below: the other two of "
+            "EDITABLE_COLUMNS. Both are generated non-null for some customers, "
+            "so restoring them to NULL would not be a restore",
+        ),
+        Addition(
+            "stated_preferences",
+            "see home_store_override. Held verbatim rather than re-derived: "
+            "the generator picked one of a fixed list at random and nothing "
+            "downstream can work out which",
+        ),
+        Addition(
+            "created_at",
+            "when this customer's history begins. Never edited by anything, "
+            "and here so that a reviewer comparing this table against "
+            "demo_visitors is comparing whole rows rather than a projection",
+        ),
+        Addition(
+            "last_seen",
+            "the generated value, which is their last generated order. The "
+            "reset puts it back, which is what makes an aged-out visitor "
+            "indistinguishable from one who was never assigned",
+        ),
+    ),
+    visitor_scoped=True,
+    policy=ISOLATION_POLICY,
+    source="demo_visitors",
 )
 
 _PERSONA_FIXTURES = Table(
@@ -929,6 +1021,7 @@ TABLES: Final[tuple[Table, ...]] = (
     _REWARDS_TERMS,
     _PERSONAS,
     _DEMO_VISITORS,
+    _DEMO_VISITOR_BASELINE,
     _PERSONA_FIXTURES,
     _ORDERS,
     _ORDER_ITEMS,
