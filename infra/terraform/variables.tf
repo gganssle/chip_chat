@@ -286,6 +286,21 @@ variable "vision_deployment" {
   default     = "gpt-4.1-mini"
 }
 
+variable "embedding_deployment" {
+  description = <<-EOT
+    Which entry of var.model_deployments answers the knowledge lane (issue #48).
+
+    Changing this is not the same kind of change as changing chat_deployment.
+    The chat lane swaps on a restart; a different embedding model is a different
+    vector space, so every document in the index has to be re-embedded before a
+    query can be. That is a `make search-build`, which is a rebuild and an alias
+    swap rather than a restart -- and it is one of the things the alias makes
+    cheap rather than frightening.
+  EOT
+  type        = string
+  default     = "text-embedding-3-small"
+}
+
 variable "spend_caps" {
   description = <<-EOT
     The inline spend cap's ceilings, passed to the app as CHIP_CHAT_* settings.
@@ -411,6 +426,26 @@ variable "model_deployments" {
       sku_name      = "GlobalStandard"
       capacity      = 10
     }
+
+    # The knowledge lane's embeddings (issue #48), at both ends of integrated
+    # vectorization: the index build calls it for document vectors, and the
+    # index's own vectorizer calls it for query vectors.
+    #
+    # The subscription chose this, the same way it chose the two above. Read on
+    # 2026-08-27 with `az cognitiveservices usage list -l eastus2`:
+    # text-embedding-3-LARGE reports a limit of 0 on GlobalStandard,
+    # DataZoneStandard and Standard alike, and -small reports 1,000. ada-002 has
+    # Standard quota and is the previous generation at a higher price.
+    #
+    # Its own quota pool again, for the blast-radius reason the chat and vision
+    # split has: a corpus rebuild embeds every chunk in the corpus in a few
+    # minutes, and it must not be able to starve a conversation while it does.
+    "text-embedding-3-small" = {
+      model_name    = "text-embedding-3-small"
+      model_version = "1"
+      sku_name      = "GlobalStandard"
+      capacity      = 10
+    }
   }
 
   validation {
@@ -438,6 +473,26 @@ variable "adopted_key_vault_secrets_user_assignment_id" {
   description = "GUID of the existing 'Key Vault Secrets User' role assignment for the app identity on the Key Vault."
   type        = string
   default     = "735743f9-99b0-4b32-8abf-e5ce744edf4b"
+}
+
+variable "search_alias" {
+  description = <<-EOT
+    The one search index name the application ever knows (issue #48).
+
+    It is an ALIAS, not an index. RFC-001 section 08: the index is rebuilt,
+    never patched -- each weekly re-harvest builds a new index named after the
+    corpus release it holds, and one alias write makes it live. The application
+    is given this name and never learns the other one, which is what makes the
+    swap invisible to it.
+
+    Terraform does not create the alias. It is a data-plane object, it is
+    created by the first `make search-build`, and a Terraform resource for it
+    would fight the build for ownership of the one write the whole design turns
+    on. What Terraform owns is the *name*, so that the app and the build agree
+    on it without either hardcoding it.
+  EOT
+  type        = string
+  default     = "corpus"
 }
 
 variable "search_enabled" {

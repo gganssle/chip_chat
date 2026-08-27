@@ -13,6 +13,7 @@ dependencies = [
     "chip-chat-harvest",
     "chip-chat-infra",
     "chip-chat-otel",
+    "chip-chat-search",
     "chip-chat-snowflake",
     "chip-chat-vision",
     "chip-chat-web",
@@ -48,6 +49,7 @@ members = [
     "harvest",
     "infra",
     "otel",
+    "search",
     "snowflake",
     "vision",
     "web",
@@ -63,6 +65,7 @@ chip-chat-eval = { workspace = true }
 chip-chat-harvest = { workspace = true }
 chip-chat-infra = { workspace = true }
 chip-chat-otel = { workspace = true }
+chip-chat-search = { workspace = true }
 chip-chat-snowflake = { workspace = true }
 chip-chat-vision = { workspace = true }
 chip-chat-web = { workspace = true }
@@ -84,6 +87,7 @@ src = [
     "harvest/src",
     "infra/src",
     "otel/src",
+    "search/src",
     "snowflake/src",
     "vision/src",
     "web/src",
@@ -141,6 +145,7 @@ mypy_path = [
     # that directory on sys.path. Mypy needs telling separately.
     "catalog/tests",
     "harvest/tests",
+    "search/tests",
     "agent/src",
     "api/src",
     "catalog/src",
@@ -150,6 +155,7 @@ mypy_path = [
     "harvest/src",
     "infra/src",
     "otel/src",
+    "search/src",
     "snowflake/src",
     "vision/src",
     "web/src",
@@ -224,6 +230,7 @@ forbidden_modules = [
     "chip_chat.eval",
     "chip_chat.harvest",
     "chip_chat.infra",
+    "chip_chat.search",
     "chip_chat.snowflake",
     "chip_chat.vision",
     "chip_chat.web",
@@ -245,6 +252,7 @@ testpaths = [
     "harvest/tests",
     "infra/tests",
     "otel/tests",
+    "search/tests",
     "snowflake/tests",
     "vision/tests",
     "web/tests",

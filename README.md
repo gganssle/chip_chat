@@ -56,6 +56,7 @@ catalog/      The consolidated menu catalogue: what is orderable
 data-gen/     Seeded synthetic account generator
 databricks/   Unity Catalog medallion pipelines, MLflow recommender
 snowflake/    Schema, RBAC, row access policies, semantic view, stored procs
+search/       The retrieval index: chunk schema, vectorization, alias-swap rebuilds
 agent/        Hosted agent: the container image, its version manifest, the tools
 vision/       Photo pipeline: validate, moderate, describe, match
 api/          FastAPI service, sessions, budget enforcement, ops API

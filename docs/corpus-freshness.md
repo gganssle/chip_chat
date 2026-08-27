@@ -45,9 +45,11 @@ run that dies halfway moves nothing.
 
 That is RFC-001 §08's rule — *the index is rebuilt, never patched* — applied at
 the layer that exists today. [#48](https://github.com/gganssle/chip_chat/issues/48)
-will do the same thing to an Azure AI Search index with an alias, and it is
+now does the same thing to an Azure AI Search index with an alias, and it is
 deliberately the same rule rather than a different one that resembles it: the
-index build reads the release pointer, so the two swaps are the same swap.
+index build reads this pointer and names its index after the run it finds, so
+the two swaps are the same swap. See
+[retrieval-index.md](retrieval-index.md).
 
 ---
 

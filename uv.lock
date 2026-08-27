@@ -18,6 +18,7 @@ members = [
     "chip-chat-harvest",
     "chip-chat-infra",
     "chip-chat-otel",
+    "chip-chat-search",
     "chip-chat-snowflake",
     "chip-chat-vision",
     "chip-chat-web",
@@ -402,6 +403,7 @@ dependencies = [
     { name = "chip-chat-harvest" },
     { name = "chip-chat-infra" },
     { name = "chip-chat-otel" },
+    { name = "chip-chat-search" },
     { name = "chip-chat-snowflake" },
     { name = "chip-chat-vision" },
     { name = "chip-chat-web" },
@@ -427,6 +429,7 @@ requires-dist = [
     { name = "chip-chat-harvest", editable = "harvest" },
     { name = "chip-chat-infra", editable = "infra" },
     { name = "chip-chat-otel", editable = "otel" },
+    { name = "chip-chat-search", editable = "search" },
     { name = "chip-chat-snowflake", editable = "snowflake" },
     { name = "chip-chat-vision", editable = "vision" },
     { name = "chip-chat-web", editable = "web" },
@@ -596,6 +599,23 @@ requires-dist = [
     { name = "opentelemetry-api", specifier = ">=1.30" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.30" },
     { name = "opentelemetry-sdk", specifier = ">=1.30" },
+]
+
+[[package]]
+name = "chip-chat-search"
+version = "0.0.0"
+source = { editable = "search" }
+dependencies = [
+    { name = "azure-identity" },
+    { name = "chip-chat-harvest" },
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "azure-identity", specifier = ">=1.19" },
+    { name = "chip-chat-harvest", editable = "harvest" },
+    { name = "httpx", specifier = ">=0.28" },
 ]
 
 [[package]]

@@ -102,3 +102,33 @@ resource "azurerm_role_assignment" "app_search_service_contributor" {
   principal_id         = azurerm_user_assigned_identity.app.principal_id
   principal_type       = "ServicePrincipal"
 }
+
+# The developer's own data-plane grants, for `make search-build` and
+# `make search-verify` from a laptop.
+#
+# Subscription Owner does not imply either of these, for the same reason it does
+# not imply inference on the Foundry account or a push to the registry: Owner
+# carries `*` in `actions` and nothing in `dataActions`. Without them every call
+# in `chip_chat.search.client` returns 403 while `az search service show` keeps
+# working, which reads as a broken endpoint rather than as a missing grant.
+#
+# There is no key path to fall back on here — `local_authentication_enabled` is
+# false above — so these are not a convenience. They are the only way a human
+# builds an index.
+resource "azurerm_role_assignment" "developer_search_index_data_contributor" {
+  count = var.search_enabled ? 1 : 0
+
+  scope                = azurerm_search_service.main[0].id
+  role_definition_name = "Search Index Data Contributor"
+  principal_id         = data.azurerm_client_config.current.object_id
+}
+
+# Creating and deleting indexes and aliases is a *service* action, not an index
+# data action, so a rebuild needs both roles rather than the data one alone.
+resource "azurerm_role_assignment" "developer_search_service_contributor" {
+  count = var.search_enabled ? 1 : 0
+
+  scope                = azurerm_search_service.main[0].id
+  role_definition_name = "Search Service Contributor"
+  principal_id         = data.azurerm_client_config.current.object_id
+}

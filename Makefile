@@ -325,6 +325,75 @@ reharvest: ## Re-harvest the corpus, report what changed, publish if it complete
 freshness: ## Report how old the corpus is, and fail if it has stopped moving
 	$(UV) run python -m chip_chat.harvest \
 		--landing $(LANDING) --max-age-days $(MAX_AGE_DAYS)
+
+# --- The retrieval index ----------------------------------------------------
+#
+# Issue #48, RFC-001 section 08: THE INDEX IS REBUILT, NEVER PATCHED. Each build
+# creates a new index named after the corpus release it holds and points the
+# `corpus` ALIAS at it in one write, so the application never learns an index
+# name and a build that dies cannot leave the corpus half-updated.
+#
+# `search-schema` is free and needs no credential -- the index definition is a
+# pure function of the chunk schema, and on a tier that allows three indexes,
+# reading the definition before creating one is worth the habit.
+#
+# The other targets need `az login`, the two data-plane roles search.tf grants,
+# and a Foundry key for the index's query-time vectorizer. The key is not a
+# convenience: the Free search tier gives the service no managed identity, so
+# without it the service cannot embed a query and every caller has to embed its
+# own. It lives in Key Vault and is read out here rather than kept on disk.
+#
+# None of these are in `make ci`. They need a credential and a live service, and
+# a gate that needs a credential is not a gate. What is in CI is `search/tests`,
+# which builds the same 31-chunk corpus end to end against a fake service.
+#
+# `search-verify` COSTS a minute, a few thousand embedding tokens, and three
+# index builds against the live service. It is what turns #48's third and fourth
+# acceptance criteria from claims into numbers -- it queries the alias fifty
+# times a second across a real swap and then fails a build on purpose.
+
+CHUNKS  ?=
+RUN_ID  ?=
+ALIAS   ?= corpus
+KEY_VAULT ?= kv-chip-chat-c8b63a
+VECTORIZER_SECRET ?= foundry-api-key
+
+# Both from the stack, so neither is typed twice. Override either on the command
+# line to point a build at a different service.
+SEARCH_ENDPOINT ?= $(shell $(TF_RUN) output -raw search_endpoint 2>/dev/null)
+FOUNDRY_ENDPOINT ?= $(shell $(TF_RUN) output -raw foundry_endpoint 2>/dev/null)
+
+SEARCH_ENV = AZURE_SEARCH_ENDPOINT="$(SEARCH_ENDPOINT)" \
+	CHIP_CHAT_FOUNDRY_ENDPOINT="$(FOUNDRY_ENDPOINT)" \
+	CHIP_CHAT_SEARCH_VECTORIZER_KEY="$$(az keyvault secret show \
+		--vault-name $(KEY_VAULT) --name $(VECTORIZER_SECRET) \
+		--query value -o tsv 2>/dev/null)"
+
+SEARCH_SOURCE = $(if $(CHUNKS),--chunks $(CHUNKS) --run-id $(RUN_ID),--landing $(LANDING))
+
+.PHONY: search-schema search-status search-build search-build-only search-rollback \
+        search-verify
+
+search-schema: ## Print the index definition. Free, no credential, no network
+	$(UV) run python -m chip_chat.search schema
+
+search-status: ## What the service holds and what the alias serves
+	$(SEARCH_ENV) $(UV) run python -m chip_chat.search status --alias $(ALIAS)
+
+search-build: ## Rebuild the index from the live corpus release and swap to it
+	$(SEARCH_ENV) $(UV) run python -m chip_chat.search build \
+		--alias $(ALIAS) $(SEARCH_SOURCE)
+
+search-build-only: ## Build and check a new index WITHOUT making it live
+	$(SEARCH_ENV) $(UV) run python -m chip_chat.search build \
+		--alias $(ALIAS) --no-swap $(SEARCH_SOURCE)
+
+search-rollback: ## Point the alias back at the index before this one
+	$(SEARCH_ENV) $(UV) run python -m chip_chat.search rollback --alias $(ALIAS)
+
+search-verify: ## Hold the live index to #48.3 and #48.4 -- costs a minute
+	$(SEARCH_ENV) $(UV) run python -m chip_chat.search verify \
+		--alias $(ALIAS) $(SEARCH_SOURCE)
 # --- The Snowflake serving layer --------------------------------------------
 #
 # Issue #41. Every role, grant and warehouse in `snowflake/sql/`, so the whole

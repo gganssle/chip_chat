@@ -28,9 +28,12 @@ locals {
       AZURE_STORAGE_ACCOUNT                 = azurerm_storage_account.data.name
       AZURE_UPLOADS_CONTAINER               = azurerm_storage_container.uploads.name
 
-      # Photo lane and retrieval, neither wired yet. Present so that the phase
-      # that wires them is a code change and not also a Terraform change.
+      # Photo lane and retrieval. The retrieval lane reads the ALIAS and never
+      # an index name: the index is rebuilt weekly under a new name and alias-
+      # swapped into place (RFC-001 section 08), so an index name in this map
+      # would be stale the first time the corpus was re-harvested.
       AZURE_SEARCH_ENDPOINT                = one(azurerm_search_service.main[*].name) == null ? "" : "https://${one(azurerm_search_service.main[*].name)}.search.windows.net"
+      AZURE_SEARCH_INDEX_ALIAS             = var.search_alias
       AZURE_CONTENT_SAFETY_ENDPOINT        = azurerm_cognitive_account.content_safety.endpoint
       AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT = azurerm_cognitive_account.document_intelligence.endpoint
 
@@ -38,6 +41,10 @@ locals {
       CHIP_CHAT_FOUNDRY_ENDPOINT          = azurerm_cognitive_account.foundry.endpoint
       CHIP_CHAT_FOUNDRY_CHAT_DEPLOYMENT   = var.chat_deployment
       CHIP_CHAT_FOUNDRY_VISION_DEPLOYMENT = var.vision_deployment
+
+      # The knowledge lane's. Read by chip_chat.search at index-build time; the
+      # index's own vectorizer carries the same name, put there by the build.
+      CHIP_CHAT_FOUNDRY_EMBEDDING_DEPLOYMENT = var.embedding_deployment
 
       # deployment.environment on every span, so the deployed app's traces are
       # distinguishable from a laptop's in the same backend.
