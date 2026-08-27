@@ -19,7 +19,13 @@ from typing import Any
 import pytest
 from fakes import FakeEmbedder, FakeSearchService
 
-from chip_chat.otel import ToolName, agent_step, chat_turn, tool_call
+from chip_chat.otel import (
+    ToolName,
+    agent_step,
+    chat_turn,
+    tool_call,
+    vision_describe,
+)
 from chip_chat.otel.testing import SpanRecorder, span_recorder
 from chip_chat.search import schema
 from chip_chat.search.allowance import SemanticAllowance
@@ -216,3 +222,52 @@ def test_the_turn_survives_a_dead_lane_and_the_next_call_still_works(
     assert healthy.answered
     assert healthy.grounded
     assert spans.names() == ("retriever.search", "retriever.search")
+
+
+def test_a_dead_knowledge_lane_leaves_another_lane_in_the_same_turn_untouched() -> None:
+    """#49's fifth criterion, over a whole turn rather than over one call.
+
+    The tests above say the lane returns rather than raises. That is the
+    mechanism; this is the property RFC-001 §10 actually states — *AI Search
+    unavailable → the knowledge lane declines and says why; other lanes
+    unaffected. Blast radius: knowledge only* — and the only way to assert
+    "other lanes" is to have a second one in the trace.
+
+    The second lane here is a ``vision.describe`` span rather than
+    :mod:`chip_chat.vision`. That is deliberate and it is not a weaker test.
+    ``search`` does not depend on ``vision`` and must not start: the two lanes
+    meet in the agent's tool layer and nowhere below it, and a test that
+    reached across would be asserting the blast radius by building the coupling
+    it exists to rule out. What both lanes genuinely share is the span schema,
+    which is where a turn is assembled and therefore where an outage would have
+    to leak in order to reach anything else. So the second tool call is opened
+    for real, under the schema's own parent rules, and the assertions are about
+    what the exporter saw: the knowledge lane's span failed, the photo lane's
+    span did not, neither tool call failed, and the turn closed.
+    """
+    with (
+        span_recorder("search") as recorder,
+        chat_turn(session_id="search-tests", turn_index=0, message=QUESTION),
+        agent_step(index=0),
+    ):
+        with tool_call(ToolName.SEARCH_MENU_KNOWLEDGE, arguments={"query": QUESTION}):
+            knowledge = lane(DeadService()).search(QUESTION)
+        with (
+            tool_call(ToolName.MATCH_MEAL_FROM_PHOTO, arguments={"photo": "a-blob"}),
+            vision_describe(image_ref="a-blob", model="gpt-4.1-mini") as vision,
+        ):
+            vision.record_usage(prompt_tokens=1, completion_tokens=1)
+
+    assert knowledge.declined is not None
+    statuses = {
+        span.name: span.status.status_code.name for span in recorder.finished_spans()
+    }
+    assert statuses["retriever.search"] == "ERROR"
+    # Everything else in the turn, including the lane that never heard about it.
+    assert statuses["vision.describe"] != "ERROR"
+    assert statuses["tool.search_menu_knowledge"] != "ERROR"
+    assert statuses["tool.match_meal_from_photo"] != "ERROR"
+    assert statuses["agent.step"] != "ERROR"
+    assert statuses["chat.turn"] != "ERROR"
+    # One trace, so this is one turn rather than two runs that cannot interfere.
+    assert len(recorder.trace_ids()) == 1

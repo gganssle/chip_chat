@@ -29,9 +29,13 @@ from chip_chat.otel.testing import span_recorder
 EXPECTED_ROUTES = {
     ("/", frozenset({"GET"})),
     ("/healthz", frozenset({"GET"})),
+    ("/healthz/lanes", frozenset({"GET"})),
     ("/robots.txt", frozenset({"GET"})),
     ("/api/chat", frozenset({"POST"})),
     ("/api/entry", frozenset({"POST"})),
+    ("/api/switch", frozenset({"POST"})),
+    ("/api/draft/revise", frozenset({"POST"})),
+    ("/api/photo", frozenset({"POST"})),
 }
 """Every route this application has.
 
@@ -49,6 +53,15 @@ of the next person's edit. It asks
 :meth:`~chip_chat.api.turns.SpendGate.entry_state` anyway, because assigning a
 roster slot to a visitor who cannot have a conversation spends a persona on
 nobody.
+
+The three routes #67 to #69 added are here on the same terms, and each was
+charged the same decision. ``/api/switch`` asks ``entry_state`` and reaches no
+model, for exactly the reason ``/api/entry`` does. ``/api/draft/revise``
+re-prices a card against a catalogue and an arithmetic -- there is no completion
+anywhere in it, which is why an edit is free and instant. ``/api/photo`` spends
+real money on Content Safety, so it is the one route that carries its own
+ceiling: :class:`~chip_chat.api.uploads.UploadLimiter` runs before a byte is
+read off the socket.
 """
 
 

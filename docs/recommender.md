@@ -12,15 +12,23 @@ Everything below is `infra/terraform/databricks_recommender.tf`,
 `databricks/src/chip_chat/databricks/recommender_model.py`. Nothing was made by
 hand in the workspace UI.
 
-> **Status.** The code, the declarations, the scoring rule, the promotion rule
-> and the Terraform are here and `make ci` is green over them — including the
-> scoring rule and the two hit rates, which are *run* rather than described.
-> The job has **not** been run against `dbw-chip-chat`: it needs a
-> `terraform apply`, a silver layer built by
-> [#34](https://github.com/gganssle/chip_chat/issues/34) and the gold marts
-> from [#36](https://github.com/gganssle/chip_chat/issues/36), none of which
-> has been run either. §7 says exactly what the live run has to show, and it is
-> a job you run rather than a screenshot you take. Tracked separately.
+> **Status.** Run, and verified. `chip-chat-recommender` fitted, evaluated,
+> registered **version 3** in Unity Catalog and moved `@champion` to it on
+> 2026-08-27, then batch-scored 160 recommendations for 138 visitors into
+> `gold_synthetic.recommendations`; `chip-chat-recommender-verify` returned
+> SUCCESS over all four of §9's criteria. §6 has the metrics, including the two
+> that tie and what that says about a ten-item catalogue, and §9.1 is the hand
+> review the second criterion asks for. `make ci` is green over the rest —
+> including the scoring rule and the two hit rates, which are *run* rather than
+> described.
+>
+> Getting there took five attempts and each failure is recorded where it
+> belongs. Three were Unity Catalog privileges that no test could have
+> predicted, and `databricks_recommender.tf` now names all three and which
+> securable each is on. One was `vars()` on a `slots=True` dataclass, at the
+> registry step, after both hit-rate evaluations. The fifth was the promotion
+> rule having no answer for a first run, which is §6's "The first version has
+> nothing to beat" and is a design gap rather than a slip.
 
 ## 1. The shape
 
@@ -252,6 +260,82 @@ than gated — a real menu has items nobody should be pushed toward),
 `visitors_scored` so the denominator is never implicit, `pairs_kept`, and
 `item_affinity_agreement` from §2.
 
+### The first run, and what it actually scored
+
+Version 1, 2026-08-27, over the live silver layer. The numbers are more
+interesting than a pass would have been.
+
+| Metric | Value |
+| --- | --- |
+| `hit_rate_at_k` | 0.107798 |
+| `novel_hit_rate_at_k` | **0.107798** |
+| `baseline_hit_rate_at_k` | 1.0 |
+| `baseline_novel_hit_rate_at_k` | **0.107798** |
+| `catalogue_coverage` | 0.4 |
+| `visitors_scored` | 436 |
+| `pairs_kept` | 12 |
+| `item_affinity_agreement` | **1.0** |
+
+Three things to read out of that.
+
+**`item_affinity_agreement` is 1.0**, which is §2's whole argument settled: the
+model's full-history refit reproduces `gold_synthetic.item_affinity` pair for
+pair, so the mart and the model are two computations of one definition rather
+than two definitions.
+
+**`hit_rate_at_k` and `novel_hit_rate_at_k` are the same number**, and that is
+the design's central property observed rather than asserted: *every* hit this
+model scored was on an item that visitor had never ordered, because it cannot
+recommend anything else. Popularity, by contrast, hits every visitor — 1.0 —
+and almost all of those hits are staples they already buy.
+
+**And the two novel rates are identical to six places**, which is the finding.
+On this catalogue the discriminator PRD P2 asks for cannot discriminate. Ten
+menu items and twelve pairs above the support floor leave each visitor a very
+small set of things they have not tried, and affinity and popularity pick the
+same ones out of it. That is a property of the **trimmed harvest**, not of the
+model: the real menu is hundreds of items and `catalogue_coverage` of 0.4 means
+four items were ever suggested to anybody. The metric is right, the gate is
+right, and there is not enough menu here for either to say anything.
+
+Which is exactly why the promotion rule was not loosened to make this pass. See
+below.
+
+### The first version has nothing to beat
+
+`beats_baseline` compares a run against the incumbent's yardstick, and on the
+first run there is no incumbent. Version 1 tied the baseline, did not clear
+`MINIMUM_MARGIN`, did not take the alias — and the `publish` task then failed
+with `RESOURCE_DOES_NOT_EXIST: Registered Model Alias 'champion' does not
+exist`, a message about a missing alias rather than about the situation.
+
+The gate exists to stop a run **replacing** a good champion with a popularity
+list wearing a hat. With no champion, what it protects instead is an empty
+serving table. So `recommender.takes_the_alias` is `beats_baseline` plus that
+one case: **the first version takes the alias on the strength of being the only
+one**, and every version after it is held to the margin.
+
+The alternative — lowering `MINIMUM_MARGIN` until version 1 passed — would have
+made the gate say something false about a model that genuinely tied. This way
+the metrics above stay on the record, the rule stays where it was, and the
+reason the first version is serving is written down rather than implied by a
+threshold somebody quietly moved.
+
+**`@champion` points at version 3.** Versions 1 and 2 are in the registry with
+their metrics attached and no alias, which is the registry doing what it is for:
+1 was the fit before the bootstrap rule existed, 2 was the run that had it and
+was refused `MANAGE` on the model. Version 3's metrics are identical to version
+1's to six places, over unchanged silver — which is `gold.AS_OF`'s argument
+holding one layer up. It scored **160 recommendations for 138 visitors**.
+
+**138 of 500, and that is the exclusion rule biting.** A visitor gets a row only
+where the model has a candidate they have *never ordered*; on a ten-item
+catalogue most of the population has tried most of the menu, so 362 visitors get
+nothing rather than a suggestion for something they buy weekly. §5 argues that
+absence is the honest output and the serving layer's input; this is the first
+measurement of how often it happens, and on a real menu it would be rare rather
+than usual.
+
 ### The model is fitted twice
 
 The training-window fit is what the holdout can honestly judge. The
@@ -413,11 +497,61 @@ The verify job is read-only and safe to run at any time. Both exit with a
 machine-readable verdict, so the numbers they asserted on are quotable without
 opening the workspace.
 
+### 9.1 The sentences, read by hand
+
+The second acceptance criterion asks for a sample of personas *reviewed for
+plausibility and for not recommending things they already order constantly*. The
+job asserts the machine-checkable half — **0 rows recommend anything the visitor
+has ever ordered, across all 138 scored visitors**, which is stronger than the
+criterion asks and is the emptiness join §5 argues for — and prints the persona
+fixtures' own rows for the other half. Here they are, and here is the reading.
+
+| Persona | Rationale | Plausible? |
+| --- | --- | --- |
+| `regular` #3 | *You order Chicken Bowl in most of your orders, and people who do tend to add Chips.* | **Yes**, and it is the shape RFC-001 §06 asks for: their habit named, the leap named, one sentence. |
+| `regular` #1 | *You order Steak Burrito in most of your orders, and people who do tend to add Chips.* | **Yes.** Different seed, same suggestion, and the sentence says why they differ. |
+| `lapsed` #3 | *You order Jarritos Guava in most of your orders, and people who do tend to add Chicken Bowl.* | **Yes**, though see the finding below about the seed. |
+| `newcomer` #1 | *You order Jarritos Guava **now and then**, and people who do tend to add Chicken Bowl.* | **Yes**, and this is the phrase band earning its place: a newcomer's seed share is low and the sentence hedges instead of claiming a habit they do not have. |
+| `regular` #2 | *You order Chips now and then, and people who do tend to add Steak Burrito.* | **Yes**, at score 0.0146 — an honest weak suggestion rather than a confident one. |
+
+Three findings, none of them a bug and all of them worth writing down.
+
+**The sentence never overclaims, because the phrase is measured.** `SHARE_PHRASES`
+picks *in most of your orders* or *now and then* from the seed's actual share,
+so the same template reads differently for a Regular and a Newcomer. That is
+`usual_order.confidence`'s argument applied to a different field, and the two
+personas above are it working.
+
+**Jarritos Guava seeds 79 of 160 recommendations**, which is the finding to
+watch. It is the argmax for half the population, so half the sentences open the
+same way. Nothing is wrong — it is the seed with the strongest weighted lift for
+those visitors — but a conversation in which every recommendation begins *you
+order Jarritos Guava* would read as a tic rather than as personalization. On a
+ten-item catalogue there is nowhere else for the argmax to go; on the real menu
+there is. Worth re-reading after the catalogue grows rather than fixed by
+diversifying the seed now.
+
+**Four distinct first-ranked items across 138 visitors** — CMG-2 (57), CMG-101
+(49), CMG-1002 (42), CMG-2022 (12). That clears the not-a-top-sellers-list check
+the notebook makes, and only just: four is more than one, and on a menu of ten it
+is not a wide spread. Same catalogue caveat, same conclusion.
+
+**Eight of twenty-eight fixtures have recommendations at all.** The other twenty
+have tried everything the model has a pair for, which is §5's honest absence
+rather than a gap — and §6's note about 138 of 500 is the same fact at
+population scale.
+
 ## 10. What this does not do
 
-- **It has not been run.** See the status note at the top. Four criteria about a
-  live system are four claims about an unrun job until `recommender-verify` has
-  returned SUCCESS against `dbw-chip-chat`.
+- **It cannot show that it beats popularity on this catalogue.** §6: ten menu
+  items, twelve pairs above the support floor, and the model's novel hit rate
+  equal to the baseline's to six places. PRD P2's discriminator is right and
+  there is not enough menu here for it to say anything. Nothing in this
+  document claims the model is better than a top-sellers list on the live data,
+  because the live data cannot tell.
+- **Half the sentences open on the same seed.** §9.1: Jarritos Guava is the
+  argmax for 79 of 160 recommendations. Not wrong, and not fixed by
+  diversifying the seed on a menu this size.
 - **No model serving endpoint.** The issue is explicit that the serving path
   reads a table, and an endpoint would also be an always-on cost — the trap
   `databricks_compute.tf` exists to close.

@@ -91,6 +91,15 @@ from chip_chat.api.killswitch import (
 )
 from chip_chat.api.ledger import BudgetLedger, Reservation
 from chip_chat.api.limits import SpendLimits
+from chip_chat.api.moderation import (
+    BLOCKED_MESSAGE,
+    AzureTextAnalyzer,
+    LocalTextAnalyzer,
+    ModerationUnavailableError,
+    TextAnalyzer,
+    TextModerator,
+    TextVerdict,
+)
 from chip_chat.api.ops import (
     OPS_UNAVAILABLE_MESSAGE,
     SESSION_HEADER,
@@ -136,6 +145,7 @@ from chip_chat.api.visitors import (
 from chip_chat.otel import service_name
 
 __all__ = [
+    "BLOCKED_MESSAGE",
     "DEFAULT_CONFIRMATION_TTL_SECONDS",
     "DEFAULT_DRAFT_TTL_SECONDS",
     "JOURNAL_VARIABLE",
@@ -147,6 +157,7 @@ __all__ = [
     "SESSION_COOKIE",
     "SESSION_HEADER",
     "STOP_STATE_MESSAGE",
+    "AzureTextAnalyzer",
     "BudgetLedger",
     "BudgetScope",
     "CachedKillSwitch",
@@ -168,7 +179,9 @@ __all__ = [
     "FileKillSwitch",
     "FundedTurn",
     "KillSwitch",
+    "LocalTextAnalyzer",
     "ManualKillSwitch",
+    "ModerationUnavailableError",
     "NoJournal",
     "OpsRejectedError",
     "OpsService",
@@ -193,6 +206,9 @@ __all__ = [
     "Stop",
     "StopReason",
     "SystemClock",
+    "TextAnalyzer",
+    "TextModerator",
+    "TextVerdict",
     "TurnBudget",
     "UnfundedTurnError",
     "UploadLimiter",

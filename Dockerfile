@@ -29,19 +29,29 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY agent/ agent/
 COPY api/ api/
+COPY catalog/ catalog/
 COPY data-gen/ data-gen/
 COPY databricks/ databricks/
 COPY eval/ eval/
 COPY harvest/ harvest/
 COPY infra/ infra/
 COPY otel/ otel/
+COPY search/ search/
 COPY snowflake/ snowflake/
 COPY vision/ vision/
 COPY web/ web/
 
 # --package narrows the install to the API service and what it depends on:
-# agent, web and otel. Nothing else in the workspace is installed, which is why
-# the image does not carry Pillow or the Databricks SDK.
+# agent, catalog, search, snowflake, vision, web and otel. Nothing else in the
+# workspace is installed, which is why the image does not carry the Databricks
+# SDK.
+#
+# Every one of those has to be *copied* above even though only some are
+# installed, because uv resolves against the workspace and a member missing from
+# the context fails the resolve rather than being skipped. `catalog/` and
+# `search/` were the two that had not been added: `api.drafts` prices from a
+# `MenuCatalog` and `agent.lanes` names `chip_chat.search.lane`, and both
+# arrived after this file was written.
 #
 # --locked fails rather than re-resolving. An image whose dependency tree was
 # resolved at build time is an image nobody can reproduce.

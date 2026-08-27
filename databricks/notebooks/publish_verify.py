@@ -67,7 +67,11 @@ CONNECT = dict(
         dbutils.widgets.get("snowflake_user"),
         publish.STAGING_SCHEMA,
     ),
-    pem_private_key=dbutils.secrets.get(scope=SCOPE, key=publish.PRIVATE_KEY_SECRET),
+    # The secret holds the .p8 file whole; the connector wants its base64 body.
+    # `publish.pem_body` is where the second live publish died.
+    pem_private_key=publish.pem_body(
+        dbutils.secrets.get(scope=SCOPE, key=publish.PRIVATE_KEY_SECRET)
+    ),
 )
 
 failures = []
@@ -100,6 +104,18 @@ def scalar(query):
     return rows(query)[0][0]
 
 
+def count(query):
+    """Return a Snowflake `COUNT(*)` as an `int`.
+
+    Snowflake counts come back as `NUMBER(18,0)` and the connector maps them to
+    `Decimal`, which compares correctly against an int and then refuses to be
+    serialised. `snowflake_publish.py` learned that at the end of a run in which
+    all eleven tables had already swapped; this notebook ends the same way and
+    would fail the same way, having asserted everything correctly first.
+    """
+    return int(scalar(query))
+
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -120,7 +136,7 @@ counts = {}
 for target in publish.TARGETS:
     source = catalog.table(target.layer, target.stream, target.table)
     expected = spark.sql(publish.select(target, catalog.table)).count()
-    landed = scalar(f"SELECT COUNT(*) FROM {target.qualified}")
+    landed = count(f"SELECT COUNT(*) FROM {target.qualified}")
     counts[target.qualified] = landed
     check(landed > 0, f"{target.qualified} holds rows ({landed})")
     check(
@@ -185,7 +201,7 @@ if schedule is not None:
 
 for target in publish.TARGETS:
     key = ", ".join(target.key)
-    duplicates = scalar(
+    duplicates = count(
         f"SELECT COUNT(*) FROM (SELECT {key} FROM {target.qualified} "
         f"GROUP BY {key} HAVING COUNT(*) > 1)"
     )
@@ -254,7 +270,7 @@ check(
 
 for target in publish.targets_in("MARTS"):
     source = catalog.table(target.layer, target.stream, target.table)
-    nulls = scalar(f"SELECT COUNT(*) FROM {target.qualified} WHERE derived_at IS NULL")
+    nulls = count(f"SELECT COUNT(*) FROM {target.qualified} WHERE derived_at IS NULL")
     check(nulls == 0, f"{target.qualified} carries derived_at on every row")
 
     published_at = scalar(

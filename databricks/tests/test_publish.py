@@ -614,8 +614,37 @@ def test_the_notebook_checks_the_clock_before_it_moves_anything() -> None:
     """The UTC_TIMESTAMP transport is only correct while Spark renders UTC."""
     source = code(NOTEBOOK.read_text())
     assert "spark.sql.session.timeZone" in source
-    assert "publish.SPARK_TIMEZONE" in source
+    assert "publish.is_utc(session_timezone)" in source
     assert source.index("spark.sql.session.timeZone") < source.index("publish_one")
+
+
+def test_the_clock_check_accepts_the_name_the_workspace_uses() -> None:
+    """`dbw-chip-chat` reports `Etc/UTC`, and the first live publish died on it.
+
+    The guard compared the session's zone against `SPARK_TIMEZONE` as a string.
+    `Etc/UTC` is not a different clock, a different offset or a workspace to
+    look at -- it is the same zone under the name IANA gives it, with `UTC`
+    among the links pointing at it. Nothing was wrong, nothing could be
+    published, and the alert fired.
+    """
+    assert publish.is_utc("Etc/UTC")
+    assert publish.is_utc(publish.SPARK_TIMEZONE)
+    for name in publish.UTC_SPELLINGS:
+        assert publish.is_utc(name), name
+        assert publish.is_utc(name.casefold()), name
+        assert publish.is_utc(f"  {name} "), name
+
+
+def test_the_clock_check_still_refuses_a_zone_that_is_not_that_zone() -> None:
+    """Widening it to a spelling is not widening it to a clock.
+
+    `GMT` is the interesting exclusion: permanently zero-offset, and a
+    *different* IANA zone that happens to agree. A publish is not the place to
+    decide that two zones agreeing today is the same fact as one zone spelled
+    twice, and `UTC_SPELLINGS` says so.
+    """
+    for name in ("America/New_York", "Europe/London", "GMT", "Etc/GMT", "UTC+1", ""):
+        assert not publish.is_utc(name), name
 
 
 def test_the_notebook_refuses_to_publish_an_empty_source() -> None:
@@ -742,3 +771,130 @@ def test_the_three_account_tables_are_granted_by_name() -> None:
         )
     for table_name in ("demo_visitors", "personas", "persona_fixtures"):
         assert f"ON TABLE CHIP_CHAT.ACCOUNTS.{table_name}" not in granted
+
+
+# --- The credential, as the connector wants it --------------------------------
+
+
+def test_the_pem_body_is_what_the_connector_takes() -> None:
+    """Armour off, newlines out. The second live publish died on this.
+
+    `openssl pkcs8` writes a PEM file and `docs/nightly-publish.md` §5 tells an
+    operator to put that file in the secret whole, which is right -- a secret
+    holding a mangled derivative of a key is a secret nobody can check against
+    the file it came from. The connector's `pem_private_key` option wants the
+    base64 body alone, and says so by raising `Input PEM private key is
+    invalid`, which names neither the armour nor the newlines.
+    """
+    key = (
+        "-----BEGIN PRIVATE KEY-----\n"
+        "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQ\n"
+        "C7VJTUt9Us8cKjMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dV\n"
+        "-----END PRIVATE KEY-----\n"
+    )
+    assert publish.pem_body(key) == (
+        "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQ"
+        "C7VJTUt9Us8cKjMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dV"
+    )
+    assert "\n" not in publish.pem_body(key)
+    assert "-----" not in publish.pem_body(key)
+
+
+def test_the_pem_body_does_not_punish_an_operator_who_pasted_the_body() -> None:
+    """Idempotent, so a secret filled either way works."""
+    body = "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQ"
+    assert publish.pem_body(body) == body
+    assert publish.pem_body(publish.pem_body(body)) == body
+
+
+def test_an_empty_credential_fails_here_rather_than_inside_the_driver() -> None:
+    """Both empties: nothing at all, and armour with nothing between it."""
+    for empty in (
+        "",
+        "   \n  ",
+        "-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----",
+    ):
+        with pytest.raises(ValueError, match="no key body"):
+            publish.pem_body(empty)
+
+
+def test_both_notebooks_normalise_the_key_they_read() -> None:
+    """And read it from the secret scope rather than from anywhere else.
+
+    Both, because they open two connections to one account with one credential
+    and the verify job would have failed exactly as the publish did.
+    """
+    for notebook in (NOTEBOOK, VERIFY):
+        source = code(notebook.read_text())
+        # Whitespace-insensitive: `ruff format` wraps the call across lines.
+        flat = re.sub(r"\s+", "", source)
+        assert "publish.pem_body(dbutils.secrets.get(" in flat, notebook.name
+        assert "publish.PRIVATE_KEY_SECRET" in source, notebook.name
+
+
+def test_the_verify_job_reads_a_count_as_an_int() -> None:
+    """The same Decimal that ended a publish in which everything had swapped.
+
+    Snowflake's `COUNT(*)` is a `NUMBER(18,0)`, the connector maps it to
+    `Decimal`, and `Decimal` compares correctly against an int and then refuses
+    to be serialised. Both notebooks end by writing their verdict as JSON.
+    """
+    source = code(VERIFY.read_text())
+    assert "def count(query):" in source
+    assert "return int(scalar(query))" in source
+    for line in source.splitlines():
+        if "SELECT COUNT(*)" in line:
+            assert "count(" in line or "duplicates = count(" in source, line
+    assert 'scalar(f"SELECT COUNT(*)' not in source
+
+
+# ---------------------------------------------------------------------------
+# Counting what was landed, without touching #43 -- GH #39, GH #43
+# ---------------------------------------------------------------------------
+
+
+def test_the_landed_count_reads_metadata_and_not_the_rows() -> None:
+    """The publisher counts off INFORMATION_SCHEMA, and this is why.
+
+    Three published tables carry ``demo_id`` and wear ``visitor_isolation``,
+    which is default-deny. The publisher binds no visitor, so ``COUNT(*)``
+    over those tables returns 0 and aborts the run after the swap has already
+    landed the rows -- the failure that showed up the first time this job ran
+    against the real account.
+
+    The fix that was applied to the live account during that stand-up was an
+    ``OR CURRENT_ROLE() = 'CHIP_CHAT_PUBLISH'`` in the policy body. This test
+    exists because that fix is refused: ``snowflake/tests/test_row_access_policies.py``
+    holds that no lane role may appear in any policy body, and #43's criterion
+    is that an unset session variable reads zero rows for *every* role.
+
+    Metadata is not a read of the rows, so no policy filters it.
+    """
+    for candidate in publish.TARGETS:
+        query = publish.row_count(candidate)
+        assert "INFORMATION_SCHEMA.TABLES" in query, (
+            f"{candidate.table} is counted some way other than off the "
+            "metadata. If this became SELECT COUNT(*), the three visitor-scoped "
+            "tables report zero and the publish aborts after swapping"
+        )
+        assert "COUNT(*)" not in query, (
+            f"{candidate.table} is counted with COUNT(*), which #43's row "
+            "access policy filters to zero for a session that has bound no "
+            "visitor -- which the publisher never does"
+        )
+        assert candidate.schema.upper() in query
+        assert candidate.table.upper() in query
+
+
+def test_the_landed_count_is_scoped_to_one_table() -> None:
+    """INFORMATION_SCHEMA holds every table in the database, not just this one.
+
+    A count that forgot its predicates would sum unrelated tables and compare
+    that against the staging count, which fails closed but for a reason nobody
+    reading the error would guess.
+    """
+    orders = publish.target("orders")
+    stores = publish.target("stores")
+    assert publish.row_count(orders) != publish.row_count(stores)
+    assert "table_name" in publish.row_count(orders)
+    assert "table_schema" in publish.row_count(orders)

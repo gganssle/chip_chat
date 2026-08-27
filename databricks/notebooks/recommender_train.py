@@ -353,7 +353,7 @@ with mlflow.start_run() as run:
         json.dumps(
             {
                 "entrees": sorted(entrees),
-                "pairs": [vars(pair) for pair in refit],
+                "pairs": [pair.as_row() for pair in refit],
             },
             sort_keys=True,
         ),
@@ -399,15 +399,35 @@ print(f"  registered {MODEL} version {version} from run {run.info.run_id}")
 # MAGIC alias where it is and publishes nothing. That is the property worth
 # MAGIC having: a bad training run is a version in the registry with its metrics
 # MAGIC attached, not a worse table in front of a visitor.
+# MAGIC
+# MAGIC With one exception, and the first live run is what found it: **there is
+# MAGIC no champion yet.** The gate stops a run *replacing* a good incumbent,
+# MAGIC and with no incumbent what it protects instead is an empty serving
+# MAGIC table and a publish task that dies on a missing alias. So the first
+# MAGIC version takes it on the strength of being the only one, and its metrics
+# MAGIC say plainly whether it beat the baseline. `recommender.takes_the_alias`
+# MAGIC is that rule and `docs/recommender.md` §6 records what the first run's
+# MAGIC numbers were.
 
 # COMMAND ----------
 
-promoted = recommender.beats_baseline(novel_hit_rate, baseline_novel_hit_rate)
+client = mlflow.MlflowClient()
+try:
+    client.get_model_version_by_alias(MODEL, recommender.CHAMPION_ALIAS)
+    has_champion = True
+except Exception:
+    has_champion = False
+
+promoted = recommender.takes_the_alias(
+    novel_hit_rate, baseline_novel_hit_rate, has_champion=has_champion
+)
+if promoted and not has_champion:
+    print(
+        f"  no @{recommender.CHAMPION_ALIAS} exists; this version takes it as the first"
+    )
 
 if promoted:
-    mlflow.MlflowClient().set_registered_model_alias(
-        MODEL, recommender.CHAMPION_ALIAS, version
-    )
+    client.set_registered_model_alias(MODEL, recommender.CHAMPION_ALIAS, version)
     print(f"  @{recommender.CHAMPION_ALIAS} now points at version {version}")
 else:
     print(

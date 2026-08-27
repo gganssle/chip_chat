@@ -391,6 +391,24 @@ class GuardRecorder(_Recorder):
                 ChipChatAttributes.SAFETY_CATEGORIES, list(categories)
             )
 
+    def record_shield(self, detections: Sequence[str]) -> None:
+        """Record what the prompt shield found, including nothing.
+
+        Set unconditionally rather than only when something fired, because an
+        absent attribute and a shield that ran and found nothing are different
+        facts. ``/api/chat`` is unauthenticated and public, so this span is the
+        only record that a jailbreak was attempted -- and "no detections" is
+        evidence the shield ran, which "no attribute" is not.
+
+        Args:
+            detections: Subject-prefixed labels, e.g. ``user_prompt:persona_override``
+                or ``document:0:attack_detected``. See
+                :data:`~chip_chat.otel.attributes.ChipChatAttributes.SAFETY_SHIELD_DETECTIONS`.
+        """
+        self._span.set_attribute(
+            ChipChatAttributes.SAFETY_SHIELD_DETECTIONS, list(detections)
+        )
+
     def record_budget(self, *, scope: str, tokens_used: int, tokens_limit: int) -> None:
         """Record which ceiling was evaluated and how close it is.
 

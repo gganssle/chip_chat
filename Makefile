@@ -203,7 +203,8 @@ verify-tools-bare: ## The same cases, with no system prompt at all
 # rather than a comment.
 
 .PHONY: golden-check golden photos-check adversarial-check adversarial \
-        adversarial-redteam adversarial-baseline
+        adversarial-redteam adversarial-baseline adversarial-sabotaged \
+        adversarial-gate2 adversarial-live adversarial-writegate
 
 golden-check: ## Check the golden set's coverage, free
 	$(UV) run python -m chip_chat.eval.golden --check
@@ -249,9 +250,81 @@ adversarial: ## Attack the slice with a model that complies, free
 adversarial-redteam: ## Sustained concurrent red-team run; fails only on a breach
 	$(UV) run python -m chip_chat.eval.adversarial --structural --rounds 24 \
 		--fail-on breach
+# Issue #83, and the two things the target above cannot say.
+#
+# `adversarial-sabotaged` runs the same suite with the system prompt replaced by
+# the attacker's. PRD launch gate two claims confirmation is structural; a gate
+# that held only while the prompt was this repository's would be a gate that
+# depends on a file anybody with commit access can edit. The run fails if the
+# sabotaged prompt did not demonstrably reach the model.
+#
+# `adversarial-gate2` attacks a different door: thirteen calls straight at the
+# ops API, with no model and no browser in front of them, which is what the
+# attacker in PRD T2 actually does once they have the write service's hostname.
+# The `T2` row the suite prints is one front of gate two; this is the other, and
+# reading either alone overstates the gate.
+
+adversarial-sabotaged: ## Attack the slice with the attacker's system prompt, free
+	$(UV) run python -m chip_chat.eval.adversarial --structural --sabotaged
+
+adversarial-gate2: ## Attack the ops API directly, bypassing the model and the UI, free
+	$(UV) run python -m chip_chat.eval.adversarial --gate2 \
+		--catalog catalog/tests/fixtures
 
 adversarial-baseline: ## Run the suite against a real deployment and write the baseline
 	$(UV) run python -m chip_chat.eval.adversarial --out eval/adversarial/BASELINE.md
+
+# Issue #82's first acceptance criterion, and the only target here whose answer
+# is about a deployment rather than about this repository's own code. Everything
+# above imports the agent loop and calls it; this one has a socket on the far
+# side, so the request handler, the session cookie and the connection pool are in
+# scope — and RFC-001 §05's bleed lives in the third of those.
+#
+# Not in CI, and the reason is spend rather than nerves. Every turn is a real
+# model call on the deployment's own subscription, so a step on every pull
+# request would be somebody else's bill. It is a release step and a periodic one.
+#
+# Two arguments are not optional in practice and are defaulted to the safe
+# reading rather than to the convenient one.
+#
+# POOL_SLOTS is how many connections the deployment pools. Omitting it CLAIMS THE
+# DEPLOYMENT DOES NOT POOL, which is true of nothing with Snowflake behind it,
+# and makes the contended round unscored rather than clean. Pass the configured
+# VisitorPool size; chip_chat.api.pool.DEFAULT_POOL_SIZE is 4.
+#
+# PACE is seconds between one visitor's turns. The deployed app allows twenty
+# requests a minute from one address and answers everything past that with the
+# friendly stop state — which carries no canary and no receipt, and would
+# therefore be scored as the design holding, with more confidence the harder the
+# suite pushed. The adapter records a stopped turn as UNMEASURED, so an unpaced
+# run is honest rather than wrong; it is also nearly empty.
+URL ?= https://ca-chip-chat-web.whitesea-eea6e4c0.eastus2.azurecontainerapps.io
+POOL_SLOTS ?=
+PACE ?= 2.0
+ROUNDS ?= 1
+
+adversarial-live: ## Attack a DEPLOYED app over HTTP. URL= POOL_SLOTS= PACE= ROUNDS=
+	$(UV) run python -m chip_chat.eval.adversarial --live $(URL) \
+		--pace $(PACE) --rounds $(ROUNDS) --fail-on breach \
+		$(if $(POOL_SLOTS),--pool-slots $(POOL_SLOTS),)
+
+# Issue #83, launch gate two, attacked at the door instead of through the model.
+#
+# Everything in attacks.json is something a visitor could type. These are request
+# bodies a client composes — an unconfirmed reference, a stranger's draft id, a
+# forged one, a replayed one, an expired one — and none of them is expressible as
+# a sentence, because the confirmation does not travel in the message. It travels
+# in `confirm_draft_id`, which only a caller holding the visitor's session can
+# populate, and that is the whole of the gate's claim.
+#
+# DRAFT_TTL wakes the expiry probe. Omitting it leaves that probe UNSCORED rather
+# than skipping it quietly, because fifteen minutes of waiting is a real cost and
+# a silent skip reports seven probes as eight. This tree's TTL is 900.
+DRAFT_TTL ?= 0
+
+adversarial-writegate: ## Attack the write gate at the door. URL= DRAFT_TTL= PACE=
+	$(UV) run python -m chip_chat.eval.adversarial --write-gate $(URL) \
+		--draft-ttl $(DRAFT_TTL) --pace $(PACE) --fail-on breach
 
 # --- Trajectory and tool selection ------------------------------------------
 #
@@ -804,7 +877,7 @@ snowflake-demo-reset-plan: ## Show which demo sessions would be aged out -- chan
 snowflake-demo-reset: ## Age demo sessions out and restore them to generated state -- #47
 	$(UV) run python -m chip_chat.snowflake.reset
 
-snowflake-verify: ## Check the live account against issues #41 through #45, and #88
+snowflake-verify: ## Check the live account against issues #41 through #47, and #88
 	$(UV) run python -m chip_chat.snowflake.verify
 
 snowflake-verify-fast: ## The same, minus the minute spent watching it suspend
@@ -825,7 +898,11 @@ snowflake-rebuild: ## Tear the account down and build it back -- #41 criterion 4
 # Succeeded` is not the same as "deployed".
 
 IMAGE_NAME ?= chip-chat-web
-IMAGE_TAG  ?= latest
+# The commit, not `latest`. A revision that references a mutable tag cannot be
+# rolled back to: the tag it names has already moved, so "roll back to the
+# previous revision" redeploys the thing that is broken. `make rollback` below
+# depends on this being immutable. Override it for a scratch build.
+IMAGE_TAG  ?= $(shell git rev-parse --short HEAD)
 # linux/amd64 explicitly: Container Apps runs amd64 and this repository is
 # developed on Apple silicon, where the default build would be arm64 and would
 # fail to start with an exec-format error nobody enjoys diagnosing.
@@ -837,7 +914,7 @@ APP      = $(shell $(TF_RUN) output -raw container_app_name)
 APP_URL  = $(shell $(TF_RUN) output -raw web_url)
 RG       = $(shell $(TF_RUN) output -raw resource_group_name)
 
-.PHONY: image image-push deploy deploy-check
+.PHONY: image image-push deploy deploy-check rollback revisions scale-one scale-zero takedown
 
 image: ## Build the chat app image for Container Apps
 	docker buildx build --platform $(IMAGE_PLATFORM) -t $(IMAGE) --load .
@@ -863,3 +940,40 @@ deploy-check: ## Wait until the NEWEST revision is the one actually serving
 		sleep 10; \
 	done; \
 	echo "  not serving after 400s -- see docs/deployment.md section 3.3"; exit 1
+
+revisions: ## List revisions newest first, with the image each one references
+	@az containerapp revision list -n $(APP) -g $(RG) \
+		--query "reverse(sort_by([].{created:properties.createdTime,name:name,active:properties.active,replicas:properties.replicas,image:properties.template.containers[0].image}, &created))" \
+		-o table
+
+# Rollback, and the reason it is one line. Revision mode is Single, so the way
+# back is not "shift traffic" -- it is "deploy the previous image again", which
+# only works because IMAGE_TAG is a commit. `make revisions` tells you which.
+# Tested against the live app on 27 August 2026; docs/deployment.md section 7.2.
+rollback: ## Roll back to a previous image: make rollback TO=<tag-or-@sha256:...>
+	@test -n "$(TO)" || { echo "usage: make rollback TO=<image tag or @sha256:...>"; \
+		echo "run 'make revisions' to see what was deployed"; exit 2; }
+	az containerapp update -n $(APP) -g $(RG) \
+		--image $(REGISTRY)/$(IMAGE_NAME)$(if $(findstring @,$(TO)),,:)$(TO) -o none
+	@$(MAKE) deploy-check
+
+# Scale-to-one and back, as issue #71 asks: a documented one-liner each way.
+# Hold the app warm while you are actively sharing the link, and let it go
+# afterwards. Neither changes the image or creates a revision you have to
+# reason about later.
+scale-one: ## Keep one replica warm (no cold start) while sharing the link
+	az containerapp update -n $(APP) -g $(RG) --min-replicas 1 -o none
+	@echo "one replica pinned; run 'make scale-zero' when you are done sharing"
+
+scale-zero: ## Back to scale-to-zero. Idle costs nothing; visitors pay a cold start
+	az containerapp update -n $(APP) -g $(RG) --min-replicas 0 -o none
+
+# The takedown. #70's posture is that if anyone at Chipotle asks for this to
+# come down, it comes down cheerfully -- so it is one command that needs no
+# build, no deploy and no code change. The kill switch is read on every request
+# (chip_chat.api.killswitch) and every visitor gets the stop state; setting
+# min/max replicas to zero then stops the app answering at all.
+takedown: ## Throw the kill switch and stop serving. See docs/deployment.md section 7.3
+	az containerapp update -n $(APP) -g $(RG) \
+		--set-env-vars CHIP_CHAT_KILL_SWITCH=on --min-replicas 0 --max-replicas 0 -o none
+	@echo "kill switch thrown and replicas capped at zero: $(APP_URL) serves nothing"

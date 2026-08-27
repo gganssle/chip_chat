@@ -82,16 +82,22 @@ if CATALOG != catalog.CATALOG:
 # COMMAND ----------
 
 session_timezone = spark.conf.get("spark.sql.session.timeZone")
-if session_timezone != publish.SPARK_TIMEZONE:
+if not publish.is_utc(session_timezone):
     raise AssertionError(
         f"spark.sql.session.timeZone is {session_timezone!r} and this publish "
-        f"requires {publish.SPARK_TIMEZONE!r}. Every timestamp in CHIP_CHAT is "
-        "UTC and carries no zone, and the silver tables underneath were parsed "
-        "against this setting too -- so this is a workspace to look at rather "
-        "than a value to override here."
+        f"requires {publish.SPARK_TIMEZONE!r}, spelled any of "
+        f"{publish.UTC_SPELLINGS}. Every timestamp in CHIP_CHAT is UTC and "
+        "carries no zone, and the silver tables underneath were parsed against "
+        "this setting too -- so this is a workspace to look at rather than a "
+        "value to override here."
     )
 
-PRIVATE_KEY = dbutils.secrets.get(scope=SCOPE, key=publish.PRIVATE_KEY_SECRET)
+# The secret holds the .p8 file whole, which is what an operator can check
+# against the file it came from. The connector wants the base64 body alone; see
+# `publish.pem_body`, which is where the second live publish died.
+PRIVATE_KEY = publish.pem_body(
+    dbutils.secrets.get(scope=SCOPE, key=publish.PRIVATE_KEY_SECRET)
+)
 
 # Staging is the only schema this job writes with the connector. The serving
 # tables are reached by fully qualified name inside `publish.swap`, never by a
@@ -138,8 +144,38 @@ def scalar(query):
 
 
 def landed(target):
-    """Return how many rows `target` holds in Snowflake, read as the publisher."""
-    return scalar(f"SELECT COUNT(*) FROM {target.qualified}")
+    """Return how many rows `target` holds in Snowflake, counted off the metadata.
+
+    NOT `SELECT COUNT(*)`. Three of the eleven tables this job publishes carry
+    `demo_id` and so wear #43's `visitor_isolation` row access policy, and that
+    policy is default-deny: a session that has bound no visitor reads zero rows.
+    The publisher binds no visitor -- it replaces these tables wholesale, for
+    every visitor at once -- so a `COUNT(*)` here comes back 0 against a staging
+    count of 18,898 and aborts the run after the swap has already happened.
+
+    The obvious fix is an OR clause in the policy naming CHIP_CHAT_PUBLISH, and
+    it is the wrong one. `tests/test_row_access_policies.py` refuses exactly
+    that, on the grounds that a lane role appearing in a policy body is a lane
+    role the policy has stopped applying to; and #43's acceptance criterion is
+    that an unset session variable returns zero rows from every visitor-scoped
+    table, for every role, not for every role but one.
+
+    `INFORMATION_SCHEMA.TABLES.ROW_COUNT` is metadata about the table rather
+    than a read of its rows, so no row access policy filters it. Measured on
+    the live account: as CHIP_CHAT_READ with nothing bound, `COUNT(*)` on
+    `ACCOUNTS.ORDERS` returns 0 and this returns 18,898. That is the whole
+    argument -- the publisher gets its number, and the isolation guarantee is
+    not touched to give it.
+
+    Coerced to `int` for the same reason the `COUNT(*)` was: the connector maps
+    a Snowflake `NUMBER(18,0)` to a `Decimal`, which compares correctly against
+    the staging count and then refuses to be serialised. The first publish that
+    reached the end of the loop died on `TypeError: Object of type Decimal is
+    not JSON serializable` in `dbutils.notebook.exit`, after all eleven tables
+    had swapped -- every row where it should be, and the run marked FAILED,
+    which is the worst way for this job to be wrong.
+    """
+    return int(scalar(publish.row_count(target)))
 
 
 # COMMAND ----------
@@ -205,7 +241,7 @@ def publish_one(target):
         .mode("overwrite")
         .save()
     )
-    staged = scalar(f"SELECT COUNT(*) FROM {staging}")
+    staged = int(scalar(f"SELECT COUNT(*) FROM {staging}"))
     if staged != rows:
         raise AssertionError(
             f"{staging} holds {staged} rows and {source} produced {rows}. "

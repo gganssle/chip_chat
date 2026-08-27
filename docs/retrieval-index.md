@@ -84,6 +84,40 @@ tidiness would refuse a third of the policy corpus. That distinction —
 *universal* is a claim about the table, *required* is a claim about the document
 — was found by the first live build, not by a test.
 
+**And the live index was read back and checked, which is a different claim.**
+The refusals above are properties of the build. #48's second criterion is a
+property of the *corpus that is serving*, so on 2026-08-27 every document was
+pulled off the alias and held to it:
+
+```
+alias corpus: 31 documents, 31 read back
+  documents with no source_url      0
+  source_url that is not http(s)    0
+  documents with no harvested_at    0
+  harvested_at with no UTC offset   0
+  distinct source_url               4
+```
+
+The four are the four pages the harvest reads, and each was then fetched over
+the wire, because *resolvable* is a claim about the internet and nothing in a
+build can check it without making a build depend on the internet being up:
+
+| | `source_url` | chunks |
+|---|---|---:|
+| 200 | `https://www.chipotle.com/graphql/execute.json/chipotle/FAQ-Query;region=en-us` | 11 |
+| 200 | `https://www.chipotle.com/rewards-terms` | 7 |
+| 200 | `https://www.chipotle.com/rewards` | 3 |
+| **401** | `https://services.chipotle.com/menuinnovation/v1/restaurants/0679/onlinemenu?…` | 10 |
+
+The 401 is the honest reading of *resolvable* rather than a failure of it. The
+menu API is the restaurant's own ordering endpoint and it wants the subscription
+key the harvest holds; DNS, TLS and HTTP all worked, and the URL names the exact
+document the figure came from. A citation is a provenance record, not a link a
+visitor clicks — [decisions/citation-presentation.md](decisions/citation-presentation.md)
+is where that distinction is settled — and the ten menu-row chunks behind it are
+the ones carrying published calorie and allergen marks, which is precisely where
+a provenance record has to be exact.
+
 ---
 
 ## 3. Integrated vectorization, and the half of it this estate cannot have
@@ -268,6 +302,33 @@ The same two properties are asserted in `make ci` against an in-memory service
 the build is correct against a model of the service; this proves the model is
 right.
 
+**Run twice, on purpose.** The run above is the first. Here is the second, an
+independent `make search-verify` on the same service later the same day:
+
+```
+#48.3  alias swap: atomic
+  documents    31 -> 30
+  queries      66 across the swap
+  failures     0
+  half-updated 0
+  propagation  0.16s from the alias write to the first response from the new index
+  note         index corpus-20260827t053000z-2 replaced corpus-20260827t053000z
+#48.4  failed build: the live alias held
+  corpus -> corpus-20260827t053000z-2
+  before       corpus-20260827t053000z-2
+  serving      30 documents
+  failure      POST /indexes/corpus-20260827t053000z/docs/index returned 400:
+               InvalidName ... actions : 0: Document key cannot be missing or empty
+  remains      (deleted with its build)
+```
+
+Different release, different index names, a different number of observations
+because the watch runs on wall-clock rather than on a count — and the same two
+verdicts, the same zero failures, the same zero half-updated responses and the
+same 0.16 s propagation. Two runs is not a distribution, but it is the
+difference between a measurement and an anecdote, and 0.16 s appearing twice
+against a documented ceiling of ten seconds is worth having on the record.
+
 ---
 
 ## 7. Four things the live service does that the documentation does not say
@@ -333,9 +394,22 @@ up in [retrieval.md](retrieval.md): hybrid always, reranked while the Free
 tier's **1,000 requests a month** last, and hybrid-without-reranking after that,
 because past the ceiling the API returns a billing error rather than a charge.
 
-**Nothing measures recall yet.** The system design's demo for this phase is
-*"top-3 recall on your allergen questions, measured, with numbers"*. That needs
-the golden set (#23) pointed at this index and is retrieval evaluation rather
-than index construction — #50. It is also what fixes the one number #49 could
-not measure, the reranker score below which a result is reported as low
-confidence; see [retrieval.md](retrieval.md) §5.
+**Recall is measured, and the demo number is 100%.** The system design's demo for
+this phase is *"top-3 recall on your allergen questions, measured, with
+numbers"*, and [`eval/retrieval`](../eval/retrieval/README.md) is #50's answer to
+it: forty labelled questions swept through the retriever under four
+configurations with no model in the loop. Against this index, under the
+configuration production runs, top-3 recall on the allergen questions is **100%**
+— on three separate sweeps.
+
+Two things that measurement found belong here rather than there. The first is a
+service defect that this document's §3 came close to but did not catch: a vector
+query against this Free-tier service returns an empty result set with HTTP 200
+and no warning, at a rate that climbs with use, which makes the *vector* half of
+a hybrid query unreliable while leaving the lexical half untouched. It is
+eliminated against the vectorizer, the deployment, four API versions and both
+compression settings in [retrieval.md](retrieval.md) §9, and it is **chip-wez**.
+The second is that a sweep must follow a `make search-build` and not a
+`make search-verify`: verify deliberately leaves the *smaller* of its two indexes
+live, so a sweep run straight after it scores the retriever against a corpus that
+is one chunk short. The report says which chunk, which is how that was caught.

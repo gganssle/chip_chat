@@ -21,6 +21,8 @@ editing a file.
            question, and it models no visitor identifier
     #46    the four write procedures exist, run as their caller, and hold
            their five acceptance criteria against a seeded account
+    #47    every visitor carries the baseline row the nightly reset restores
+           them to, which existing is not the same as
 
 #41's first three are checked here. Its fourth is checked by running
 `make snowflake-rebuild`, which tears the account down and builds it back before
@@ -127,7 +129,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from chip_chat.snowflake import account, procedures, schema, semantic, snow
+from chip_chat.snowflake import account, procedures, reset, schema, semantic, snow
 
 __all__ = ["REFUSALS", "Check", "main", "run"]
 
@@ -1141,6 +1143,72 @@ def _check_demo_id_audit() -> list[Check]:
     finally:
         snow.run_statements(f"{preamble}\nDROP TABLE IF EXISTS {canary};")
     return checks
+
+
+def _check_reset_baseline() -> list[Check]:
+    """Check every visitor has the baseline #47 restores them to.
+
+    `_check_schema` already asks whether ``demo_visitor_baseline`` exists, and
+    existing is not the property #47's first acceptance criterion rests on. The
+    criterion is that the reset "restores generated state exactly, verified
+    against the generator's output", and a visitor with no baseline row is one
+    the reset cannot restore at all: `sql/14_demo_reset.sql` joins the roster to
+    the baseline, so a missing row does not fail loudly, it drops the visitor
+    out of the cursor and reports them under ``held_no_baseline``.
+
+    That is not a hypothetical failure. It is what this account was in on
+    2026-08-27: the table arrived with #47, after the population had already
+    been loaded, so `load.py` -- which fills the baseline from
+    ``demo_visitors.jsonl`` in the same run as ``demo_visitors`` itself -- had
+    never had a run in which to fill it. Every table existed, every policy was
+    attached, every offline test passed, and the nightly reset would have aged
+    nobody out for as long as nobody looked. The half-loaded state is invisible
+    to `make ci` for the same reason every other check in this file exists.
+
+    Asked with the maintenance escape set, because a count of rows belonging to
+    visitors this session has not bound is exactly the cross-visitor read #43's
+    policy denies -- and the answer without it would be a confident zero on both
+    sides, which subtracts to a clean pass.
+    """
+    visitors = account.table("ACCOUNTS", "demo_visitors")
+    baseline = account.table("ACCOUNTS", reset.BASELINE_TABLE)
+    try:
+        rows = snow.query(
+            f"{_preamble(account.ADMIN_ROLE, account.SERVING_WAREHOUSE)}\n"
+            f"SET {schema.MAINTENANCE_VARIABLE} = 'checking #47''s baseline';\n"
+            f"SELECT (SELECT COUNT(*) FROM {visitors}) AS VISITORS,\n"
+            f"       (SELECT COUNT(*) FROM {baseline}) AS BASELINE,\n"
+            f"       (SELECT COUNT(*) FROM {visitors} v\n"
+            f"          LEFT JOIN {baseline} b ON b.demo_id = v.demo_id\n"
+            "         WHERE b.demo_id IS NULL) AS ORPHANS;"
+        )[-1]
+    except snow.SnowError as error:
+        return [
+            Check(
+                "#47",
+                "every visitor has the baseline the reset restores them to",
+                passed=False,
+                detail=f"the query did not run: {_refusal_line(str(error))}",
+            )
+        ]
+    row = rows[0] if rows else {"VISITORS": 0, "BASELINE": 0, "ORPHANS": 0}
+    orphans = int(row["ORPHANS"])
+    return [
+        Check(
+            "#47",
+            "every visitor has the baseline the reset restores them to",
+            passed=orphans == 0,
+            detail=(
+                f"{row['BASELINE']} baseline rows for {row['VISITORS']} visitors"
+                if orphans == 0
+                else f"{orphans} of {row['VISITORS']} visitors have no row in "
+                f"{reset.BASELINE_TABLE}. The nightly reset will hold every one "
+                "of them under held_no_baseline rather than fail, so this is a "
+                "reset that silently does nothing. Re-run `make snowflake-load` "
+                "over the same landing zone the population came from"
+            ),
+        )
+    ]
 
 
 def _check_the_serving_joins_answer() -> list[Check]:
@@ -2399,6 +2467,7 @@ def run(*, watch_suspend: bool = True) -> list[Check]:
     # report a probe as the thing it is looking for.
     checks += _check_schema()
     checks += _check_demo_id_audit()
+    checks += _check_reset_baseline()
     checks += _check_policy_coverage()
     checks += _check_default_deny_on_the_real_tables()
     checks += _check_the_roster_inversion()
@@ -2436,7 +2505,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m chip_chat.snowflake.verify",
         description=(
-            "Check the live Snowflake account against issues #41 through #45, and #88."
+            "Check the live Snowflake account against issues #41 through #47, and #88."
         ),
     )
     parser.add_argument(

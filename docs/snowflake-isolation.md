@@ -302,11 +302,70 @@ a lane role reports three unprotected marts as protected by not looking at them.
   file.
 - **It does not protect the catalogue.** A menu is the same for everybody.
 
-## 10. Running it
+## 10. What the live account actually did, 2026-08-27
+
+This is the launch gate, so the evidence for it should be a transcript rather
+than a summary. `make snowflake-verify` against `HQ72718`, the six #43 checks in
+the order they ran:
+
+```
+#43
+  PASS  every visitor-scoped table carries a row access policy
+        every table on ACCOUNTS.visitor_scoped_tables is guarded
+  PASS  the account agrees with the DDL about which policy guards what
+        10 tables, each carrying the policy it declares
+  PASS  the coverage check names a visitor-scoped table with no policy
+        created a table with demo_id and no policy, and the check reported it
+  PASS  an unbound read lane sees no rows of any visitor-scoped table
+        9 tables, all of them zero rows with DEMO_ID unset
+  PASS  the roster is readable by a session that has bound nobody
+        28 fixtures, the same number the owner sees
+  PASS  a bound session sees no other visitor's fixture
+        bound to verify-visitor-nobody, which owns no fixture, and the roster
+        returned nothing
+```
+
+and the behavioural half, on the fixture built for it:
+
+```
+  PASS  a session bound to verify-visitor-mine sees its own row and only its own
+  PASS  a session bound to verify-visitor-theirs sees its own row and only its own
+  PASS  SELECT * returns only the bound visitor's rows
+        a query with no WHERE clause came back filtered
+  PASS  an unset DEMO_ID returns zero rows, not every row
+        nothing came back
+  PASS  a lane role cannot reach the escape by setting ALL_VISITORS
+        the variable is inert without the owner role
+  PASS  the write role is bound by the real policy exactly as the read role is
+        the ops API's role saw verify-visitor-mine and not verify-visitor-theirs
+```
+
+**Four of those matter more than the others.** *Zero rows with `DEMO_ID` unset*
+is the one that turns a bug into a breach if it ever reads differently, and it
+is asked of nine real tables rather than of a fixture. *`SELECT *` came back
+filtered* is the sentence the whole design exists to be able to write, because
+that is the shape of query a text-to-SQL system emits when it has been talked
+into something. *The write role is bound the same way* is the ops API not being
+exempt. And *the coverage check named the unguarded table* is the check that
+keeps the other three from being a green light nobody is looking through: a
+canary table with a `demo_id` and no policy was created, named, and dropped in
+the same run.
+
+**A caution about what a clean run means.** On the first run of the day two of
+these failed, and neither failed because a policy was wrong. `demo_visitor_baseline`
+had been added to the DDL by [#47] and never applied to the account, so the
+coverage check reported a table carrying no policy and the default-deny check
+could not run at all — it names every visitor-scoped table by name and one of
+them did not exist. That is the honest failure mode of this design: it does not
+decay by leaking, it decays by an apply nobody ran. `make snowflake-apply` fixed
+both, in that order, and it is the first thing to try when this section's output
+does not look like the above.
+
+## 11. Running it
 
 ```bash
 make snowflake-apply         # create both policies and attach all ten tables
-make snowflake-verify-fast   # #41, #42, #43 and #88, without the minute of watching
+make snowflake-verify-fast   # #41 through #47 and #88, without the minute of watching
 make ci                      # the coverage test, free and offline
 ```
 

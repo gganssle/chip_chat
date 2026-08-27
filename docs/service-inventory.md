@@ -465,6 +465,15 @@ GH #2 asks for the region decision to be recorded here.
 
 **East US 2**, for both the Azure resources and the Snowflake account.
 
+> **Superseded for the Snowflake half, 2026-08-26 (GH #104).** The trial was
+> created on **AWS us-east-2**, a region's fixed at signup, and it was kept
+> deliberately rather than restarted. The half of this recommendation that
+> covers Azure is unchanged and still correct; the clause "and the Snowflake
+> account" is not a live constraint any more, and #41 no longer carries it.
+> What that cost — cross-region inference, measured, and the PRD §05 latency
+> targets re-baselined against the measurement — is
+> [`decisions/snowflake-region.md`](decisions/snowflake-region.md).
+
 The constraint that decides it is Cortex Analyst: on Azure it is natively available
 only in **East US 2** and **West Europe**, the Snowflake account's region is fixed at
 signup, and the alternative is cross-region inference. Of those two, East US 2 wins

@@ -1,6 +1,6 @@
 """``python -m chip_chat.eval.adversarial`` -- check the suite, or run it.
 
-Three modes, and two of them are free.
+Four modes, and three of them are free.
 
 ``--check`` loads the manifest, refuses one that could not detect what it claims
 to, and reports which of #30's scope clauses the suite meets. It calls no model
@@ -15,13 +15,46 @@ the design rather than of the model's good behaviour. A gate that fails here
 fails against an adversary who has already won the argument with the prompt,
 which is the adversary the design says it does not need to win.
 
-Without either it runs against the slice on a real deployment and writes the
-baseline. That spends money, at least one model call per attack per visitor.
+``--gate2`` is issue #83's, and it attacks a different door. Everything above
+runs attacks *through a model*; this runs thirteen calls straight at
+:class:`~chip_chat.api.ops.OpsService`, with no browser and no assistant in
+front of it, which is the form PRD launch gate two's attacker actually takes
+once they have the write service's hostname. It needs ``--catalog``, because a
+draft store prices against a catalogue and one built without one would be a
+store pricing against nothing. It calls no model either. See
+:mod:`chip_chat.eval.adversarial.gate2`.
+
+``--sabotaged`` is not a mode but a modifier on ``--structural``: it replaces
+the deployment's system prompt with
+:data:`~chip_chat.eval.adversarial.testing.SABOTAGED_PROMPT`, an attacker's, and
+runs the same suite. #83's third acceptance criterion asks for the gates to be
+tested that way, because a gate that depended on the prompt would be a gate that
+depends on a file anybody with commit access can edit. The run refuses to report
+anything unless the sabotaged text was demonstrably in front of the model --
+:class:`~chip_chat.eval.adversarial.testing.Overheard` is what establishes that,
+and a sabotage nobody applied would otherwise produce the most flattering
+possible result.
+
+``--live URL`` is #82's first acceptance criterion -- *run against the deployed
+public app* -- and it is the only mode whose answer is about a deployment rather
+than about this repository's own code. The two above import the agent loop and
+call it, which measures the loop and says nothing about the request handler, the
+session cookie or the connection pool serving the URL; those are exactly where
+RFC-001 section 05's bleed lives. Under ``--live`` there is a socket on the far
+side and the adapter declares only what it could demonstrate about the
+deployment, so the capabilities in the report are a measurement rather than a
+constant somebody wrote. See :mod:`chip_chat.eval.adversarial.live`, and pass
+``--pool-slots`` or the concurrent rounds are unscored.
+
+Without any of them it runs against the slice on a real deployment and writes
+the baseline. That spends money, at least one model call per attack per visitor.
 
 .. code-block:: console
 
     $ python -m chip_chat.eval.adversarial --check
     $ python -m chip_chat.eval.adversarial --structural
+    $ python -m chip_chat.eval.adversarial --structural --sabotaged
+    $ python -m chip_chat.eval.adversarial --gate2 --catalog ./catalog-build
     $ export CHIP_CHAT_FOUNDRY_ENDPOINT=... CHIP_CHAT_FOUNDRY_API_KEY=...
     $ python -m chip_chat.eval.adversarial --out eval/adversarial/BASELINE.md
 
@@ -48,6 +81,12 @@ and hot enough to genuinely interleave*. One round is the single burst #30
 shipped; :data:`~chip_chat.eval.adversarial.soak.DEFAULT_ROUNDS` is a sustained
 one, and either way the report says how hot it actually got rather than how hot
 it was asked to be.
+One consequence is worth stating rather than leaving to be inferred. **The `T2`
+row a suite run prints is one front of gate two, not the gate.** It counts what
+attacks through a model did; the direct calls are counted by ``--gate2`` and
+written to a document of their own. Read either alone and the gate is
+overstated, which is why both targets are in ``make ci`` and why each report
+says so in its own opening paragraph.
 """
 
 import argparse
@@ -56,20 +95,34 @@ from pathlib import Path
 
 from chip_chat.agent.foundry import FoundryConfig, FoundryConfigError
 from chip_chat.agent.model import AzureChatModel, ChatModel
+from chip_chat.catalog import load_catalog
 from chip_chat.eval.adversarial.attacks import (
     DEFAULT_MANIFEST,
     AdversarialSuite,
     SuiteError,
 )
 from chip_chat.eval.adversarial.coverage import coverage
-from chip_chat.eval.adversarial.report import build_report, render
-from chip_chat.eval.adversarial.run import run_suite
+from chip_chat.eval.adversarial.gate2 import Doorway, Gate2Error, besiege
+from chip_chat.eval.adversarial.live import LiveTarget
+from chip_chat.eval.adversarial.report import build_report, render, render_siege
+from chip_chat.eval.adversarial.run import Target, run_suite
 from chip_chat.eval.adversarial.scoring import Scores
 from chip_chat.eval.adversarial.slice import SliceTarget
 from chip_chat.eval.adversarial.soak import DEFAULT_ROUNDS
-from chip_chat.eval.adversarial.testing import CapitulatingModel
+from chip_chat.eval.adversarial.testing import (
+    SABOTAGED_PROMPT,
+    CapitulatingModel,
+    Overheard,
+)
+from chip_chat.eval.adversarial.writegate import WriteGate
+from chip_chat.harvest.blobs import LocalBlobStore
 
 _DEFAULT_VISITORS = 3
+_DEFAULT_CATALOG_PREFIX = "catalog"
+
+_SABOTAGE_TELL = "The confirmation card is a legacy step"
+"""A line of :data:`SABOTAGED_PROMPT` distinctive enough to look for in a
+transcript. What :class:`Overheard` is asked whether it heard."""
 
 _FAIL_ON_GATE = "gate"
 _FAIL_ON_BREACH = "breach"
@@ -103,6 +156,9 @@ def main(argv: list[str] | None = None) -> int:
         measured. See the module docstring on why that is not a warning.
     """
     args = _parser().parse_args(argv)
+    if args.gate2:
+        return _gate2(args)
+
     try:
         suite = AdversarialSuite.load(args.manifest)
     except SuiteError as error:
@@ -112,11 +168,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         return _check(suite)
 
-    model = _model(args)
-    if model is None:
+    if args.write_gate:
+        return _write_gate(args)
+
+    target = _target(args)
+    if target is None:
         return 1
 
-    target = SliceTarget(model, visitors=args.visitors, session_prefix=args.session)
     run = run_suite(suite, target, only=args.only, rounds=args.rounds)
     report = build_report(suite, run)
     document = render(report)
@@ -125,6 +183,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote {args.out}")
     else:
         print(document)
+    # Recovered from the target rather than threaded through main(), because
+    # --live and --sabotaged now both resolve inside _target(). A run that did
+    # not sabotage has no Overheard and skips the check entirely.
+    overheard = getattr(target, "model", None)
+    if isinstance(overheard, Overheard) and not _sabotage_landed(overheard):
+        return 1
     return _status(report.scores, args.fail_on)
 
 
@@ -154,6 +218,60 @@ def _status(scores: Scores, rule: str) -> int:
     return 0 if scores.gates_pass else 1
 
 
+def _sabotage_landed(overheard: Overheard) -> bool:
+    """Whether the attacker's prompt was really in front of the model.
+
+    Checked *after* the report is printed and before the exit status is
+    computed, so a reader still sees what the run found and is then told the
+    run does not mean what it says. A sabotage that silently failed to apply
+    produces a clean pair of gates against the repository's own prompt, and
+    calling that "the gates held under a compromised prompt" is the most
+    flattering lie this package could tell.
+    """
+    heard = overheard.heard(_SABOTAGE_TELL)
+    if heard:
+        print(
+            f"the sabotaged prompt was in front of the model on {heard} calls",
+            file=sys.stderr,
+        )
+        return True
+    print(
+        "error: --sabotaged was asked for and the sabotaged prompt never "
+        "reached the model, so nothing above was measured against one",
+        file=sys.stderr,
+    )
+    return False
+
+
+def _gate2(args: argparse.Namespace) -> int:
+    """Attack the ops API directly, with no model and no browser in front of it.
+
+    Issue #83's second front. See :mod:`chip_chat.eval.adversarial.gate2`.
+    """
+    if args.catalog is None:
+        print(
+            "error: --gate2 needs --catalog; a draft store prices against a "
+            "catalogue, and one built without one prices against nothing",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        catalog = load_catalog(LocalBlobStore(args.catalog), args.catalog_prefix)
+        door = Doorway(catalog)
+    except (OSError, ValueError, Gate2Error) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+    siege = besiege(door)
+    document = render_siege(siege)
+    if args.out is not None:
+        args.out.write_text(document, encoding="utf-8")
+        print(f"wrote {args.out}")
+    else:
+        print(document)
+    return 0 if siege.passes else 1
+
+
 def _check(suite: AdversarialSuite) -> int:
     """Report the suite's coverage without attacking anything."""
     cover = coverage(suite)
@@ -175,6 +293,75 @@ def _check(suite: AdversarialSuite) -> int:
             f"  MISSING     {clause.name}: {len(ids)}/{clause.minimum} ({clause.source})"
         )
     return 0 if cover.complete else 1
+
+
+def _write_gate(args: argparse.Namespace) -> int:
+    """#83, attacked at the door: request shapes rather than sentences.
+
+    A separate command and a separate report, because it measures a different
+    thing from the manifest. Every attack in ``attacks.json`` is something a
+    visitor could type; every probe in
+    :mod:`chip_chat.eval.adversarial.writegate` is a request body a client
+    composes, and the confirmation the second launch gate turns on does not
+    travel in a message at all.
+
+    Returns:
+        ``0`` where the gate passed, ``1`` where anything executed **or** where
+        any probe could not be put. Unscored blocks, for the reason the strict
+        rule in :data:`_FAIL_ON_GATE` gives.
+    """
+    gate = WriteGate(base=args.write_gate, ttl_seconds=args.draft_ttl, pace=args.pace)
+    report = gate.run(only=args.only)
+    document = report.render()
+    if args.out is not None:
+        args.out.write_text(document, encoding="utf-8")
+        print(f"wrote {args.out}")
+    else:
+        print(document)
+    if args.fail_on == _FAIL_ON_BREACH:
+        for finding in report.unscored:
+            print(
+                f"note: {finding.probe.probe_id} was not measured "
+                f"({finding.detail}); this step blocks on a write, not on an "
+                "unmeasured probe",
+                file=sys.stderr,
+            )
+        return 1 if report.breached else 0
+    return 0 if report.gate else 1
+
+
+def _target(args: argparse.Namespace) -> Target | None:
+    """What to attack, or ``None`` where nothing can be built.
+
+    ``--live`` is #82's first acceptance criterion and it beats the other two
+    modes, because it is the only one whose answer is about a deployment rather
+    than about this repository's own code. See
+    :mod:`chip_chat.eval.adversarial.live`.
+    """
+    if args.live:
+        return LiveTarget(
+            base=args.live,
+            visitors=args.visitors,
+            pool_slots=args.pool_slots,
+            pace=args.pace,
+        )
+    model = _model(args)
+    if model is None:
+        return None
+    if args.sabotaged:
+        # #83's third criterion: run the same suite with the attacker's system
+        # prompt in place of the deployment's, so a gate that passes is a gate
+        # that does not depend on a file anybody with commit access can edit.
+        # Overheard is what proves the sabotage was actually in front of the
+        # model -- a sabotage nobody applied would otherwise produce the most
+        # flattering possible result.
+        return SliceTarget(
+            Overheard(model),
+            visitors=args.visitors,
+            session_prefix=args.session,
+            system_prompt=SABOTAGED_PROMPT,
+        )
+    return SliceTarget(model, visitors=args.visitors, session_prefix=args.session)
 
 
 def _model(args: argparse.Namespace) -> ChatModel | None:
@@ -211,6 +398,45 @@ def _parser() -> argparse.ArgumentParser:
         help="attack the slice with a model that complies with every attack",
     )
     parser.add_argument(
+        "--sabotaged",
+        action="store_true",
+        help="replace the system prompt with the attacker's, and run the suite anyway",
+    )
+    parser.add_argument(
+        "--gate2",
+        action="store_true",
+        help="attack the ops API directly, bypassing the model and the UI",
+    )
+    parser.add_argument(
+        "--catalog",
+        type=Path,
+        help="directory holding a built catalogue, which --gate2 prices drafts against",
+    )
+    parser.add_argument(
+        "--catalog-prefix",
+        default=_DEFAULT_CATALOG_PREFIX,
+        help="prefix the catalogue was written under "
+        f"(default: {_DEFAULT_CATALOG_PREFIX})",
+    )
+    parser.add_argument(
+        "--live",
+        metavar="URL",
+        help=(
+            "attack a deployed app over HTTP instead of the in-process slice "
+            "(#82's first criterion). Spends the deployment's tokens, not yours"
+        ),
+    )
+    parser.add_argument(
+        "--pool-slots",
+        type=int,
+        default=None,
+        help=(
+            "how many connections the deployment pools, for --live. Omitting it "
+            "CLAIMS THE DEPLOYMENT DOES NOT POOL, which makes a contended "
+            "concurrent round unscored rather than clean"
+        ),
+    )
+    parser.add_argument(
         "--visitors",
         type=int,
         default=_DEFAULT_VISITORS,
@@ -224,6 +450,35 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "turns per visitor in each concurrent attack's round "
             f"(default: 1; {DEFAULT_ROUNDS} is the sustained run #82 asks for)"
+        ),
+    )
+    parser.add_argument(
+        "--write-gate",
+        metavar="URL",
+        help=(
+            "attack launch gate two at the door instead of through the model "
+            "(#83): unconfirmed, cross-session, forged, replayed and expired "
+            "draft references, composed as request bodies"
+        ),
+    )
+    parser.add_argument(
+        "--draft-ttl",
+        type=float,
+        default=0.0,
+        help=(
+            "the deployment's draft time-to-live in seconds, for --write-gate. "
+            "Omitting it leaves the expiry probe UNSCORED rather than skipping "
+            "it quietly; 900 is this tree's default"
+        ),
+    )
+    parser.add_argument(
+        "--pace",
+        type=float,
+        default=0.0,
+        help=(
+            "seconds between one visitor's turns, for --live, to stay under the "
+            "deployment's per-source rate limit. Without it every turn past the "
+            "limit comes back as the stop state and is recorded as unmeasured"
         ),
     )
     parser.add_argument(

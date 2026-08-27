@@ -33,7 +33,8 @@ can reach is not a confirmation (#62). The write role lives in the Functions app
 because a credential every tier holds is a credential every tier can misuse. And
 the rule that joins them lives in the middle, in ordinary Python, where it can be
 tested without an Azure subscription — `api/tests/test_ops.py` runs the whole
-gate against a recording double in a tenth of a second.
+gate against a recording double in a tenth of a second, and
+`api/tests/test_ops_routes.py` runs the same gate through the host's own routes.
 
 ## What a write actually does, in order
 
@@ -155,6 +156,49 @@ the wrong slot.
 reject, never repair; a rejection is a returned object with `ok` false and a code
 — and the edge keeps that contract. An unconfirmed draft is not a malformed
 request and not a server fault. It is the answer.
+
+## Verifying the gate at the edge, and not one layer inside it
+
+Issue #63's acceptance criteria ask for the rule to be *tested directly against
+the API, bypassing the UI*, and for a while this repository had two halves of
+that and not the whole. `api/tests/test_ops.py` drives `OpsService`, which is one
+layer inside the edge. `api/tests/test_ops_host.py` reads `function_app.py` as
+text, the way `infra/tests` read the Terraform, which establishes its shape and
+nothing about what it does.
+
+Between them sat the layer a caller actually meets, and it is where a gate is
+lost — not by deleting a rule, but by an edge that never reaches one. A route
+that catches the wrong exception, a 500 where a 200 carrying a rejection belongs,
+a service resolved before the caller was authenticated: every one of those leaves
+the service tests green.
+
+`api/tests/test_ops_routes.py` closes it by calling the route functions —
+`place_order(request)` — with a real `OpsService` behind them and a recording
+backend where Snowflake would be. `api/tests/azure_functions_stub.py` is what
+makes that importable without putting the Functions SDK into the workspace
+lockfile, and it is deliberately no more forgiving than the real thing: headers
+are case-insensitive, a body that is not JSON raises `ValueError`, and a response
+body is bytes. A stub that relaxed any of those would turn a green test into a
+claim about the stub.
+
+What that file establishes, by driving the edge rather than by reading it:
+
+| Criterion | How it is observed |
+| --- | --- |
+| An unconfirmed `draft_id` is rejected | 200, `DRAFT_NOT_CONFIRMED`, and `backend.calls == []` — the database was never asked |
+| A confirmed draft from another session is rejected | same draft id, different `x-cilantro-session`, `DRAFT_NOT_FOUND`, no write |
+| The same key writes once | `commit_then_fail()` → two calls, one write, `replayed` true; and a second POST of the same draft finds it retired |
+| The app being down produces the specified message | 503, `OPS_UNAVAILABLE_MESSAGE`, `ordering_available` false — including with no service installed at all, which is the state the deployed host is in today |
+| Every write emits `ops.<action>` with its confirmation state | read off the span, along with the trace id from the inbound `traceparent`, so the rejoin is asserted rather than assumed |
+
+The edge's own three preconditions are driven too, in order: an unauthenticated
+caller learns nothing about the body or the trace, because the key is checked
+first.
+
+What is still not covered, so that nobody reads more into it: the Functions
+worker's dispatch and its `FUNCTION` auth level are Azure's code, and the
+Snowflake driver is exercised nowhere in this workspace — the same argument
+`chip_chat.snowflake.snow` makes about shelling out to the CLI.
 
 ## What is not wired yet, and why that is the honest state
 

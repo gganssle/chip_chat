@@ -263,6 +263,7 @@ __all__ = [
     "score",
     "scored_schema",
     "seed_weight",
+    "takes_the_alias",
     "training_query",
 ]
 
@@ -895,6 +896,24 @@ class Affinity:
         exact = Decimal(self.co_orders) * Decimal(self.orders) / denominator
         return exact.quantize(_SCALE, rounding=ROUND_HALF_UP)
 
+    def as_row(self) -> dict[str, object]:
+        """Return the pair as the logged artifact holds it: field name to value.
+
+        The keys are :class:`Affinity`'s own field names, because
+        ``recommender_model.Recommender.load_context`` reads the artifact back
+        with ``Affinity(**row)`` -- the round trip is the artifact's whole
+        contract and a renamed key would break it at model load rather than
+        here.
+
+        This exists as a method rather than a ``vars()`` at the call site, and
+        the training run is where that mattered: this dataclass is
+        ``slots=True``, so it has no ``__dict__`` and ``vars()`` raises
+        ``TypeError: vars() argument must have __dict__ attribute`` -- after the
+        fit, after both hit-rate evaluations, at the point of logging the model.
+        Six minutes of cluster time to find out that a builtin does not apply.
+        """
+        return {field: getattr(self, field) for field in self.__slots__}
+
 
 @dataclass(frozen=True, slots=True)
 class Recommendation:
@@ -1203,6 +1222,50 @@ def beats_baseline(
     return Decimal(str(novel_hit_rate)) - Decimal(str(baseline_novel_hit_rate)) >= (
         Decimal(str(margin))
     )
+
+
+def takes_the_alias(
+    novel_hit_rate: Decimal | float,
+    baseline_novel_hit_rate: Decimal | float,
+    *,
+    has_champion: bool,
+    margin: float = MINIMUM_MARGIN,
+) -> bool:
+    """Return whether this run should move :data:`CHAMPION_ALIAS`.
+
+    :func:`beats_baseline` is the rule and this is the rule plus the one case
+    the rule does not cover: **there is no champion yet.**
+
+    The gate exists to stop a run *replacing* a good incumbent with something
+    that is a popularity list with extra steps. With no incumbent there is
+    nothing to protect, and what the gate would protect instead is an empty
+    serving table -- `recommender_publish.py` loads `@champion` and nothing
+    else, so a first run that does not clear the margin leaves the registry
+    holding a version, the alias unset, and the publish task failing with
+    `RESOURCE_DOES_NOT_EXIST: Registered Model Alias 'champion' does not
+    exist`. That is what happened on the first live run, and the message names
+    a missing alias rather than the situation.
+
+    So the first version takes the alias on the strength of being the only one,
+    and its metrics say plainly whether it beat the baseline. Every version
+    after it is held to the margin. `docs/recommender.md` §6 records what the
+    first live run's metrics actually were, which is the point of doing it this
+    way round rather than lowering the margin until something passed.
+
+    Args:
+        novel_hit_rate: This run's.
+        baseline_novel_hit_rate: The popularity baseline's, same holdout.
+        has_champion: Whether :data:`CHAMPION_ALIAS` currently resolves to a
+            version. Read off the registry by the caller, because this module
+            may not import MLflow.
+        margin: How far above the baseline is far enough.
+
+    Returns:
+        Whether to move the alias to this run's version.
+    """
+    if not has_champion:
+        return True
+    return beats_baseline(novel_hit_rate, baseline_novel_hit_rate, margin)
 
 
 # --- The published table ------------------------------------------------------

@@ -10,14 +10,11 @@ Everything below is `infra/terraform/databricks_gold.tf`,
 `databricks/src/chip_chat/databricks/gold.py`. Nothing was made by hand in the
 workspace UI.
 
-> **Status.** The code, the declarations, the SQL and the Terraform are here
-> and `make ci` is green over them — including the confidence metric, which is
-> *run* against the bounds `population.toml` admits a Regular and an Explorer
-> on rather than described. The pipeline has **not** been run against
-> `dbw-chip-chat` yet: it needs a `terraform apply` and a silver layer built by
-> [#34](https://github.com/gganssle/chip_chat/issues/34), which has not been
-> run either. §7 says exactly what the live run has to show, and it is a job you
-> run rather than a screenshot you take. Tracked separately.
+> **Status.** Run. `chip-chat-gold-marts` completed against `dbw-chip-chat` on
+> 2026-08-27 and `chip-chat-gold-verify` returned SUCCESS over all five of
+> §7's criteria. §7.1 has the numbers it asserted on. `make ci` is green over
+> the rest — including the confidence metric, which is *run* against the bounds
+> `population.toml` admits a Regular and an Explorer on rather than described.
 
 ## 1. The shape
 
@@ -339,11 +336,53 @@ The verify job is read-only and safe to run at any time. It exits with a
 machine-readable verdict, so the numbers it asserted on are quotable without
 opening the workspace.
 
+### 7.1 What it returned
+
+Run 2026-08-27 against `dbw-chip-chat`, over the silver layer #34 built.
+
+| Mart | Rows | Rows on the rebuild |
+| --- | --- | --- |
+| `customer_360` | 500 | 500 |
+| `usual_order` | 500 | 500 |
+| `item_affinity` | 12 | 12 |
+| `spend_summary` | 7,176 | 7,176 |
+
+Two of those columns being the same column is criterion 5, and it is worth
+being explicit that the check is not the count. The job re-runs the pipeline's
+own query and compares it to the published mart **on every column but
+`derived_at`**, then re-runs it a second time and compares the two rebuilds to
+each other; the counts above are what it reports, not what it asserts on. Both
+comparisons were empty. §6's argument for reading the as-of instant out of the
+data rather than off the wall clock is what makes that possible, and it is the
+one design decision here that would have been invisible until this run.
+
+Five hundred visitors and five hundred usual orders is not a coincidence and is
+worth noticing: every visitor in the population has at least one settled order
+carrying an entree, so the "no row" case §5 argues for did not arise. It is
+still the right behaviour — the Explorer's honest absence is a *low confidence*,
+not a missing row, and the missing-row case is a visitor whose whole history is
+chips and a drink — but nothing in this population exercises it, so that path is
+tested and not yet observed.
+
+`item_affinity` at twelve pairs is the `MINIMUM_CO_ORDERS` threshold doing its
+job against a ten-item catalogue: ninety ordered pairs are possible, twelve
+clear twenty-five co-orders, and the rest are the noise §6 declines to publish.
+The count is printed by the job for exactly this reason — "we dropped the rare
+ones" is a number rather than a claim.
+
+Criteria 2 and 3 assert rather than report and so have no row in the table
+above. The usual order the mart computes matched `persona_fixtures` — #26's
+independent measurement, in Python, over the same eighteen months, which has
+never seen this SQL — for every exemplar. Every Regular landed in `stated` and
+every Explorer in `no_usual`, which is the calibration in §5 holding against a
+real population rather than against the bounds `population.toml` admits.
+
 ## 8. What this does not do
 
-- **It has not been run.** See the status note at the top. Five criteria about a
-  live system are five claims about an unrun pipeline until `gold_verify` has
-  returned SUCCESS against `dbw-chip-chat`.
+- **Nothing exercises the no-row case.** §7.1: every visitor in this population
+  has a usual order to compute, so the honest absence §5 argues for is tested
+  and not yet observed. The hedge path *is* observed — that is what a low
+  confidence is — but "this visitor has no entree in their history" is not.
 - **No publish to Snowflake.**
   [#39](https://github.com/gganssle/chip_chat/issues/39) owns the nightly
   hand-off. This pipeline's job ends when the mart is correct in Unity Catalog;

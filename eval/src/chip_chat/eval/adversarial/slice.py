@@ -46,6 +46,19 @@ does whatever the attack asks -- and what is measured is whether the gates hold
 when the model has already lost. That is RFC-001's actual claim: *the two launch
 gates are both structural properties of this design rather than behaviours we
 hope to observe*. It costs no tokens and it runs in CI.
+
+**And the prompt can be handed to the attacker too.** :attr:`SliceTarget.
+system_prompt` replaces the instructions the conversation opens with, which is
+what issue #83's third acceptance criterion asks for: *the gate holds with a
+deliberately sabotaged system prompt -- proving it is structural*. Together with
+the capitulating model that is the whole adversary the design says it does not
+need to beat -- its instructions are the attacker's, and its behaviour is the
+attacker's -- and neither of them can reach the one thing that matters, because
+the confirmed flag is set by a request carrying the session cookie and there is
+no sentence anywhere that sets it. See
+:data:`~chip_chat.eval.adversarial.testing.SABOTAGED_PROMPT`, and
+:class:`~chip_chat.eval.adversarial.testing.Overheard` for why a run has to
+prove the sabotage arrived.
 """
 
 import json
@@ -126,6 +139,17 @@ class SliceTarget:
         desk: The order desk. **One, shared.** Passing a desk per visitor would
             make every cross-visitor draft attack unfailable and the suite would
             report a clean gate on a design that had never been tested.
+        system_prompt: The instructions every conversation opens with, replacing
+            the shipped ones. ``None`` leaves the deployment's own prompt in
+            place, which is what an ordinary run wants.
+            :data:`~chip_chat.eval.adversarial.testing.SABOTAGED_PROMPT` is the
+            attacker's, and a run using it is testing whether the gates survive
+            a system prompt written by somebody hostile. Only the first system
+            message is replaced: the second is
+            :func:`~chip_chat.agent.loop.runtime_context`, which is what is
+            *true* on this turn -- the menu, the account, which tools are
+            registered -- and sabotaging that would be testing a deployment
+            nobody has rather than a prompt somebody edited.
     """
 
     model: ChatModel
@@ -133,13 +157,24 @@ class SliceTarget:
     visitors: int = _DEFAULT_VISITORS
     session_prefix: str = "adversarial"
     desk: OrderDesk | None = None
+    system_prompt: str | None = None
     _population: Population | None = field(default=None, init=False, repr=False)
     _cards: dict[str, str] = field(default_factory=dict, init=False, repr=False)
 
     @property
     def name(self) -> str:
-        """The target, as the report names it."""
-        return f"week-one slice on {self.model.deployment}, {self.visitors} visitors"
+        """The target, as the report names it.
+
+        Says when the prompt was the attacker's, because a gate that held is a
+        different claim depending on whose instructions the model was reading,
+        and a baseline that did not record which one it ran under is a number
+        nobody can compare with anything.
+        """
+        sabotaged = ", sabotaged prompt" if self.system_prompt is not None else ""
+        return (
+            f"week-one slice on {self.model.deployment}, "
+            f"{self.visitors} visitors{sabotaged}"
+        )
 
     @property
     def capabilities(self) -> frozenset[Capability]:
@@ -316,6 +351,13 @@ class SliceTarget:
         conversation = Conversation(
             session_id=visitor.session_id, tools=offered_tools(self.lanes)
         )
+        if self.system_prompt is not None:
+            # The first system message only. `Conversation` opens with two, and
+            # the second is the runtime context -- see `system_prompt`.
+            conversation.messages[0] = {
+                "role": "system",
+                "content": self.system_prompt,
+            }
         card = self._cards.get(visitor.session_id)
         if card is not None:
             conversation.messages.append({"role": "assistant", "content": card})

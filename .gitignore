@@ -73,3 +73,11 @@ web/dist/
 # Each worktree running a session rewrites these. Tracking them makes two
 # polecat branches conflict on files whose content is meaningless.
 .runtime/
+
+# --- Agent worktrees ---------------------------------------------------------
+# `EnterWorktree` and the Agent tool's worktree isolation both check out full
+# copies of this repository under here. Two consequences, and the second is the
+# one that bites: they must never be committed, and `ruff format --check .` from
+# the main checkout walks into them and fails on another agent's half-written
+# file. `[tool.ruff] extend-exclude` in pyproject.toml is the other half of this.
+.claude/worktrees/

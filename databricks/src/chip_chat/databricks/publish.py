@@ -151,6 +151,7 @@ __all__ = [
     "STAGING_SCHEMA",
     "TARGETS",
     "TRANSPORTS",
+    "UTC_SPELLINGS",
     "UTC_TIMESTAMP",
     "WAREHOUSE_CREDITS_PER_HOUR",
     "WAREHOUSE_MINIMUM_SECONDS",
@@ -158,7 +159,9 @@ __all__ = [
     "Target",
     "column_names",
     "drop_staging",
+    "is_utc",
     "options",
+    "pem_body",
     "required_columns",
     "select",
     "staging",
@@ -205,12 +208,31 @@ PKCS#8 private key. Key-pair auth, because a ``TYPE = SERVICE`` user cannot use
 a password at all."""
 
 SPARK_TIMEZONE: Final = "UTC"
-"""What ``spark.sql.session.timeZone`` must be for a publish to run.
+"""How this repository spells the zone, and what the connector is handed.
 
 Asserted by the notebook rather than set by it. Databricks defaults to UTC, and
 a workspace where it is not is one where every timestamp already in silver was
 parsed against a different clock -- which is a thing to find out about rather
 than to quietly correct on the way past.
+"""
+
+UTC_SPELLINGS: Final = ("UTC", "Etc/UTC", "Etc/UCT", "UCT", "Universal", "Zulu", "Z")
+"""Every name for the zone :data:`SPARK_TIMEZONE` names, as :func:`is_utc` reads it.
+
+This exists because the first live publish failed on the assertion that used to
+compare the session's zone against ``SPARK_TIMEZONE`` as a string.
+`dbw-chip-chat` reports ``'Etc/UTC'``, which is not a different clock, a
+different offset or a workspace to look at -- it is the same zone under the name
+the IANA database gives it, with ``UTC`` among the links pointing at it. The
+check was written to catch a workspace running on New York time and it caught a
+spelling instead, which is the shape of a guard that fails safe in the wrong
+direction: nothing was wrong, nothing could be published, and the alert fired.
+
+The list is the ``Etc/UTC`` link set and stops there. ``GMT`` is permanently
+zero-offset too and is deliberately absent: it is a *different* IANA zone that
+happens to agree, and a publish is not the place to decide that two zones
+agreeing today is the same fact as one zone spelled twice. A workspace set to
+``GMT`` still fails this check, and the message says what to look at.
 """
 
 SPARK_TIMESTAMP_FORMAT: Final = "yyyy-MM-dd HH:mm:ss.SSSSSS"
@@ -657,6 +679,43 @@ def select(candidate: Target, resolve: Callable[[str, str, str], str]) -> str:
     return f"SELECT\n    {projection}\nFROM {source}"
 
 
+def row_count(candidate: Target) -> str:
+    """Return the query counting ``candidate``'s rows off the metadata.
+
+    ``INFORMATION_SCHEMA.TABLES.ROW_COUNT`` rather than ``SELECT COUNT(*)``,
+    and the difference is the whole reason this function exists rather than an
+    f-string at the call site.
+
+    Three of the published tables carry ``demo_id`` and wear #43's
+    ``visitor_isolation`` row access policy. That policy is default-deny: a
+    session with no visitor bound reads zero rows. The publisher never binds
+    one -- it replaces these tables for every visitor at once -- so counting
+    them with ``SELECT COUNT(*)`` returns 0 and aborts the run *after* the swap.
+
+    Exempting ``CHIP_CHAT_PUBLISH`` in the policy body would fix the symptom
+    and cost the guarantee: ``tests/test_row_access_policies.py`` refuses a
+    lane role named in any policy body, because a lane role in a body is a lane
+    role the policy has stopped applying to. Metadata is not a read of the
+    rows, so no policy filters it, and the guarantee is left alone. Verified on
+    the live account: unbound as ``CHIP_CHAT_READ``, ``COUNT(*)`` on
+    ``ACCOUNTS.ORDERS`` returns 0 where this returns 18,898.
+
+    Args:
+        candidate: The published table to count.
+
+    Returns:
+        A one-row, one-column query. ``MAX`` collapses the row rather than
+        guarding a count -- ``INFORMATION_SCHEMA`` holds at most one row for a
+        given schema and table name, and ``MAX`` of no rows is NULL, which
+        ``int()`` refuses loudly rather than reading as a zero-row table.
+    """
+    return (
+        f"SELECT MAX(row_count) FROM {DATABASE}.INFORMATION_SCHEMA.TABLES "
+        f"WHERE table_schema = '{candidate.schema.upper()}' "
+        f"AND table_name = '{candidate.table.upper()}'"
+    )
+
+
 def swap(candidate: Target) -> str:
     """Return the one statement that makes ``candidate``'s new generation live.
 
@@ -730,6 +789,71 @@ def options(url: str, user: str, schema_name: str) -> dict[str, str]:
         # no timestamp depends on it having worked.
         "sfTimezone": SPARK_TIMEZONE,
     }
+
+
+def pem_body(key: str) -> str:
+    """Return ``key`` as the connector's ``pem_private_key`` option wants it.
+
+    Which is: the base64 body of an unencrypted PKCS#8 private key, with the
+    ``-----BEGIN PRIVATE KEY-----`` and ``-----END PRIVATE KEY-----`` armour
+    removed and every newline taken out. Not what ``openssl pkcs8`` writes, and
+    not what an operator following `docs/nightly-publish.md` §5 puts in the
+    secret -- they put the file in, whole, which is right: a secret holding a
+    mangled derivative of a key is a secret nobody can check against the file it
+    came from.
+
+    So the normalisation happens here, at the point of use, and the second live
+    publish is why it exists. It got past the clock check and died on
+    ``IllegalArgumentException: Input PEM private key is invalid`` -- which
+    names neither the armour nor the newlines, and reads exactly like a
+    corrupted secret.
+
+    Idempotent: a key that has already been stripped is returned unchanged, so
+    an operator who pasted the body rather than the file is not punished for it.
+
+    Args:
+        key: The secret's value. A PEM file's contents, or its body alone.
+
+    Returns:
+        The base64 body, one line, no whitespace.
+
+    Raises:
+        ValueError: If nothing is left after stripping. An empty secret and a
+            secret holding only armour both fail here rather than inside the
+            JDBC driver, where the message would name neither.
+    """
+    body = "".join(
+        line.strip()
+        for line in key.strip().splitlines()
+        if not line.strip().startswith("-----")
+    )
+    if not body:
+        raise ValueError(
+            "the publisher private key secret holds no key body; check "
+            f"{PRIVATE_KEY_SECRET!r} in the {SECRET_SCOPE!r} scope"
+        )
+    return body
+
+
+def is_utc(zone: str) -> bool:
+    """Return whether ``zone`` names the zone :data:`SPARK_TIMEZONE` names.
+
+    The notebook's guard, as a function, so that the set of accepted spellings
+    is one list in one place and `make ci` can run the check the cluster runs.
+    :data:`UTC_SPELLINGS` argues for what is in the list and what is not.
+
+    Matched case-insensitively. Java's zone ids are case-sensitive and Spark
+    will not have produced ``'etc/utc'``, but a value typed into a cluster
+    configuration by hand might be, and rejecting a publish over the case of a
+    letter is the failure this function exists to stop happening twice.
+
+    Args:
+        zone: What ``spark.sql.session.timeZone`` reported.
+
+    Returns:
+        Whether a publish may proceed against it.
+    """
+    return zone.strip().casefold() in {name.casefold() for name in UTC_SPELLINGS}
 
 
 # --- What a run cost ----------------------------------------------------------

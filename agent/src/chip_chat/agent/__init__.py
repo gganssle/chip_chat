@@ -37,6 +37,7 @@ from chip_chat.agent.hardcoded import (
     menu_item,
     search_menu,
 )
+from chip_chat.agent.health import HealthReport, LaneHealth, LaneState, probe
 from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.loop import (
     DEFAULT_MAX_STEPS,
@@ -87,6 +88,9 @@ __all__ = [
     "DraftLine",
     "FoundryConfig",
     "FoundryConfigError",
+    "HealthReport",
+    "LaneHealth",
+    "LaneState",
     "Lanes",
     "MenuItem",
     "ModelReply",
@@ -103,6 +107,7 @@ __all__ = [
     "credential",
     "dispatch",
     "menu_item",
+    "probe",
     "run_turn",
     "search_menu",
     "service_name",

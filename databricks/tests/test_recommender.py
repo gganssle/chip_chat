@@ -31,6 +31,7 @@ What none of these can check is the live model and Spark's own reading of the
 SQL, and that is what `databricks/notebooks/recommender_verify.py` is for.
 """
 
+import json
 import random
 import re
 from decimal import Decimal
@@ -50,6 +51,9 @@ TRAIN = REPO / "databricks" / "notebooks" / "recommender_train.py"
 PUBLISH = REPO / "databricks" / "notebooks" / "recommender_publish.py"
 VERIFY = REPO / "databricks" / "notebooks" / "recommender_verify.py"
 TERRAFORM = REPO / "infra" / "terraform" / "databricks_recommender.tf"
+# The publish's Terraform, read only by the permission-vocabulary test below:
+# it is #39's file, and the mistake it guards against was made in both at once.
+PUBLISH_TERRAFORM = REPO / "infra" / "terraform" / "databricks_publish.tf"
 VARIABLES = REPO / "infra" / "terraform" / "variables.tf"
 OUTPUTS = REPO / "infra" / "terraform" / "outputs.tf"
 
@@ -815,9 +819,11 @@ def test_the_training_run_moves_an_alias_and_never_a_stage() -> None:
 
 
 def test_the_alias_only_moves_when_the_run_beat_the_baseline() -> None:
+    """Or when there is no champion to beat -- see `takes_the_alias`, which is
+    `beats_baseline` plus that one case and no other."""
     body = code(TRAIN)
-    assert "recommender.beats_baseline(" in body
-    assert body.index("recommender.beats_baseline(") < body.index(
+    assert "recommender.takes_the_alias(" in body
+    assert body.index("recommender.takes_the_alias(") < body.index(
         "set_registered_model_alias"
     )
 
@@ -960,6 +966,53 @@ def test_terraform_names_the_experiment_the_module_names() -> None:
     assert f"/{recommender.EXPERIMENT}" in body
 
 
+def test_the_experiments_directory_is_declared_rather_than_assumed() -> None:
+    """The first apply of this file failed on it, so it is a test.
+
+    `databricks_notebook` and `databricks_workspace_file` create the
+    directories on the way to their path; the MLflow experiment API does not,
+    and returns `Parent directory does not exist` instead. Nothing else in this
+    repository writes an object under `experiments/`, so no other resource
+    brings it into being as a side effect.
+
+    The experiment has to take its name *from* the directory resource rather
+    than rebuild the string, because a `depends_on` somebody deletes while
+    tidying is an ordering constraint that stops existing quietly. A reference
+    is one Terraform cannot drop.
+    """
+    body = TERRAFORM.read_text(encoding="utf-8")
+    assert 'resource "databricks_directory" "recommender_experiments"' in body
+    assert (
+        'name = "${databricks_directory.recommender_experiments.path}'
+        f'/{recommender.EXPERIMENT}"' in body
+    )
+
+
+def test_no_job_is_granted_a_permission_only_a_pipeline_has() -> None:
+    """The other thing the first apply was rejected for.
+
+    Jobs and pipelines do not share a permission vocabulary. A pipeline takes
+    `CAN_RUN`; a job takes only `CAN_MANAGE`, `CAN_MANAGE_RUN`, `CAN_VIEW` and
+    `IS_OWNER`, and asking for the pipeline word on a job is refused by the API
+    rather than downgraded. The two files this repository grants the app tier a
+    start-it permission in are the recommender's and the publish's, and both
+    grant it on a job.
+
+    Checked as "this file has no `CAN_RUN` at all" rather than by parsing the
+    blocks, because neither file declares a pipeline: any `CAN_RUN` appearing
+    here later is on a job by construction, and would fail an apply nobody runs
+    in CI.
+    """
+    for path in (TERRAFORM, PUBLISH_TERRAFORM):
+        body = path.read_text(encoding="utf-8")
+        assert 'resource "databricks_pipeline"' not in body, path.name
+        for line in body.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue  # the comment explaining this is allowed to say it
+            assert "CAN_RUN" not in stripped, (path.name, stripped)
+
+
 def test_retraining_is_a_scheduled_job() -> None:
     """Issue #37's fourth acceptance criterion. A cron expression somebody can
     read, declared in the Terraform rather than set by hand in a workspace."""
@@ -1016,3 +1069,121 @@ def test_the_jobs_and_the_model_are_reachable_from_the_outputs() -> None:
     assert 'output "databricks_recommender_job_id"' in body
     assert 'output "databricks_recommender_verify_job_id"' in body
     assert 'output "databricks_recommender_model"' in body
+
+
+# --- The artifact round trip --------------------------------------------------
+
+
+def test_a_fitted_pair_survives_the_round_trip_the_artifact_makes() -> None:
+    """`as_row` out, `Affinity(**row)` back, and the same pair either side.
+
+    That round trip is the logged artifact's whole contract:
+    `recommender_model.Recommender.load_context` reads the JSON back with
+    `Affinity(**row)`, so a renamed key would break at model load rather than at
+    the point of writing.
+    """
+    pair = recommender.Affinity(
+        item_id="CMG-1001",
+        related_item_id="CMG-1002",
+        co_orders=40,
+        orders_with_item=120,
+        orders_with_related=90,
+        orders=500,
+    )
+    row = pair.as_row()
+    assert set(row) == {
+        "item_id",
+        "related_item_id",
+        "co_orders",
+        "orders_with_item",
+        "orders_with_related",
+        "orders",
+    }
+    assert recommender.Affinity(**row) == pair  # type: ignore[arg-type]
+    assert json.loads(json.dumps(row)) == row
+
+
+def test_the_fitted_pair_has_no_dict_to_take_the_easy_way_out_of() -> None:
+    """The training run died on `vars(pair)`, after both hit-rate evaluations.
+
+    `Affinity` is `slots=True`, so it has no `__dict__` and `vars()` raises
+    `TypeError: vars() argument must have __dict__ attribute` -- six minutes of
+    cluster time to find out that a builtin does not apply. The slots are worth
+    keeping: this is the one object a fit holds thousands of. So the check is
+    that no notebook reaches for `vars` rather than that the class tolerates it.
+    """
+    pair = recommender.Affinity("a", "b", 1, 2, 3, 4)
+    with pytest.raises(TypeError):
+        vars(pair)
+    for notebook in NOTEBOOKS:
+        source = notebook.read_text(encoding="utf-8")
+        assert "vars(" not in source, notebook.name
+
+
+# --- The first version, which has nothing to beat -----------------------------
+
+
+def test_the_first_version_takes_the_alias_whatever_it_scored() -> None:
+    """The case the promotion rule does not cover, found by running it.
+
+    `beats_baseline` stops a run *replacing* a good incumbent with a popularity
+    list wearing a hat. With no incumbent there is nothing to protect, and what
+    the gate protects instead is an empty serving table: `recommender_publish`
+    loads `@champion` and nothing else, so the first run that ties the baseline
+    leaves a version in the registry, no alias, and a publish task dying on
+    `RESOURCE_DOES_NOT_EXIST`.
+    """
+    assert not recommender.beats_baseline(0.1078, 0.1078)
+    assert recommender.takes_the_alias(0.1078, 0.1078, has_champion=False)
+    assert recommender.takes_the_alias(0.0, 0.9, has_champion=False)
+
+
+def test_every_version_after_the_first_is_held_to_the_margin() -> None:
+    """The bootstrap widens the rule by exactly one case and not one more."""
+    for novel, baseline in ((0.1078, 0.1078), (0.0, 0.9), (0.5, 0.495)):
+        assert not recommender.takes_the_alias(novel, baseline, has_champion=True)
+    assert recommender.takes_the_alias(0.51, 0.5, has_champion=True)
+    assert recommender.takes_the_alias(
+        0.51, 0.5, has_champion=True
+    ) == recommender.beats_baseline(0.51, 0.5)
+
+
+def test_the_notebook_asks_the_registry_rather_than_assuming() -> None:
+    """`has_champion` is read off the registry, because this module cannot.
+
+    `recommender.py` may not import MLflow -- it is uploaded as a flat
+    workspace file and logged into a version as `code_paths` -- so the caller
+    resolves the alias and the rule takes the answer as an argument.
+    """
+    source = code(TRAIN)
+    assert "get_model_version_by_alias(MODEL, recommender.CHAMPION_ALIAS)" in source
+    assert "has_champion=has_champion" in source
+    assert "recommender.takes_the_alias(" in source
+    assert source.index("has_champion = False") < source.index(
+        "recommender.takes_the_alias("
+    )
+
+
+def test_the_verify_job_asks_whether_a_better_version_exists() -> None:
+    """The failure worth looking for, once the bootstrap exists.
+
+    The verify job used to assert flatly that the champion beat the popularity
+    baseline, and the first live run made that false for a legitimate reason:
+    the first version takes the alias with nothing to beat. Asserting it anyway
+    would have left the job red whenever the honest answer was "there was
+    nothing to compare against".
+
+    So the check became the thing no rule permits -- a champion that did not
+    beat the baseline while another version in the registry did, which is a
+    worse model serving than one already on the shelf. A champion that did not
+    beat it and neither did anything else is printed, not failed, the way a
+    PAUSED schedule is.
+    """
+    source = code(VERIFY)
+    assert "search_model_versions" in source
+    assert "beat or not contenders" in source
+    assert "recommender.takes_the_alias(" not in source, (
+        "the verify job checks the outcome against the registry, not the rule "
+        "against itself -- calling the promotion function here would assert "
+        "that the code agrees with the code"
+    )

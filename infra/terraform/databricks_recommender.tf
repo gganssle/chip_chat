@@ -127,8 +127,25 @@ resource "databricks_notebook" "recommender_verify" {
 # anywhere, so this is a comment and the tags below are what survives into the
 # workspace.
 
+# The experiments folder has to be declared, which is not true of anything else
+# this file writes into the workspace. `databricks_notebook` and
+# `databricks_workspace_file` create the directories on the way to their path;
+# the MLflow experiment API does not, and the first apply of this file failed
+# with `Parent directory does not exist: /Shared/chip-chat/experiments`. Nothing
+# else in this repository puts an object under `experiments/`, so no other
+# resource brings it into being as a side effect, and relying on one that
+# happened to would be a dependency nobody wrote down.
+#
+# The experiment names itself from this resource's own path rather than
+# rebuilding the string, so the ordering is a real dependency in the graph
+# instead of a hope about the order Terraform picked.
+
+resource "databricks_directory" "recommender_experiments" {
+  path = "/Shared/${local.base}/experiments"
+}
+
 resource "databricks_mlflow_experiment" "recommender" {
-  name = "/Shared/${local.base}/experiments/item-affinity-recommender"
+  name = "${databricks_directory.recommender_experiments.path}/item-affinity-recommender"
 
   tags {
     key   = "project"
@@ -187,12 +204,36 @@ resource "databricks_registered_model" "recommender" {
   depends_on = [databricks_grants.medallion]
 }
 
-# EXECUTE, and only EXECUTE. `databricks_catalog.tf` already grants the jobs
-# service principal MODIFY on this schema, which is what creating a version and
-# setting an alias needs; loading a model to score with it is a separate
-# privilege and is granted separately. The read-only principal gets it so that a
-# reviewer can load a version and reproduce a recommendation without being able
-# to replace it.
+# EXECUTE is the privilege to *load* a model and score with it, which is what
+# `recommender_publish.py` and a reviewer need. CREATE_MODEL_VERSION is the
+# privilege to add one, which is what the training run needs, and it is on the
+# model rather than on the schema.
+#
+# Both of those took a live run each to establish, because this comment used to
+# say that MODIFY on the schema covered creating a version and setting an alias.
+# It covers neither. Registering a version needs two privileges on two different
+# securables:
+#
+#   CREATE_MODEL         on the schema, because MLflow's
+#                        `log_model(registered_model_name=...)` calls
+#                        `create_registered_model` first, idempotently, whether
+#                        or not Terraform already made the model.
+#                        `databricks_catalog.tf` grants it and argues for it.
+#   CREATE_MODEL_VERSION on the model, which is the one this file owes.
+#
+# And **moving the alias needs a third**: MANAGE on the model. Unity Catalog has
+# no narrower privilege for setting an alias, which is a real widening and is
+# worth naming rather than absorbing — MANAGE on a securable also carries the
+# right to grant on it, so the jobs principal can hand out privileges on this
+# model. It cannot do so anywhere else in the catalog, and the alternative was
+# to make it the model's *owner*, which is strictly more. `local.uc_owner` stays
+# the owner, and Terraform stays the thing that creates and grants.
+#
+# Three privileges, on two securables, and none of them implied by another or by
+# MODIFY. Each of the three cost one live run to discover, which is the argument
+# for writing them down here rather than leaving the next reader to find out the
+# same way. The read-only principal gets EXECUTE alone, so a reviewer can load a
+# version and reproduce a recommendation without being able to add one.
 resource "databricks_grants" "recommender_model" {
   count = var.databricks_unity_catalog_enabled ? 1 : 0
 
@@ -200,7 +241,7 @@ resource "databricks_grants" "recommender_model" {
 
   grant {
     principal  = databricks_service_principal.jobs.application_id
-    privileges = ["EXECUTE"]
+    privileges = ["EXECUTE", "CREATE_MODEL_VERSION", "APPLY_TAG", "MANAGE"]
   }
 
   grant {
@@ -320,9 +361,16 @@ resource "databricks_permissions" "recommender_job" {
   # The app tier may start a retraining run with its managed identity and no
   # stored credential -- the same grant the three pipelines have, so that a
   # rebuild after a re-harvest can run the whole chain in sequence.
+  #
+  # `CAN_MANAGE_RUN` and not `CAN_RUN`, which is what the pipelines above take.
+  # The two object types do not share a permission vocabulary: a job accepts
+  # only `CAN_MANAGE`, `CAN_MANAGE_RUN`, `CAN_VIEW` and `IS_OWNER`, and the
+  # first apply of this file was rejected outright for asking for the pipeline
+  # word on a job. `CAN_MANAGE_RUN` is the job-shaped spelling of the same
+  # intent -- start and cancel runs, change nothing about the job itself.
   access_control {
     service_principal_name = databricks_service_principal.app.application_id
-    permission_level       = "CAN_RUN"
+    permission_level       = "CAN_MANAGE_RUN"
   }
 }
 

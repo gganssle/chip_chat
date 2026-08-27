@@ -122,6 +122,20 @@ class ChipChatAttributes:
     SAFETY_CATEGORIES: Final = "chip_chat.content_safety.categories"
     """Categories Content Safety flagged, as a list of strings."""
 
+    SAFETY_SHIELD_DETECTIONS: Final = "chip_chat.content_safety.shield_detections"
+    """What the prompt shield flagged, as a list of strings.
+
+    Set on every screened turn including when it is empty, because an absent
+    attribute and a shield that found nothing are different facts. This endpoint
+    is unauthenticated and public, so the span is the only record that a
+    jailbreak was attempted at all -- a detection nobody recorded is a detection
+    nobody can audit after the event.
+
+    Carries the subject as a prefix: ``user_prompt:`` for the visitor's own
+    message, ``document:`` for a retrieved passage. The second is the
+    cross-prompt half, and it is the half issue #81 plants its payloads for.
+    """
+
     VISION_IMAGE_REF: Final = "chip_chat.vision.image_ref"
     """Blob reference for the uploaded image -- a storage key, not the bytes."""
 

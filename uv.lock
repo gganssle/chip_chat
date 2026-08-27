@@ -543,6 +543,7 @@ version = "0.0.0"
 source = { editable = "eval" }
 dependencies = [
     { name = "chip-chat-agent" },
+    { name = "chip-chat-api" },
     { name = "chip-chat-catalog" },
     { name = "chip-chat-harvest" },
     { name = "chip-chat-otel" },
@@ -553,6 +554,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "chip-chat-agent", editable = "agent" },
+    { name = "chip-chat-api", editable = "api" },
     { name = "chip-chat-catalog", editable = "catalog" },
     { name = "chip-chat-harvest", editable = "harvest" },
     { name = "chip-chat-otel", editable = "otel" },
@@ -675,15 +677,11 @@ name = "chip-chat-web"
 version = "0.0.0"
 source = { editable = "web" }
 dependencies = [
-    { name = "chip-chat-agent" },
     { name = "chip-chat-otel" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "chip-chat-agent", editable = "agent" },
-    { name = "chip-chat-otel", editable = "otel" },
-]
+requires-dist = [{ name = "chip-chat-otel", editable = "otel" }]
 
 [[package]]
 name = "click"

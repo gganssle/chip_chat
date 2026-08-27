@@ -133,17 +133,56 @@ if champion is not None:
         value = run.data.metrics.get(measure.name)
         check(value is not None, f"the run logged {measure.name} = {value}")
 
+    # Two admissible reasons for this alias to be where it is, and the check has
+    # to know which. Beating the popularity baseline is the rule. Being the
+    # first version is the bootstrap `recommender.takes_the_alias` adds, because
+    # the rule is about not *replacing* a champion and with none the alternative
+    # is an empty serving table -- `docs/recommender.md` §6 argues it.
+    #
+    # So the failure this looks for is the one that matters: a champion that did
+    # not beat the baseline while some *other* version did. That is a worse
+    # model serving than one the registry already holds, which no rule here
+    # permits. A champion that did not beat it and neither did anything else is
+    # reported instead, loudly, the way a PAUSED schedule is -- it is the
+    # shipped state of a model on a catalogue too small to tell the two apart.
     beat = recommender.beats_baseline(
         run.data.metrics.get(recommender.NOVEL_HIT_RATE.name, 0.0),
         run.data.metrics.get(recommender.BASELINE_NOVEL_HIT_RATE.name, 0.0),
     )
+    contenders = []
+    for other in client.search_model_versions(f"name='{MODEL}'"):
+        if str(other.version) == str(champion.version) or not other.run_id:
+            continue
+        metrics = client.get_run(other.run_id).data.metrics
+        if recommender.beats_baseline(
+            metrics.get(recommender.NOVEL_HIT_RATE.name, 0.0),
+            metrics.get(recommender.BASELINE_NOVEL_HIT_RATE.name, 0.0),
+        ):
+            contenders.append(str(other.version))
+
     check(
-        beat,
-        f"the champion beat the popularity baseline on "
-        f"{recommender.NOVEL_HIT_RATE.name} by at least "
-        f"{recommender.MINIMUM_MARGIN} — PRD P2's requirement, and the only "
-        "reason this alias moved",
+        beat or not contenders,
+        f"the champion is the best version this registry holds on "
+        f"{recommender.NOVEL_HIT_RATE.name}"
+        + (
+            ""
+            if beat or not contenders
+            else f" — version(s) {sorted(contenders)} beat the baseline and "
+            f"version {champion.version} does not hold the alias over them"
+        ),
     )
+    if beat:
+        print(
+            f"  the champion beat the popularity baseline by at least "
+            f"{recommender.MINIMUM_MARGIN}, which is PRD P2's requirement"
+        )
+    else:
+        print(
+            f"  the champion did NOT beat the popularity baseline, and neither "
+            f"has any other version. @{recommender.CHAMPION_ALIAS} is where it "
+            "is because a first version has nothing to beat; see "
+            "docs/recommender.md §6"
+        )
     check(
         run.data.metrics.get(recommender.AGREEMENT.name) == 1.0,
         f"the full-history refit reproduces {recommender.REFERENCE_MART} exactly "

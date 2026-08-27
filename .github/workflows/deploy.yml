@@ -1,0 +1,222 @@
+name: Deploy the chat app
+
+# Issue #71's first acceptance criterion: a push to the default branch deploys
+# automatically and the new revision serves the URL. Everything here is the
+# `make image` / `make image-push` / `make deploy` sequence with the two things
+# a laptop does not have to think about added -- an immutable tag, and a wait
+# that knows the difference between `provisioningState: Succeeded` and "the new
+# revision is the one answering".
+#
+# This mirrors `agent-image.yml` deliberately, including the part that matters
+# most in a repository somebody might clone: **the deploy half is conditional on
+# credentials existing.** A fork with no Azure federation still gets the build,
+# which is the gate that catches a broken Dockerfile, and skips the roll with a
+# line in the log saying why rather than failing red for a reason nobody outside
+# this subscription can fix.
+#
+# Authentication is OIDC federation, not a registry password: the registry's
+# admin account is disabled in `infra/terraform/registry.tf`, so there is no
+# username and password to leak. Set as repository secrets:
+#
+#   AZURE_CLIENT_ID  AZURE_TENANT_ID  AZURE_SUBSCRIPTION_ID
+#   ACR_NAME  CONTAINER_APP_NAME  RESOURCE_GROUP
+#
+# The identity needs AcrPush on the registry and Contributor (or a role with
+# `Microsoft.App/containerApps/write`) on the Container App.
+#
+# **The tag is the commit, and it is never `latest`.** A revision that references
+# a mutable tag cannot be rolled back to, because the tag it names has already
+# moved -- which turns "roll back to the previous revision" into "redeploy the
+# thing that is broken". `docs/deployment.md` section 7.2 is the rollback
+# procedure that this makes possible, and it was tested against the live app
+# rather than written down and hoped for.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agent/**"
+      - "api/**"
+      - "catalog/**"
+      - "harvest/**"
+      - "otel/**"
+      - "search/**"
+      - "snowflake/**"
+      - "vision/**"
+      - "web/**"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/deploy.yml"
+  pull_request:
+    paths:
+      - "api/**"
+      - "web/**"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "uv.lock"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  # Never two rolls at once. A second push while the first is still waiting for
+  # the revision to go ready would leave two revisions racing for the same
+  # traffic weight, and `cancel-in-progress` on a *deploy* would abandon one
+  # halfway.
+  group: deploy-web
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # For the OIDC token the Azure login exchanges. Harmless on a pull request,
+  # where nothing below the build runs.
+  id-token: write
+
+env:
+  IMAGE_NAME: chip-chat-web
+  ACR_NAME: ${{ secrets.ACR_NAME }}
+  CONTAINER_APP_NAME: ${{ secrets.CONTAINER_APP_NAME }}
+  RESOURCE_GROUP: ${{ secrets.RESOURCE_GROUP }}
+  AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+jobs:
+  deploy:
+    name: build, push, roll, verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # linux/amd64 explicitly, for the reason the Makefile gives: Container
+      # Apps runs amd64, and an arm64 image fails to start with an exec-format
+      # error nobody enjoys diagnosing.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The cheapest possible proof that the image is not merely built but
+      # runnable: start it, ask it the one question the liveness probe asks, and
+      # stop. A container that cannot answer `/healthz` in fifteen seconds is a
+      # container Container Apps would restart forever -- see
+      # `docs/deployment.md` section 3.11, which is the deploy that taught us to
+      # check this here rather than in production.
+      - name: The image answers its own liveness probe
+        run: |
+          docker run -d --name probe -p 8000:8000 \
+            -e CHIP_CHAT_ENVIRONMENT=ci "${IMAGE_NAME}:ci"
+          for _ in $(seq 1 15); do
+            if curl -fsS --max-time 2 http://localhost:8000/healthz >/dev/null; then
+              echo "healthy"
+              curl -fsS http://localhost:8000/robots.txt | grep -q 'Disallow: /' \
+                || { echo "the image does not serve a noindex robots.txt"; exit 1; }
+              docker rm -f probe >/dev/null
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "the image never answered /healthz"
+          docker logs probe
+          exit 1
+
+      - name: Deploy is configured
+        id: gate
+        run: |
+          if [ -n "$ACR_NAME" ] && [ -n "$AZURE_CLIENT_ID" ] \
+             && [ -n "$CONTAINER_APP_NAME" ] && [ -n "$RESOURCE_GROUP" ] \
+             && [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Not deploying: this is a pull request, or one of ACR_NAME,"
+            echo "AZURE_CLIENT_ID, CONTAINER_APP_NAME and RESOURCE_GROUP is"
+            echo "unset. The build and the liveness check above still ran."
+          fi
+
+      - name: Azure login
+        if: steps.gate.outputs.enabled == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Registry login
+        if: steps.gate.outputs.enabled == 'true'
+        run: az acr login --name "$ACR_NAME"
+
+      # Two tags on one digest. `${GITHUB_SHA}` is what the revision references
+      # and is never reused; `main` is a convenience for a human reading the
+      # registry and is never what a revision points at.
+      - name: Push
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          registry="${ACR_NAME}.azurecr.io"
+          docker tag "${IMAGE_NAME}:ci" "${registry}/${IMAGE_NAME}:${GITHUB_SHA}"
+          docker tag "${IMAGE_NAME}:ci" "${registry}/${IMAGE_NAME}:main"
+          docker push "${registry}/${IMAGE_NAME}:${GITHUB_SHA}"
+          docker push "${registry}/${IMAGE_NAME}:main"
+
+      - name: Roll the Container App
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          az containerapp update \
+            -n "$CONTAINER_APP_NAME" -g "$RESOURCE_GROUP" \
+            --image "${ACR_NAME}.azurecr.io/${IMAGE_NAME}:${GITHUB_SHA}" -o none
+
+      # `provisioningState: Succeeded` arrives long before the new revision is
+      # the one answering, which is `docs/deployment.md` section 3.3 and the
+      # reason `make deploy-check` exists. This is that check, and it is what
+      # makes a broken deploy fail the workflow rather than quietly serving the
+      # old revision while the run goes green.
+      - name: Wait for the new revision to serve
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          url="https://$(az containerapp show -n "$CONTAINER_APP_NAME" \
+            -g "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)"
+          for _ in $(seq 1 60); do
+            latest=$(az containerapp show -n "$CONTAINER_APP_NAME" -g "$RESOURCE_GROUP" \
+              --query properties.latestRevisionName -o tsv)
+            ready=$(az containerapp show -n "$CONTAINER_APP_NAME" -g "$RESOURCE_GROUP" \
+              --query properties.latestReadyRevisionName -o tsv)
+            if [ "$latest" = "$ready" ] \
+               && [ "$(curl -s -o /dev/null -w '%{http_code}' "$url/healthz")" = "200" ]; then
+              echo "serving $ready at $url"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "the new revision never became the one serving -- see docs/deployment.md 3.3"
+          az containerapp revision list -n "$CONTAINER_APP_NAME" -g "$RESOURCE_GROUP" \
+            --query "[].{name:name,active:properties.active,healthy:properties.healthState}" -o table
+          exit 1
+
+      # The three things a stranger would notice if they broke, checked against
+      # the real URL rather than a test client: the page renders, the disclosure
+      # is on it, and the demo asks not to be indexed. Issue #70's criteria are
+      # verified "by fetching", so they are fetched.
+      - name: The deployed URL still says what it has to say
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          url="https://$(az containerapp show -n "$CONTAINER_APP_NAME" \
+            -g "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)"
+          page=$(curl -fsS "$url/")
+          echo "$page" | grep -q 'Unofficial demo, not affiliated with Chipotle' \
+            || { echo "the unaffiliated-demo disclosure is not on the entry screen"; exit 1; }
+          echo "$page" | grep -q 'name="robots" content="noindex,nofollow"' \
+            || { echo "the noindex meta tag is missing"; exit 1; }
+          curl -fsS "$url/robots.txt" | grep -q 'Disallow: /' \
+            || { echo "robots.txt does not disallow crawling"; exit 1; }
+          curl -fsSI "$url/" | grep -qi 'x-robots-tag: noindex' \
+            || { echo "the X-Robots-Tag header is missing"; exit 1; }
+          echo "disclosure and noindex verified against $url"

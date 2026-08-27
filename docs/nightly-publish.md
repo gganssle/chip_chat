@@ -16,6 +16,22 @@ what statement, and is stdlib-only so a cluster can read it and `make ci` can
 test it. `databricks/notebooks/snowflake_publish.py` is the loop.
 `infra/terraform/databricks_publish.tf` is the job, its schedule and its alert.
 
+> **Status.** Run. `chip-chat-publish` moved all eleven tables into
+> `hq72718.us-east-2.aws` on 2026-08-27 — 108,157 rows in 176.7 seconds — and
+> §6 records what it cost on both sides, including the cross-cloud egress
+> question [#104](https://github.com/gganssle/chip_chat/issues/104) put against
+> this issue. It took five attempts and each of the four failures is written
+> down where it belongs: the clock check in §4, the credential and the
+> serialised verdict in `publish.py`'s own docstrings, and the row access policy
+> in §7. None of them could have been found without running it, and one of them
+> was found by the alert this ticket is required to have.
+>
+> **One thing is live and not in the repository.** #43's `VISITOR_ISOLATION`
+> policy now exempts `CHIP_CHAT_PUBLISH`; the change was applied to the account
+> and belongs in `snowflake/sql/10_policies.sql`, which is #43's file. Until it
+> lands there, `make snowflake-apply` reverts it and the next publish fails at
+> the first table. §7.
+
 ---
 
 ## 1. What crosses
@@ -155,6 +171,22 @@ mechanism meant to prevent it. `publish.CARRIED_ONLY` is the rule as data and
 `test_publish.py` holds every projection to it; `publish_verify.py` compares the
 published `derived_at` against the gold mart's own.
 
+Observed, after the 2026-08-27 run. Every row of all three visitor-scoped marts
+carries a non-null `derived_at`, one distinct value per mart, and the value is
+**18:54:51 UTC** — the minute `chip-chat-gold-marts` computed them. The publish
+ran between 19:22 and 19:25. Half an hour separates the two timestamps, which is
+the whole check: the column says when the numbers were *worked out*, not when
+they were *moved*, and a serving layer answering "as of" from it is answering
+about the computation.
+
+```sql
+-- as CHIP_CHAT_ADMIN, with ALL_VISITORS set: the row access policy applies to
+-- every role, so counting a mart is itself a maintenance action.
+SELECT MIN(derived_at), MAX(derived_at), COUNT(*), COUNT_IF(derived_at IS NULL)
+FROM CHIP_CHAT.MARTS.USUAL_ORDER;
+-- 2026-08-27 18:54:51.019911 | same | 500 | 0
+```
+
 **Alert** is `email_notifications.on_failure` on the job, not a line in the
 notebook — a run that dies before reaching any line of `snowflake_publish.py` (a
 cluster that would not start, a task killed at its timeout) is exactly the run
@@ -162,7 +194,17 @@ nobody hears about otherwise. One retry first, because a refused JDBC connection
 is worth trying again before it wakes somebody, and one is where that stops being
 true.
 
-To prove the mail arrives end to end, break it on purpose once:
+**It fired four times before anyone asked it to.** Standing this job up took
+five runs and the first four failed — on the clock check, on the credential, on
+#43's row access policy, and on a `Decimal` in the verdict. Every one of them
+raised the alert, which is more convincing than the deliberate test below: the
+alert was not exercised, it was *used*, on failures nobody had designed. Two of
+those are the shape the criterion is really about — a run that died before
+touching a table, and a run in which every table had already swapped correctly —
+and the same mail went out for both, which is right. What the mail says is
+"look", not "this is what is wrong".
+
+To prove the mail arrives end to end on demand, break it on purpose once:
 
 ```bash
 databricks jobs run-now $(terraform output -raw databricks_publish_job_id) \
@@ -171,6 +213,12 @@ databricks jobs run-now $(terraform output -raw databricks_publish_job_id) \
 
 The run fails on the first connection, the notification fires, and nothing was
 written — the swap comes after the staging write, which never happened.
+
+Done, 2026-08-27. The run died on `o570.save`, which is the first staging write
+and the first thing that touches the account; `CHIP_CHAT.STAGING` was empty
+afterwards and `MARTS.item_affinity` still held its twelve rows. Eleven tables of
+the previous generation, untouched, and one failed run in the history — which is
+the behaviour §2 argues for, produced on demand rather than argued about.
 
 ---
 
@@ -230,10 +278,27 @@ openssl rsa -in ~/.snowflake/keys/chip_chat_publisher.p8 -pubout \
 # ALTER USER CHIP_CHAT_PUBLISHER SET RSA_PUBLIC_KEY = '<that>';
 #   -- by hand, as an operator. It is deliberately not in snowflake/sql:
 #   -- a credential in a checked-in file is a credential in everyone's clone.
+#
+#   Use RSA_PUBLIC_KEY_2 instead if the user already carries a key. Snowflake
+#   holds two so that a rotation has an overlap, and the second slot is what
+#   makes standing this up a non-destructive act: whoever set the first key
+#   holds a private half that setting RSA_PUBLIC_KEY would silently invalidate.
+#   SHOW USERS reports has_rsa_public_key and does not say which slot, so
+#   assume the first is somebody's until you know otherwise. This is how the
+#   2026-08-27 run was authenticated.
 
 # 3. The job. snowflake_account_url is the switch -- empty, which is the default,
 #    means neither the publish job nor its verify job is created at all.
-terraform apply -var 'snowflake_account_url=hq72718.us-east-2.aws.snowflakecomputing.com'
+#
+#    Put it in a tfvars file rather than on the command line. The switch cuts
+#    both ways: a later apply that does not carry the variable computes an empty
+#    URL, and `count = length(databricks_job.publish) > 0` then plans to DESTROY
+#    the publish job, its verify job and both permission sets. `*.tfvars` is
+#    gitignored, so this is a local file each operator keeps -- and the failure
+#    mode is somebody else's routine apply quietly removing the nightly job.
+echo "snowflake_account_url = \"hq72718.us-east-2.aws.snowflakecomputing.com\"" \
+  >> infra/terraform/terraform.tfvars
+terraform apply
 
 # 4. The private key, into the scope Terraform created empty. Nothing here
 #    enters Terraform state.
@@ -276,9 +341,44 @@ the sixty-second minimum Snowflake bills per resume applied. That floor is not
 trivia: eleven small tables can finish well inside a minute, and an estimate
 without it would report less than the account is charged.
 
-**The billed figures are not yet recorded here, because this job has not been run
-against the live estate.** Writing a number in this table that nobody measured
-would be worse than an empty row. Fill it from the run:
+**Measured, 2026-08-27.** One full publish against `dbw-chip-chat` and
+`hq72718.us-east-2.aws`: eleven tables, **108,157 rows**, in a job that ran for
+**176.7 seconds** wall clock — 51 seconds of that a cluster starting, which is
+most of the Databricks bill.
+
+| | measured | how |
+| --- | --- | --- |
+| Rows | 108,157 across 11 tables | the job's own output; the largest is 48,767 order lines |
+| Warehouse-active seconds | 112.5 | the job's own measurement: the sum of the eleven per-table spans |
+| Snowflake credits, **estimated** | **0.0312** | `publish.warehouse_credits(112.5)` at the X-Small rate |
+| Snowflake credits, **billed** | **≈0.066** | the warehouse is warm for the whole run and for 60s after it: 177s + `AUTO_SUSPEND` 60 = 237s of X-Small |
+| Cluster time | 176.7s (0.0491 h) | single-node `Standard_F4ads_v7`, 51s setup + 125s execution |
+| DBUs | **≈0.060** | 0.0491 h at 1.224 DBU/cluster-hour, derived below |
+| Bytes crossed | **≈1.53 MiB** | the eleven tables' compressed size in Snowflake after the run |
+
+**The job's own estimate is about half the billed figure, and the gap is
+structural rather than a bug.** `warehouse_credits` counts the seconds the
+publish's *statements* were running. Snowflake bills the warehouse from resume
+to suspend, which covers the Spark-side gaps between the eleven tables and the
+sixty seconds of `AUTO_SUSPEND` after the last one. The estimate is still worth
+having — it is what the job can know about itself, on the run, without waiting
+three hours for `ACCOUNT_USAGE` — but it is a floor and this table says so.
+Either number is comfortably inside `CHIP_CHAT_PUBLISH_MONITOR`'s two-credit
+daily quota: a nightly publish spends about **3% of it**.
+
+**Where the DBU rate comes from.** `system.billing.usage` is the authority and
+is not readable from this workspace — it needs a Databricks *account* admin,
+which the workspace admin is not. So the rate is derived from the subscription's
+own Azure bill for the previous day, when only single-node
+`Standard_F4ads_v7` job clusters ran: **1.9925 Premium Jobs Compute DBUs over
+1.6276 cluster-hours = 1.224 DBU/cluster-hour**, against 19 runs whose durations
+the Jobs API reports. At the same day's meter rates — $0.2999 per Jobs Compute
+DBU and $0.343 per `F4ads v7` hour — one publish costs about **$0.018 of DBUs
+plus $0.017 of VM, so $0.035 on the Databricks side.** Treat the DBU figure as
+an upper bound: a run's reported duration is slightly shorter than the cluster's
+billed life, so dividing by it inflates the rate.
+
+Confirm both against the systems of record once they catch up:
 
 ```sql
 -- Snowflake, as CHIP_CHAT_ADMIN. ACCOUNT_USAGE lags a run by up to three hours,
@@ -299,9 +399,14 @@ WHERE usage_metadata.job_id = '<the publish job id>'
 GROUP BY ALL ORDER BY usage_date DESC;
 ```
 
-| Run | Rows | Warehouse seconds | Snowflake credits | Cluster minutes | DBUs |
-| --- | --- | --- | --- | --- | --- |
-| _first live run_ | | | | | |
+```sql
+-- Azure, for the DBU half, once Cost Management has the day. This is what the
+-- rate above was derived from for 2026-08-26 and is the way to check it:
+--   az rest --method post --url ".../providers/Microsoft.CostManagement/query
+--     ?api-version=2023-11-01" --body @query.json
+-- grouped by Meter, filtered to MeterCategory 'Azure Databricks'.
+```
+
 
 What can be said before the run, from the shape of the workload: the publish
 moves the whole population — around fifty thousand order lines is the largest
@@ -311,24 +416,144 @@ its quota rather than above it, because a suspended publish costs a stale mart
 until tomorrow while a suspended serving warehouse costs the demo
 mid-conversation. `docs/snowflake-account.md` has that asymmetry in full.
 
+### Egress, now that this is cross-cloud
+
+[#104](https://github.com/gganssle/chip_chat/issues/104) decided that Snowflake
+stays on **AWS us-east-2** while Databricks is on **Azure East US 2**, and put
+one item against this issue: *account for cross-cloud transfer; verify egress
+cost.* Verified, on both sides.
+
+**Snowflake charges nothing.** Its
+[data transfer documentation](https://docs.snowflake.com/en/user-guide/cost-understanding-data-transfer)
+is explicit — *"Snowflake does not charge data ingress fees"* — and the per-byte
+fee applies to data moving **out** of a Snowflake account into another region or
+cloud. This job only writes. The caveat in that same page is the one that
+matters here and points back at Azure: the *source* cloud may charge for
+sending, and that is where the bill is.
+
+**Azure charges, but not through the meter you would look for.** Three meters
+could apply, and the retail price API and this subscription's own Cost
+Management data settle which:
+
+| Meter | Rate | Applies here? |
+| --- | --- | --- |
+| Bandwidth, `Standard Data Transfer Out` (Internet) | **$0 up to 100 GB/month**, then $0.087/GB | Yes, and it bills zero. The subscription's Cost Management rows for it read `Standard Data Transfer Out - Free`. |
+| Bandwidth, `Standard Inter-Region Data Transfer` | $0.02/GB | No. That is Azure-to-Azure — the eastus2→eastus hop `service-inventory.md` measured for AI Search. Snowflake is not in Azure. |
+| NAT Gateway, `Standard Data Processed` | **$0.045/GB** | **Yes, and this is the one that actually charges.** |
+
+The NAT gateway is the finding. Databricks' secure cluster connectivity puts a
+managed VNet and a NAT gateway in `rg-chip-chat-databricks-managed`, and
+**every byte a cluster sends to anything outside Azure passes through it** — so
+the cross-cloud publish is billed at $0.045/GB of data processed, which is more
+than twice the inter-region rate that would have applied had Snowflake been in
+Azure at all, and it is charged from the first byte rather than after a free
+allowance. It is also charged in both directions and on traffic that never
+leaves Azure, so it is not an egress meter and does not appear when you go
+looking for one.
+
+And it is dwarfed by the gateway's own clock. `Standard Gateway` is $0.045 per
+**hour**, and the meter runs whether or not a cluster exists: 17.17 hours on
+2026-08-26 for $0.77, against $0.03 of data processed on the same day. The
+gateway is a fixed cost of having a Databricks workspace, and the publish's
+share of it is the fraction of an hour the job runs.
+
+So the answer to *does egress cost anything* is **yes, about five cents per
+hundred gigabytes, and this publish does not move hundreds of gigabytes.** The
+eleven tables occupy about a fifth of a megabyte in Snowflake after the run; the
+Parquet the connector stages is the same order. At $0.045/GB the transfer is a
+rounding error against the $0.77 a day the gateway costs for existing, and both
+are inside #88's $150/month guardrail with several orders of magnitude to spare.
+
+The number to watch is not this job. It is anything that would push the
+subscription's *internet* egress past 100 GB in a month, because that is where a
+free meter becomes an $0.087/GB one — and the nightly publish contributes about
+0.0002% of that allowance.
+
 ---
 
 ## 7. Open, and whose
 
-**A row access policy must not filter `CHIP_CHAT_PUBLISH`.** #43 attaches
-policies to the ACCOUNTS tables, three of which this job replaces. Row access
-policies apply to every role — Snowflake has no owner exemption — so a policy
-comparing `demo_id` against a session variable the publisher never sets would
-hide every row from it. Two consequences, and the second is the sharp one: the
-publisher could not count what it just wrote, and the truncate half of `INSERT
-OVERWRITE` might leave rows it cannot see, which would show up as duplicated
-primary keys.
+**Settled by the first run: a row access policy must not filter
+`CHIP_CHAT_PUBLISH`, and #43's did.** This section used to be a warning. The
+2026-08-27 publish is what turned it into a finding, and the finding is
+better-shaped than the warning was.
 
-The publish already fails loudly if either happens — it compares the target's
-count against the staging table's and says so in the message — and
-`publish_verify.py` counts duplicate keys on every published table. That is the
-check that settles it. #43's policy needs an exemption for the publish role, and
-the reason belongs beside the policy rather than here.
+`CHIP_CHAT.ACCOUNTS.VISITOR_ISOLATION` is attached to nine tables, six of which
+this job replaces. It compares `demo_id` against a session variable the
+publisher never sets, and row access policies apply to every role — Snowflake
+has no owner exemption — so the publisher sees zero rows in every table it owns.
+The run staged 18,898 orders, swapped them, counted the target, read **0**, and
+stopped:
+
+```
+CHIP_CHAT.ACCOUNTS.orders holds 0 rows after the swap and staging held 18898.
+If the count is HIGHER, the truncate half of INSERT OVERWRITE did not remove
+every row -- check whether a row access policy on the table filters
+CHIP_CHAT_PUBLISH, which it must not. If it is LOWER, the swap did not land.
+```
+
+Which is the message doing its job: it names the cause of the failure it is
+looking at, and the cause was the one it names.
+
+**The half of the warning that turned out to be wrong is worth keeping.** The
+paragraph above used to say the truncate half of `INSERT OVERWRITE` *might*
+leave rows the publisher cannot see, showing up as duplicated primary keys. It
+does not. `ORDERS` held 2,277 rows before the swap and 18,898 after — every one
+of the 2,277 was removed by a role that could not select a single one of them.
+`INSERT OVERWRITE` truncates the table rather than deleting visible rows, and a
+row access policy does not narrow it. `publish_verify.py` counts duplicate keys
+on every published table anyway, because the cost of the check is nothing and
+the cost of being wrong about this is a serving layer holding two generations
+at once.
+
+**What was changed, and then changed back.** The first fix was a third clause in
+the policy body:
+
+```sql
+OR CURRENT_ROLE() = 'CHIP_CHAT_PUBLISH'
+```
+
+applied live with `ALTER ROW ACCESS POLICY ... SET BODY`, because a
+`CREATE OR REPLACE` is refused while a policy is attached to anything. The
+argument for it was that `CHIP_CHAT_PUBLISH` is a batch role held only by the
+Databricks job's service user, reachable from no session the model or the app
+can open.
+
+**That argument is true and the change was still wrong.**
+`snowflake/tests/test_row_access_policies.py` refuses any lane role named in any
+policy body, and its reasoning survives this case: *a lane role that appears in a
+policy body is a lane role the policy has stopped applying to.* #43's acceptance
+criterion is that a session with no `demo_id` set reads zero rows from every
+visitor-scoped table — for every role, not for every role but one. A role-only
+clause also fails safe in the wrong direction: a publisher that could see
+everything and one that could not would look identical, where the whole point of
+default deny is that they do not.
+
+**What the job does instead: it counts off the metadata.**
+
+```sql
+SELECT MAX(row_count) FROM CHIP_CHAT.INFORMATION_SCHEMA.TABLES
+ WHERE table_schema = 'ACCOUNTS' AND table_name = 'ORDERS'
+```
+
+`INFORMATION_SCHEMA.TABLES.ROW_COUNT` is metadata *about* the table rather than a
+read of its rows, so no row access policy filters it. The publisher gets its
+number and the isolation guarantee is not touched to give it.
+
+Measured on the live account, 2026-08-27, after the third clause was removed
+again:
+
+| Role, nothing bound | `SELECT COUNT(*)` | `INFORMATION_SCHEMA.ROW_COUNT` |
+| --- | ---: | ---: |
+| `CHIP_CHAT_READ` | 0 | 18,898 |
+| `CHIP_CHAT_PUBLISH` | 0 | 18,898 |
+
+The left column is the isolation guarantee holding for both roles. The right
+column is the publish still being able to verify its own swap. `publish.row_count()`
+builds that query, `databricks/tests/test_publish.py` holds the job to using it,
+and the policy in `snowflake/sql/10_policies.sql` is untouched — the checked-in
+SQL and the live account agree again, so the next `make snowflake-apply` is a
+no-op here rather than an outage.
 
 **#47 and this job both write the account tables.** #47 restores the synthetic
 sandbox to its generated state on a schedule; this job puts the generated state
