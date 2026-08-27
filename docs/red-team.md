@@ -14,6 +14,16 @@ here. This file is the *campaign*: what was pointed at the deployed application,
 what came back, and — the half that takes longer to write and is worth more —
 which of the questions could not be asked at all.
 
+## Read this first if you read nothing else
+
+One finding is operational rather than adversarial and it should be fixed before
+anybody is shown the URL: **the deployed app serves exactly one chat turn at a
+time, and a second concurrent visitor gets a dropped connection rather than the
+friendly stop state.** `POST /api/chat` is `async def` and runs the turn
+synchronously on the event loop. Details, measurements and the one-word fix are
+under *The finding that is not about the suite at all*, below. It is not a launch
+gate. It is the thing most likely to embarrass a live demo.
+
 ## The one sentence that matters
 
 **Neither launch gate can be measured against the deployed public app, and the
@@ -158,6 +168,50 @@ Two limits, both stated rather than worked around:
    address, at all.** Running it hot needs either several source addresses or the
    limit raised for the window of the run, and both are operational decisions
    rather than harness ones.
+
+### The finding that is not about the suite at all
+
+Attacking the deployment turned up a defect in it, and it is the most
+operationally serious thing in this document.
+
+**`POST /api/chat` blocks the event loop.** The route is declared `async def`
+(`api/src/chip_chat/api/app.py:525`) and calls `_run_turn` **synchronously**
+(`app.py:537`), and `_run_turn` makes a blocking model call that takes tens of
+seconds. On one replica with one uvicorn worker — which is what
+`web_max_replicas = 1` and `api/README.md`'s single-worker rule mean — the loop
+is held for the entire turn. The deployment therefore serves **exactly one chat
+at a time**, and every other request queues behind it.
+
+Three consequences, measured rather than inferred:
+
+- **`/healthz` queues too.** It answered in 44 seconds while one turn was in
+  flight, and in 13 seconds while another was. The liveness probe is *supposed*
+  to be outside the cap and it is — but being outside the cap does not help when
+  the loop that would answer it is blocked. Container Apps restarts an instance
+  whose probe fails, and a restart clears the in-memory ledger, so a busy
+  afternoon is a restart loop that also resets the daily spend counter. That is
+  the same failure mode the spend cap's own tests were written to prevent,
+  arriving through a door nobody was watching.
+- **A second concurrent visitor gets a dropped connection, not a friendly
+  message.** A request issued while a turn was in flight was cut at exactly 60.2
+  seconds with no HTTP status at all. The stop state is carefully designed to be
+  friendly; this path bypasses it entirely and the visitor sees the browser's own
+  error.
+- **The suite returned 503s** while three clients were pointed at the URL, which
+  is the ingress shedding rather than the app refusing. That is what a second
+  visitor arriving during a demo looks like.
+
+**The suggested change is one word.** Make the route `def` instead of `async def`
+and FastAPI runs it in a threadpool, or keep it `async` and `await
+run_in_threadpool(_run_turn, ...)`. Either frees the loop. This is a change in
+`api/src/chip_chat/api/app.py`, which the red team does not own, so it is
+reported rather than made — but it should be made before anybody is shown this
+URL, because *two people opening the demo at once* is not an edge case.
+
+Note the second-order effect on the spend cap once it is fixed:
+`BudgetLedger` is already `threading.Lock`-guarded, so it is safe under a
+threadpool. Nothing else in the request path obviously is not, but that is worth
+one read rather than an assumption.
 
 `--pool-slots` exists because omitting it is a *claim*: `soak.Pooled` treats a
 target that declares no pool as one that does not pool, which is true of the
