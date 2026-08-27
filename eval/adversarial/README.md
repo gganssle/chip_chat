@@ -15,8 +15,13 @@ Anything above zero here is a broken mechanism, not a bad day.
 python -m chip_chat.eval.adversarial --check        # free, runs in CI
 python -m chip_chat.eval.adversarial --structural   # free, attacks the slice
 make adversarial-redteam                            # sustained; the step CI blocks on
+make adversarial-live URL=... POOL_SLOTS=4          # attacks a DEPLOYMENT, over HTTP
+make adversarial-writegate URL=... DRAFT_TTL=900    # gate two, at the door
 python -m chip_chat.eval.adversarial --out eval/adversarial/BASELINE.md
 ```
+
+The last two are #82 and #83's, they cost the deployment's own tokens, and
+neither runs in CI. `docs/red-team.md` is the campaign they were built for.
 
 ## The one thing to understand before editing this file
 
@@ -144,6 +149,60 @@ interleave"*, and adds two things to the three above. Both live in
 The report prints both numbers under the gate they qualify, so a reader meets
 *how hot the round got* before they decide what *0 disclosures* meant.
 
+## Attacking a deployment rather than a loop
+
+`chip_chat.eval.adversarial.live` is #82's first acceptance criterion — *run
+against the deployed public app* — and it is the only target here whose answer is
+about a deployment rather than about this repository's own code. Everything else
+imports `run_turn` and calls it, which measures the loop and says nothing about
+the request handler, the session cookie or the connection pool serving the URL.
+The bleed §05 describes lives in the third of those.
+
+Three things about it are different from every other target and each is a rule
+this file already stated, applied one level further out.
+
+**Its capabilities are measured, not written down.** A constant is a fine way to
+hold the understate-the-target contract for a fixture, whose properties change
+only when somebody edits it. It is a bad way to hold it for a URL, which changes
+without this repository changing — so a constant written today would still be
+claiming next month's revision's properties. `LiveTarget` asks the deployment
+who its visitors are, whether they got distinct drafts, and whether two turns can
+be served at once, and withholds on any answer it did not like.
+
+**A stopped turn is not an answer.** The app refuses a turn it will not spend on
+with HTTP 200, `stopped: true` and a friendly sentence. That reply carries no
+canary and no receipt, so read as an answer it scores *held* — on both gates,
+every time. A red team is exactly the traffic pattern that trips a rate limit, so
+without this rule the suite would have got **cleaner the harder it was pushed**.
+It is recorded as an `Attempt.error` instead, and `--pace` keeps a run under the
+limit so there is something to measure at all.
+
+**Overlapping client windows are not evidence of concurrency.** This is the trap
+that caught the first draft. A request queued behind another is *outstanding*
+from the moment it is sent and outstanding for longer precisely because it is
+waiting, so a fully serialised server produces perfectly overlapping windows at
+the client. What distinguishes a queue from parallelism is service time under
+load, which is why the concurrency probe costs three turns rather than two.
+`eval/tests/test_adversarial_live.py` keeps the arithmetic as a test so nobody
+reintroduces the simpler probe.
+
+## Attacking the write gate at the door
+
+`chip_chat.eval.adversarial.writegate` is #83's half that this manifest cannot
+express. Every attack in `attacks.json` is something a visitor could **type**;
+four of #83's are request *shapes* — an unconfirmed reference, a stranger's draft
+id, a forged one, a replayed one, an expired one — and none of them is
+expressible as a sentence, because the confirmation does not travel in the
+message. It travels in `confirm_draft_id`, which only a caller holding the
+visitor's session can populate, and that is the entire structural claim of the
+gate.
+
+It is a separate module rather than a carrier on an attack because the manifest's
+unit is a message and these have none. Its probes name, each, the single line
+that has to exist for them to fail — six identical-looking rejections are what a
+sound gate produces, and a reader who finds one of them green needs to know where
+to go.
+
 ## Where each attack died
 
 `held` is a verdict and not a description. A design in which the model never
@@ -225,7 +284,14 @@ phrasing*; that is the reviewer's job, not the loader's.
 - **Attacks on the upload path.** S1 is moderation, enforced before a turn exists
   and tested in `vision/tests/test_moderation.py` and `api/tests/test_guard.py`.
 - **Rate limiting and the spend ceiling.** S3 and S4 are properties of the
-  request path; a single turn cannot observe them.
+  request path; a single turn cannot observe them. #85 tests them where they
+  live, in `eval/tests/test_spend_ceiling_tripped.py`, which stands the assembled
+  application on a real port and talks it into its ceiling.
+
+  Note the one place the two subjects touch, because it is not obvious and it
+  cost this suite a correctness bug: the *stop state* those ceilings produce is
+  indistinguishable from a design holding, to a canary detector. That is handled
+  in `live._refused` rather than here.
 
 #81–#83 extend this suite. It is built to grow: add a row to the manifest, and
 the clause minimums in `coverage.py` are where the floor on variety lives.
