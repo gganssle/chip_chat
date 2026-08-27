@@ -818,10 +818,31 @@ def test_an_empty_credential_fails_here_rather_than_inside_the_driver() -> None:
             publish.pem_body(empty)
 
 
-def test_the_notebook_normalises_the_key_it_reads() -> None:
-    """And reads it from the secret scope rather than from anywhere else."""
-    source = code(NOTEBOOK.read_text())
-    # Whitespace-insensitive: `ruff format` wraps this call across three lines.
-    flat = re.sub(r"\s+", "", source)
-    assert "publish.pem_body(dbutils.secrets.get(" in flat
-    assert "publish.PRIVATE_KEY_SECRET" in source
+def test_both_notebooks_normalise_the_key_they_read() -> None:
+    """And read it from the secret scope rather than from anywhere else.
+
+    Both, because they open two connections to one account with one credential
+    and the verify job would have failed exactly as the publish did.
+    """
+    for notebook in (NOTEBOOK, VERIFY):
+        source = code(notebook.read_text())
+        # Whitespace-insensitive: `ruff format` wraps the call across lines.
+        flat = re.sub(r"\s+", "", source)
+        assert "publish.pem_body(dbutils.secrets.get(" in flat, notebook.name
+        assert "publish.PRIVATE_KEY_SECRET" in source, notebook.name
+
+
+def test_the_verify_job_reads_a_count_as_an_int() -> None:
+    """The same Decimal that ended a publish in which everything had swapped.
+
+    Snowflake's `COUNT(*)` is a `NUMBER(18,0)`, the connector maps it to
+    `Decimal`, and `Decimal` compares correctly against an int and then refuses
+    to be serialised. Both notebooks end by writing their verdict as JSON.
+    """
+    source = code(VERIFY.read_text())
+    assert "def count(query):" in source
+    assert "return int(scalar(query))" in source
+    for line in source.splitlines():
+        if "SELECT COUNT(*)" in line:
+            assert "count(" in line or "duplicates = count(" in source, line
+    assert 'scalar(f"SELECT COUNT(*)' not in source
