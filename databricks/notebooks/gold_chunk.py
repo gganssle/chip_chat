@@ -175,14 +175,55 @@ def vocabulary_for(kind):
     return {row["allergen_code"]: row["name"] for row in rows}
 
 
+def lib():
+    """Return the ``gold_chunks`` module, importable in whichever process asks.
+
+    ⚠️ **A UDF body may not close over an imported module.** The `sys.path`
+    entry added at the top of this notebook belongs to the *driver*. A Python
+    UDF is cloudpickled and unpickled inside a Python worker — a separate
+    process, forked from a daemon the cluster started before this notebook ran
+    — and cloudpickle serializes a module global, or a function reached through
+    one, **by name**: what crosses is a bare `__import__("gold_chunks")` the
+    worker cannot satisfy. The failure is `ModuleNotFoundError: No module named
+    'gold_chunks'` inside a `SerializationError`, at the first row rather than
+    at declaration, so the graph validates and the flow dies. Observed on
+    `dbw-chip-chat`, 2026-08-27 (gh-35), on `corpus_chunks`.
+
+    This is `silver_conform.py`'s `lib()`, one layer up and for the same
+    reason. That notebook records the same failure on its three corpus flows a
+    day earlier; the note there did not travel to this file when the chunker
+    was written, and the pipeline had never been run to find out.
+
+    Calling this instead keeps the module out of the closure: `LIB_PATH` is a
+    string and is pickled by value, and a function defined in a notebook is
+    pickled by value too, so what reaches the worker is the path and the import
+    rather than a name it has to resolve.
+
+    Returns:
+        The ``gold_chunks`` declarations module.
+    """
+    import sys
+
+    if LIB_PATH not in sys.path:
+        sys.path.insert(0, LIB_PATH)
+    import gold_chunks
+
+    return gold_chunks
+
+
 def renderer_for(kind):
     """Return a UDF wrapping the `gold_chunks` function that renders one kind."""
-    render = getattr(gold_chunks, gold_chunks.source(kind).renderer)
+    # The renderer travels as its *name* rather than as the function, for the
+    # reason `lib()` gives: a function object reached through a module global
+    # is pickled by that name and unpickled by importing it again.
+    renderer = gold_chunks.source(kind).renderer
     columns = gold_chunks.source(kind).columns
     vocabulary = vocabulary_for(kind)
 
     @F.udf(returnType=_CHUNK)
     def _render(*values):
+        gold_chunks = lib()
+        render = getattr(gold_chunks, renderer)
         source_row = dict(zip(columns, values, strict=True))
         chunk = (
             render(source_row) if vocabulary is None else render(source_row, vocabulary)
