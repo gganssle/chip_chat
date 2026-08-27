@@ -1,11 +1,15 @@
 [project]
 name = "chip-chat-search"
 version = "0.0.0"
-description = "The retrieval index: chunk schema, integrated vectorization, alias-swap rebuilds."
+description = "The knowledge lane: alias-swap index rebuilds, and hybrid retrieval with citations."
 requires-python = ">=3.13"
 dependencies = [
     "azure-identity>=1.19",
     "chip-chat-harvest",
+    # The knowledge lane emits `retriever.search`, so #49 makes this package a
+    # consumer of the span schema. One direction only: `otel/` imports nothing
+    # here, and the import-linter contract in the root pyproject enforces it.
+    "chip-chat-otel",
     "httpx>=0.28",
 ]
 
@@ -18,3 +22,4 @@ packages = ["src/chip_chat"]
 
 [tool.uv.sources]
 chip-chat-harvest = { workspace = true }
+chip-chat-otel = { workspace = true }

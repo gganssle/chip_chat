@@ -1,0 +1,147 @@
+"""The knowledge lane: one retrieval, one span, and a lane that declines alone.
+
+RFC-001 §09 puts retrieval inside the tool call that asked for it::
+
+    tool.search_menu_knowledge
+    `- retriever.search        documents + scores
+
+so this module opens the child and nothing else. The tool span belongs to the
+agent's tool layer, which is where the arguments the model produced are recorded
+— the same division :mod:`chip_chat.vision.lane` draws, and for the same reason:
+a lane that opened its own tool span would produce two tool calls for one turn
+and split the trace at exactly the point somebody is trying to read it.
+
+**Scores are on the span because retrieval debugging without them is guesswork**
+— #49's words. Every document carries its fusion score, its reranker score when
+there was one, its citation, and its lexical overlap, so a trace answers *why
+did it return that* rather than only *what did it return*.
+
+**A declining lane is not a failing turn.** RFC-001 §10 gives this lane a blast
+radius of one row — *AI Search unavailable → the knowledge lane declines and
+says why; other lanes unaffected* — and that is a property of this method: it
+catches :class:`~chip_chat.search.errors.SearchError`, marks the span failed so
+the outage is visible rather than looking like an empty corpus, and returns a
+:class:`~chip_chat.search.retrieve.Retrieval` that says it declined. Nothing
+propagates. A visitor asking about their points balance in the next breath is
+served by a lane that never heard about it.
+
+Note what is *not* on that path. A spent semantic allowance is not an outage and
+must never reach it: it degrades to hybrid-without-reranking inside
+:class:`~chip_chat.search.retrieve.Retriever` and answers. Declining because a
+counter rolled over would be declining for a reason no visitor can see and
+nobody can fix before the first of the month.
+"""
+
+from chip_chat.otel import Document, retriever_search
+from chip_chat.search.errors import SearchError
+from chip_chat.search.query import Constraints
+from chip_chat.search.retrieve import Confidence, Retrieval, Retriever
+
+__all__ = ["KnowledgeLane"]
+
+DECLINED = (
+    "The published-menu search service is not answering, so I cannot look "
+    "anything up in the restaurant's published pages right now."
+)
+"""What the lane says when the service is down. A sentence, not a stack trace:
+the agent reads this and tells the visitor which lane is out."""
+
+
+class KnowledgeLane:
+    """Retrieval as the tool layer sees it: one call, one span, never raising."""
+
+    __slots__ = ("_retriever",)
+
+    def __init__(self, retriever: Retriever) -> None:
+        """Initialise the lane.
+
+        Args:
+            retriever: The retriever. Built once per process, because the
+                connection pool inside it is what keeps a query at 11 ms rather
+                than 84 — see :class:`~chip_chat.search.retrieve.Retriever`.
+        """
+        self._retriever = retriever
+
+    def search(
+        self,
+        text: str,
+        *,
+        top: int | None = None,
+        constraints: Constraints | None = None,
+        rerank: bool = True,
+    ) -> Retrieval:
+        """Search the corpus inside a ``retriever.search`` span.
+
+        Must be called inside a ``tool.<tool_name>`` span; the schema enforces
+        the tree rather than documenting it, so a retrieval outside a tool call
+        raises :class:`~chip_chat.otel.spans.SpanSchemaError` rather than
+        emitting a span nobody's dashboard is watching.
+
+        Args:
+            text: The visitor's words.
+            top: Passages to return.
+            constraints: Constraints to apply instead of reading them out of
+                ``text``.
+            rerank: Whether to ask for semantic reranking.
+
+        Returns:
+            The retrieval, or one whose
+            :attr:`~chip_chat.search.retrieve.Retrieval.declined` says why the
+            lane could not answer. This method does not raise.
+        """
+        with retriever_search(query=text, index=self._retriever.alias) as span:
+            try:
+                result = self._retriever.search(
+                    text, top=top, constraints=constraints, rerank=rerank
+                )
+            except SearchError as error:
+                span.record_failure(error)
+                span.set_metadata(
+                    index=self._retriever.alias,
+                    declined=True,
+                    reason=str(error),
+                    allowance=self._retriever.allowance.report().as_dict(),
+                )
+                return Retrieval(
+                    query=text,
+                    confidence=Confidence.NONE,
+                    notes=(DECLINED,),
+                    declined=str(error),
+                )
+            span.record_documents(
+                [
+                    Document(
+                        id=passage.id,
+                        content=passage.caption or passage.text,
+                        score=passage.ranking_score,
+                        metadata={
+                            "label": passage.label,
+                            "kind": passage.kind,
+                            "source_url": passage.source_url,
+                            "harvested_at": passage.harvested_at,
+                            "score": passage.score,
+                            "reranker_score": passage.reranker_score,
+                            "overlap": round(passage.overlap, 3),
+                        },
+                    )
+                    for passage in result.passages
+                ]
+            )
+            # Supersedes the ``{"index": ...}`` metadata ``retriever_search``
+            # set on entry: one metadata attribute, so it carries the index and
+            # everything an eval slices retrieval by.
+            span.set_metadata(
+                index=self._retriever.alias,
+                confidence=result.confidence.value,
+                reranked=result.reranked,
+                floor=result.floor,
+                uncitable=result.uncitable,
+                constraints=result.constraints.as_dict(),
+                allowance=self._retriever.allowance.report().as_dict(),
+            )
+            if result.confidence is not Confidence.GROUNDED:
+                # Not an error -- the lane worked and the corpus was silent --
+                # but it is the case #49 asks to be legible, and a tag is how a
+                # trace is sliced without parsing metadata JSON.
+                span.add_tags(f"retrieval.{result.confidence.value}")
+            return result

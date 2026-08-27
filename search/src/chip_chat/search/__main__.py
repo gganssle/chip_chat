@@ -1,10 +1,19 @@
-"""``python -m chip_chat.search`` — build, inspect, roll back, verify.
+"""``python -m chip_chat.search`` — build, inspect, roll back, verify, ask.
 
     schema     print the index definition, with no network and no credential
     status     what the service holds and what the alias serves
     build      build a new index from the live corpus release and swap to it
     rollback   point the alias back at the index before this one
     verify     hold the live service to #48.3 and #48.4
+    retrieve   ask the live alias a question and print what came back
+
+``retrieve`` is #49's, and it is the cheapest way to see the whole knowledge
+lane work: it prints the passages, every score that ranked them, the citation on
+each one, and whether the semantic reranker was used or the month's allowance
+had already been spent. ``--no-rerank`` runs the degrade path on purpose, which
+is the only way to exercise it without waiting for a ceiling nobody wants to
+reach. It needs no embedding deployment and no vectorizer key: the *index* holds
+the vectorizer, so a query is text.
 
 ``schema`` is the one worth knowing about. The index definition is a pure
 function of the chunk schema and the embedding deployment, so it can be printed
@@ -21,12 +30,15 @@ from pathlib import Path
 
 from chip_chat.search import build as build_module
 from chip_chat.search import corpus, schema, verify
+from chip_chat.search import query as query_module
+from chip_chat.search.allowance import FileAllowanceStore, SemanticAllowance
 from chip_chat.search.client import (
     SEARCH_SCOPE,
     UPLOAD_BATCH_LIMIT,
     EntraToken,
     HttpSearchService,
     endpoint_from_env,
+    pooled_client,
 )
 from chip_chat.search.embedding import (
     COGNITIVE_SERVICES_SCOPE,
@@ -34,6 +46,7 @@ from chip_chat.search.embedding import (
     HttpEmbedder,
 )
 from chip_chat.search.errors import SearchError
+from chip_chat.search.retrieve import Retriever
 
 VECTORIZER_KEY_VARIABLE = "CHIP_CHAT_SEARCH_VECTORIZER_KEY"
 """A Foundry account key, handed to the *search service* so it can embed queries.
@@ -79,12 +92,20 @@ ones are really in the index when the later one dies.
 """
 
 
+ALLOWANCE_FILE = "semantic-allowance.json"
+"""Where ``retrieve`` keeps its count of the month's semantic requests.
+
+Under the landing root, which is already gitignored and already the directory
+this repository keeps run-scoped state in. A file rather than nothing because
+the whole point of the counter is that it survives the process: a CLI that
+forgot on every invocation would be a counter of one.
+"""
+
+
 def _service(
     arguments: argparse.Namespace, batch: int = UPLOAD_BATCH_LIMIT
 ) -> tuple[HttpSearchService, object]:
-    import httpx
-
-    client = httpx.Client(timeout=60.0)
+    client = pooled_client(60.0)
     endpoint = arguments.endpoint or endpoint_from_env()
     return (
         HttpSearchService(endpoint, client, EntraToken(SEARCH_SCOPE), batch),
@@ -125,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m chip_chat.search")
     parser.add_argument(
         "command",
-        choices=("schema", "status", "build", "rollback", "verify"),
+        choices=("schema", "status", "build", "rollback", "verify", "retrieve"),
     )
     parser.add_argument("--landing", default="landing", help="the landing zone root")
     parser.add_argument("--chunks", default="", help="read chunks from here instead")
@@ -140,7 +161,21 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="build an index the service cannot embed queries for",
     )
+    parser.add_argument("--query", default="", help="the question, for `retrieve`")
+    parser.add_argument(
+        "--top", type=int, default=query_module.TOP, help="passages to return"
+    )
+    parser.add_argument(
+        "--no-rerank",
+        action="store_true",
+        help="run `retrieve` on the degrade path, without the semantic ranker",
+    )
     arguments = parser.parse_args(argv)
+    if arguments.command == "retrieve" and not arguments.query:
+        # Before anything reaches for a credential: "you forgot the question"
+        # and "your environment is not set up" are different problems, and the
+        # second is a much longer afternoon than the first.
+        raise SystemExit("retrieve needs --query")
 
     try:
         if arguments.command == "schema":
@@ -169,6 +204,43 @@ def main(argv: list[str] | None = None) -> int:
             arguments,
             VERIFY_BATCH if arguments.command == "verify" else UPLOAD_BATCH_LIMIT,
         )
+        if arguments.command == "retrieve":
+            retriever = Retriever(
+                service,
+                alias=arguments.alias,
+                top=arguments.top,
+                allowance=SemanticAllowance(
+                    store=FileAllowanceStore(Path(arguments.landing) / ALLOWANCE_FILE)
+                ),
+            )
+            result = retriever.search(arguments.query, rerank=not arguments.no_rerank)
+            print(
+                json.dumps(
+                    {
+                        "query": result.query,
+                        "confidence": result.confidence.value,
+                        "reranked": result.reranked,
+                        "floor": result.floor,
+                        "constraints": result.constraints.as_dict(),
+                        "notes": list(result.notes),
+                        "uncitable": result.uncitable,
+                        "allowance": retriever.allowance.report().as_dict(),
+                        "passages": [
+                            {
+                                **passage.citation(),
+                                "score": passage.score,
+                                "reranker_score": passage.reranker_score,
+                                "overlap": round(passage.overlap, 3),
+                                "caption": passage.caption,
+                                "text": passage.text,
+                            }
+                            for passage in result.passages
+                        ],
+                    },
+                    indent=2,
+                )
+            )
+            return 0
         if arguments.command == "status":
             print(json.dumps(build_module.statistics(service, arguments.alias), indent=2))
             return 0

@@ -372,7 +372,7 @@ SEARCH_ENV = AZURE_SEARCH_ENDPOINT="$(SEARCH_ENDPOINT)" \
 SEARCH_SOURCE = $(if $(CHUNKS),--chunks $(CHUNKS) --run-id $(RUN_ID),--landing $(LANDING))
 
 .PHONY: search-schema search-status search-build search-build-only search-rollback \
-        search-verify
+        search-verify search-retrieve
 
 search-schema: ## Print the index definition. Free, no credential, no network
 	$(UV) run python -m chip_chat.search schema
@@ -394,6 +394,34 @@ search-rollback: ## Point the alias back at the index before this one
 search-verify: ## Hold the live index to #48.3 and #48.4 -- costs a minute
 	$(SEARCH_ENV) $(UV) run python -m chip_chat.search verify \
 		--alias $(ALIAS) $(SEARCH_SOURCE)
+
+# --- The knowledge lane's query ---------------------------------------------
+#
+# Issue #49. `search-retrieve` asks the live alias a question and prints the
+# passages, every score that ranked them, and the citation on each one. It needs
+# `az login` and the data-plane role `search.tf` already grants -- and NO
+# embedding deployment and NO vectorizer key, because the INDEX holds the
+# vectorizer and a query is therefore text. So this target does not reach into
+# Key Vault the way the build targets do; the endpoint is the whole of its
+# environment.
+#
+# IT SPENDS ONE OF THE MONTH'S 1,000 SEMANTIC REQUESTS. On the Free tier that
+# allowance is a hard stop rather than an overage: past it the API returns a
+# billing error, not a charge. The count is kept in
+# `$(LANDING)/semantic-allowance.json` so that repeated runs -- and #50's eval
+# sweeps -- cannot spend the month without noticing.
+#
+# RERANK=0 runs the degrade path deliberately, which costs nothing and is the
+# only way to see hybrid-without-reranking without waiting for the ceiling.
+
+Q ?=
+RERANK ?= 1
+
+search-retrieve: ## Ask the live corpus a question. Q="..." [RERANK=0]
+	@test -n '$(Q)' || { echo 'usage: make search-retrieve Q="how do points work"'; exit 2; }
+	AZURE_SEARCH_ENDPOINT="$(SEARCH_ENDPOINT)" $(UV) run python -m chip_chat.search retrieve \
+		--alias $(ALIAS) --landing $(LANDING) --query '$(Q)' \
+		$(if $(filter 0,$(RERANK)),--no-rerank,)
 # --- The Snowflake serving layer --------------------------------------------
 #
 # Issue #41. Every role, grant and warehouse in `snowflake/sql/`, so the whole

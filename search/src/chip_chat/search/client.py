@@ -33,6 +33,7 @@ from chip_chat.search.errors import SearchError
 from chip_chat.search.schema import API_VERSION
 
 __all__ = [
+    "KEEPALIVE_SECONDS",
     "SEARCH_SCOPE",
     "UPLOAD_BATCH_LIMIT",
     "EntraToken",
@@ -41,6 +42,7 @@ __all__ = [
     "ServiceError",
     "UploadError",
     "endpoint_from_env",
+    "pooled_client",
 ]
 
 SEARCH_SCOPE = "https://search.azure.com/.default"
@@ -201,15 +203,31 @@ class HttpSearchService:
     ) -> Any:
         url = f"{self._endpoint}{path}"
         joiner = "&" if "?" in path else "?"
-        response = self._client.request(
-            method,
-            f"{url}{joiner}api-version={API_VERSION}",
-            json=None if body is None else dict(body),
-            headers={
-                "Authorization": f"Bearer {self._token.token()}",
-                "Content-Type": "application/json",
-            },
-        )
+        try:
+            response = self._client.request(
+                method,
+                f"{url}{joiner}api-version={API_VERSION}",
+                json=None if body is None else dict(body),
+                headers={
+                    "Authorization": f"Bearer {self._token.token()}",
+                    "Content-Type": "application/json",
+                },
+            )
+        except ServiceError:
+            raise
+        except Exception as error:
+            # A refused connection, a DNS failure or a timeout is *the service
+            # being unavailable*, which is a row in RFC-001 section 10 with a
+            # blast radius of one lane -- and a lane can only decline for a
+            # failure it can catch. Without this, the one failure that row is
+            # actually about arrives as an httpx exception, escapes
+            # `KnowledgeLane`, and takes the turn with it. The client is
+            # injected rather than imported, so the transport's exception types
+            # are deliberately not nameable here.
+            raise ServiceError(
+                f"{method} {path} did not reach {self._endpoint}: "
+                f"{type(error).__name__}: {error}"
+            ) from error
         if response.status_code not in expected:
             raise ServiceError(
                 f"{method} {path} returned {response.status_code}: {response.text[:600]}"
@@ -289,6 +307,59 @@ def _batches(
 ) -> Iterator[Sequence[Mapping[str, Any]]]:
     for start in range(0, len(documents), size):
         yield documents[start : start + size]
+
+
+KEEPALIVE_SECONDS = 300.0
+"""How long an idle connection to the search service is kept open.
+
+httpx's own default is five seconds, which is tuned for a service under load and
+is wrong for this one. Measured from ``ca-chip-chat-web`` against
+``srch-chip-chat-4cy39i`` on 2026-08-26:
+
+    hybrid query, warm pooled connection    p50 11.2 ms   (p95 11.8, n=35)
+    the same query, fresh TLS connection    p50 84.3 ms   (n=12)
+    semantic reranking, on top of the above     ~30 ms
+    the cross-region hop, eastus2 to eastus      6.8 ms
+
+A cold connection costs seventy milliseconds -- **seven times** the region
+penalty everyone reaches for first, and more than twice what the reranker costs.
+A public demo with a visitor every few minutes would pay it on nearly every
+turn at a five-second expiry. Five minutes is long enough that a conversation
+never pays it twice and short enough that an idle app is not holding a socket
+open all night.
+"""
+
+
+def pooled_client(timeout: float = 30.0) -> Any:
+    """Return an ``httpx.Client`` whose pool outlives a single request.
+
+    The one call that turns the latency measurement above into a property of the
+    deployment. Build this **once per process** and hand it to one
+    :class:`HttpSearchService`, which one
+    :class:`~chip_chat.search.retrieve.Retriever` then holds: a client per turn
+    is a TLS handshake per turn, and no amount of tuning further down recovers
+    it.
+
+    Args:
+        timeout: Seconds before a request is abandoned. Generous next to an
+            11 ms query, because the number that matters here is when to stop
+            waiting on a service that has stopped answering -- and that is the
+            outage path, which declines rather than retries.
+
+    Returns:
+        An ``httpx.Client``. Imported inside the function so that importing this
+        module -- which ``make ci`` does -- costs nothing.
+    """
+    import httpx
+
+    return httpx.Client(
+        timeout=timeout,
+        limits=httpx.Limits(
+            max_connections=10,
+            max_keepalive_connections=10,
+            keepalive_expiry=KEEPALIVE_SECONDS,
+        ),
+    )
 
 
 def endpoint_from_env(env: Mapping[str, str] | None = None) -> str:
