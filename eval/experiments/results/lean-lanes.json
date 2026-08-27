@@ -26,46 +26,46 @@
     {
       "cases": 12,
       "completion": 0.0,
-      "failed": 0,
+      "failed": 3,
       "grounded_failed": 0,
       "grounded_scored": 0,
       "lane": "knowledge",
       "over_refusals": 0,
       "passed": 0,
       "shapes": {
-        "correct": 0,
-        "extra_tools": 0,
-        "no_tool": 0,
-        "unscored": 12,
-        "wrong_lane": 0,
+        "correct": 1,
+        "extra_tools": 8,
+        "no_tool": 2,
+        "unscored": 0,
+        "wrong_lane": 1,
         "wrong_query": 0
       },
-      "tool_selection": null,
+      "tool_selection": 0.75,
       "uncited": null,
       "under_refusals": 0,
-      "unscored": 12
+      "unscored": 9
     },
     {
       "cases": 7,
-      "completion": 0.0,
-      "failed": 0,
+      "completion": 0.14285714285714285,
+      "failed": 5,
       "grounded_failed": 0,
       "grounded_scored": 0,
       "lane": "account",
       "over_refusals": 0,
-      "passed": 0,
+      "passed": 1,
       "shapes": {
-        "correct": 0,
+        "correct": 1,
         "extra_tools": 0,
         "no_tool": 0,
-        "unscored": 7,
-        "wrong_lane": 0,
+        "unscored": 1,
+        "wrong_lane": 5,
         "wrong_query": 0
       },
-      "tool_selection": null,
+      "tool_selection": 0.16666666666666666,
       "uncited": null,
       "under_refusals": 0,
-      "unscored": 7
+      "unscored": 1
     },
     {
       "cases": 4,
@@ -78,13 +78,13 @@
       "passed": 0,
       "shapes": {
         "correct": 0,
-        "extra_tools": 0,
+        "extra_tools": 1,
         "no_tool": 0,
-        "unscored": 4,
+        "unscored": 3,
         "wrong_lane": 0,
         "wrong_query": 0
       },
-      "tool_selection": null,
+      "tool_selection": 1.0,
       "uncited": null,
       "under_refusals": 0,
       "unscored": 4
@@ -114,7 +114,7 @@
     {
       "cases": 1,
       "completion": 0.0,
-      "failed": 1,
+      "failed": 0,
       "grounded_failed": 0,
       "grounded_scored": 0,
       "lane": "vision",
@@ -124,19 +124,19 @@
         "correct": 0,
         "extra_tools": 0,
         "no_tool": 0,
-        "unscored": 0,
-        "wrong_lane": 1,
+        "unscored": 1,
+        "wrong_lane": 0,
         "wrong_query": 0
       },
-      "tool_selection": 0.0,
+      "tool_selection": null,
       "uncited": null,
       "under_refusals": 0,
-      "unscored": 0
+      "unscored": 1
     },
     {
       "cases": 3,
       "completion": 0.0,
-      "failed": 2,
+      "failed": 1,
       "grounded_failed": 0,
       "grounded_scored": 0,
       "lane": "none",
@@ -146,14 +146,14 @@
         "correct": 0,
         "extra_tools": 0,
         "no_tool": 0,
-        "unscored": 1,
-        "wrong_lane": 2,
+        "unscored": 2,
+        "wrong_lane": 1,
         "wrong_query": 0
       },
       "tool_selection": 0.0,
       "uncited": null,
       "under_refusals": 0,
-      "unscored": 1
+      "unscored": 2
     }
   ],
   "metrics": [
@@ -161,15 +161,15 @@
       "asked": 34,
       "metric": "completion",
       "note": "",
-      "scored": 3,
-      "value": 0.0
+      "scored": 10,
+      "value": 0.029411764705882353
     },
     {
       "asked": 34,
       "metric": "tool_selection",
       "note": "",
-      "scored": 3,
-      "value": 0.0
+      "scored": 20,
+      "value": 0.55
     },
     {
       "asked": 10,
@@ -194,25 +194,25 @@
     }
   ],
   "prompt_version": "v2-lean+a3c60ea9af5f",
-  "ran_at": "2026-08-27T20:35:01+00:00",
+  "ran_at": "2026-08-27T21:28:02+00:00",
   "requirements": [
     {
       "cases": 6,
       "delegated_to": "",
-      "failed": 0,
+      "failed": 2,
       "lane": "knowledge",
       "passed": 0,
       "requirement": "K1",
-      "unscored": 6
+      "unscored": 4
     },
     {
       "cases": 10,
       "delegated_to": "",
-      "failed": 0,
+      "failed": 3,
       "lane": "knowledge",
       "passed": 0,
       "requirement": "K2",
-      "unscored": 10
+      "unscored": 7
     },
     {
       "cases": 4,
@@ -226,11 +226,11 @@
     {
       "cases": 3,
       "delegated_to": "",
-      "failed": 0,
+      "failed": 1,
       "lane": "knowledge",
       "passed": 0,
       "requirement": "K4",
-      "unscored": 3
+      "unscored": 2
     },
     {
       "cases": 2,
@@ -244,20 +244,20 @@
     {
       "cases": 2,
       "delegated_to": "",
-      "failed": 0,
+      "failed": 1,
       "lane": "account",
-      "passed": 0,
+      "passed": 1,
       "requirement": "A1",
-      "unscored": 2
+      "unscored": 0
     },
     {
       "cases": 3,
       "delegated_to": "",
-      "failed": 0,
+      "failed": 3,
       "lane": "account",
       "passed": 0,
       "requirement": "A2",
-      "unscored": 3
+      "unscored": 0
     },
     {
       "cases": 2,
@@ -271,11 +271,11 @@
     {
       "cases": 1,
       "delegated_to": "",
-      "failed": 0,
+      "failed": 1,
       "lane": "account",
       "passed": 0,
       "requirement": "A4",
-      "unscored": 1
+      "unscored": 0
     },
     {
       "cases": 3,
@@ -334,11 +334,11 @@
     {
       "cases": 2,
       "delegated_to": "",
-      "failed": 1,
+      "failed": 0,
       "lane": "action",
       "passed": 0,
       "requirement": "T4",
-      "unscored": 1
+      "unscored": 2
     },
     {
       "cases": 3,
@@ -361,11 +361,11 @@
     {
       "cases": 1,
       "delegated_to": "the labeled photo set, #56",
-      "failed": 1,
+      "failed": 0,
       "lane": "vision",
       "passed": 0,
       "requirement": "V2",
-      "unscored": 0
+      "unscored": 1
     },
     {
       "cases": 0,
@@ -424,11 +424,11 @@
     {
       "cases": 1,
       "delegated_to": "the adversarial suite, #30",
-      "failed": 1,
+      "failed": 0,
       "lane": "none",
       "passed": 0,
       "requirement": "S2",
-      "unscored": 0
+      "unscored": 1
     },
     {
       "cases": 0,

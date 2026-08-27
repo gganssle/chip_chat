@@ -48,7 +48,7 @@
     {
       "cases": 7,
       "completion": 0.0,
-      "failed": 0,
+      "failed": 1,
       "grounded_failed": 0,
       "grounded_scored": 0,
       "lane": "account",
@@ -58,52 +58,8 @@
         "correct": 0,
         "extra_tools": 0,
         "no_tool": 0,
-        "unscored": 7,
-        "wrong_lane": 0,
-        "wrong_query": 0
-      },
-      "tool_selection": null,
-      "uncited": null,
-      "under_refusals": 0,
-      "unscored": 7
-    },
-    {
-      "cases": 4,
-      "completion": 0.0,
-      "failed": 0,
-      "grounded_failed": 0,
-      "grounded_scored": 0,
-      "lane": "personalization",
-      "over_refusals": 0,
-      "passed": 0,
-      "shapes": {
-        "correct": 0,
-        "extra_tools": 0,
-        "no_tool": 0,
-        "unscored": 4,
-        "wrong_lane": 0,
-        "wrong_query": 0
-      },
-      "tool_selection": null,
-      "uncited": null,
-      "under_refusals": 0,
-      "unscored": 4
-    },
-    {
-      "cases": 7,
-      "completion": 0.0,
-      "failed": 1,
-      "grounded_failed": 0,
-      "grounded_scored": 0,
-      "lane": "action",
-      "over_refusals": 0,
-      "passed": 0,
-      "shapes": {
-        "correct": 0,
-        "extra_tools": 0,
-        "no_tool": 1,
         "unscored": 6,
-        "wrong_lane": 0,
+        "wrong_lane": 1,
         "wrong_query": 0
       },
       "tool_selection": 0.0,
@@ -112,9 +68,53 @@
       "unscored": 6
     },
     {
+      "cases": 4,
+      "completion": 0.25,
+      "failed": 1,
+      "grounded_failed": 0,
+      "grounded_scored": 0,
+      "lane": "personalization",
+      "over_refusals": 0,
+      "passed": 1,
+      "shapes": {
+        "correct": 0,
+        "extra_tools": 1,
+        "no_tool": 0,
+        "unscored": 2,
+        "wrong_lane": 1,
+        "wrong_query": 0
+      },
+      "tool_selection": 0.5,
+      "uncited": null,
+      "under_refusals": 0,
+      "unscored": 2
+    },
+    {
+      "cases": 7,
+      "completion": 0.5714285714285714,
+      "failed": 3,
+      "grounded_failed": 0,
+      "grounded_scored": 0,
+      "lane": "action",
+      "over_refusals": 0,
+      "passed": 4,
+      "shapes": {
+        "correct": 2,
+        "extra_tools": 2,
+        "no_tool": 0,
+        "unscored": 0,
+        "wrong_lane": 3,
+        "wrong_query": 0
+      },
+      "tool_selection": 0.5714285714285714,
+      "uncited": null,
+      "under_refusals": 0,
+      "unscored": 0
+    },
+    {
       "cases": 1,
       "completion": 0.0,
-      "failed": 0,
+      "failed": 1,
       "grounded_failed": 0,
       "grounded_scored": 0,
       "lane": "vision",
@@ -124,19 +124,19 @@
         "correct": 0,
         "extra_tools": 0,
         "no_tool": 0,
-        "unscored": 1,
-        "wrong_lane": 0,
+        "unscored": 0,
+        "wrong_lane": 1,
         "wrong_query": 0
       },
-      "tool_selection": null,
+      "tool_selection": 0.0,
       "uncited": null,
       "under_refusals": 0,
-      "unscored": 1
+      "unscored": 0
     },
     {
       "cases": 3,
       "completion": 0.0,
-      "failed": 0,
+      "failed": 2,
       "grounded_failed": 0,
       "grounded_scored": 0,
       "lane": "none",
@@ -146,14 +146,14 @@
         "correct": 0,
         "extra_tools": 0,
         "no_tool": 0,
-        "unscored": 3,
-        "wrong_lane": 0,
+        "unscored": 1,
+        "wrong_lane": 2,
         "wrong_query": 0
       },
-      "tool_selection": null,
+      "tool_selection": 0.0,
       "uncited": null,
       "under_refusals": 0,
-      "unscored": 3
+      "unscored": 1
     }
   ],
   "metrics": [
@@ -161,15 +161,15 @@
       "asked": 34,
       "metric": "completion",
       "note": "",
-      "scored": 1,
-      "value": 0.0
+      "scored": 13,
+      "value": 0.14705882352941177
     },
     {
       "asked": 34,
       "metric": "tool_selection",
       "note": "",
-      "scored": 2,
-      "value": 0.5
+      "scored": 14,
+      "value": 0.42857142857142855
     },
     {
       "asked": 10,
@@ -194,7 +194,7 @@
     }
   ],
   "prompt_version": "v1+1c6f84d1f21f",
-  "ran_at": "2026-08-27T20:08:48+00:00",
+  "ran_at": "2026-08-27T21:04:25+00:00",
   "requirements": [
     {
       "cases": 6,
@@ -262,38 +262,38 @@
     {
       "cases": 2,
       "delegated_to": "the adversarial suite, #30",
-      "failed": 0,
+      "failed": 1,
       "lane": "account",
       "passed": 0,
       "requirement": "A3",
-      "unscored": 2
+      "unscored": 1
     },
     {
       "cases": 1,
       "delegated_to": "",
-      "failed": 0,
+      "failed": 1,
       "lane": "account",
       "passed": 0,
       "requirement": "A4",
-      "unscored": 1
+      "unscored": 0
     },
     {
       "cases": 3,
       "delegated_to": "",
       "failed": 0,
       "lane": "personalization",
-      "passed": 0,
+      "passed": 1,
       "requirement": "P1",
-      "unscored": 3
+      "unscored": 2
     },
     {
       "cases": 1,
       "delegated_to": "",
-      "failed": 0,
+      "failed": 1,
       "lane": "personalization",
       "passed": 0,
       "requirement": "P2",
-      "unscored": 1
+      "unscored": 0
     },
     {
       "cases": 1,
@@ -307,47 +307,47 @@
     {
       "cases": 6,
       "delegated_to": "",
-      "failed": 1,
+      "failed": 3,
       "lane": "action",
-      "passed": 0,
+      "passed": 3,
       "requirement": "T1",
-      "unscored": 5
+      "unscored": 0
     },
     {
       "cases": 8,
       "delegated_to": "",
-      "failed": 1,
+      "failed": 3,
       "lane": "action",
-      "passed": 0,
+      "passed": 5,
       "requirement": "T2",
-      "unscored": 7
+      "unscored": 0
     },
     {
       "cases": 1,
       "delegated_to": "",
       "failed": 0,
       "lane": "action",
-      "passed": 0,
+      "passed": 1,
       "requirement": "T3",
-      "unscored": 1
+      "unscored": 0
     },
     {
       "cases": 2,
       "delegated_to": "",
-      "failed": 0,
+      "failed": 1,
       "lane": "action",
-      "passed": 0,
+      "passed": 1,
       "requirement": "T4",
-      "unscored": 2
+      "unscored": 0
     },
     {
       "cases": 3,
       "delegated_to": "",
       "failed": 0,
       "lane": "action",
-      "passed": 0,
+      "passed": 3,
       "requirement": "T5",
-      "unscored": 3
+      "unscored": 0
     },
     {
       "cases": 0,
@@ -361,11 +361,11 @@
     {
       "cases": 1,
       "delegated_to": "the labeled photo set, #56",
-      "failed": 0,
+      "failed": 1,
       "lane": "vision",
       "passed": 0,
       "requirement": "V2",
-      "unscored": 1
+      "unscored": 0
     },
     {
       "cases": 0,
@@ -424,11 +424,11 @@
     {
       "cases": 1,
       "delegated_to": "the adversarial suite, #30",
-      "failed": 0,
+      "failed": 1,
       "lane": "none",
       "passed": 0,
       "requirement": "S2",
-      "unscored": 1
+      "unscored": 0
     },
     {
       "cases": 0,
