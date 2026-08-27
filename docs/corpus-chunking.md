@@ -383,13 +383,13 @@ by hand are the live twenty, item for item, and the two findings §6 records wer
 already fixed in the renderers that produced these.
 
 What is new is the three kinds §6 did not sample — `POLICY_SECTION`,
-`FAQ_ENTRY` and `DOCUMENT_BLOCK`, 29 of the 51 — and they are the half a hand
-review cannot reach from here: the chunk table is readable by the jobs and
-readonly service principals and by nobody else, which is `databricks_catalog.tf`
-working as designed and is also why the twenty below could not simply be
-selected out of it. The verify job prints them; a person reading the run output
-is the review, and extending §6 over those three kinds is filed rather than
-claimed.
+`FAQ_ENTRY` and `DOCUMENT_BLOCK`, 29 of the 51. The verify job prints three of
+each, deterministically, and §6.2 is those nine read the same way. They are read
+out of the **job's printed output** rather than selected from the table, because
+`chip_chat.gold_harvested.corpus_chunks` is readable by the jobs and readonly
+service principals and by nobody else — `databricks_catalog.tf` working as
+designed, and the reason a hand review here goes through a run rather than a
+query.
 
 The count that matters most is the one that is zero: **no chunk exceeds
 `EMBEDDING_CHARACTER_BUDGET`**. §5 argues that the budget is reported and never
@@ -402,6 +402,62 @@ six kinds present, the columns exactly `gold_chunks.FIELDS` in order, every
 filters and matching nothing, and — the check no per-row constraint can make —
 every extracted table row, every deduplicated prose block and every menu item
 becoming exactly one chunk: 7, 8 and 10 in, 7, 8 and 10 out.
+
+### 6.2 The three kinds §6 never read
+
+Nine chunks, three of each, from the 2026-08-27 run's printed sample. Same
+question: could somebody handed only this text, and told where it came from,
+answer the question it is about?
+
+**`FAQ_ENTRY` — three of three.** The strongest kind in the corpus, and it is
+the shape that does it: the breadcrumb, the question restated, then the answer.
+`Rewards Program > Rewards Program. Do points expire? Points expire after 365
+days of account inactivity …` answers a question a visitor actually asks, in one
+chunk, with the number in it. The two cancellation entries do the same for
+`Ordering > General` and `Delivery > Delivery - General`, and keeping those two
+apart is the reason the breadcrumb is in the text rather than only in `heading`:
+the questions are nearly the same sentence and the answers are different.
+
+**`POLICY_SECTION` — two of three.** `ELIGIBILITY` and the rewards earn rate
+(`Every dollar spent … gets you 10 points closer to your next reward`) are both
+answerable and both carry their document's title in front of the section, which
+is what stops `ELIGIBILITY` reading as an eligibility rule for something
+unnamed.
+
+The third is a finding: `CHIPOTLE REWARDS - TERMS AND CONDITIONS. PLEASE READ
+THESE TERMS AND CONDITIONS CAREFULLY..` is a **published section whose body is
+empty** — a heading the page prints above the terms, which the harvest correctly
+kept and which has no fact in it. It is caveat #11's case in a second kind, and
+the same answer applies: it carries a citation, it will rank below every real
+section for any question about the terms, and a rule that dropped "unhelpful"
+published text is a rule that would eventually drop a real one. The doubled full
+stop is cosmetic and is the renderer adding a sentence-ending period to a
+heading that already ends in one; it is filed rather than fixed here, because
+the fix is a rule about punctuation in `_sentence` and this issue's rule is that
+the wording is the publisher's.
+
+**`DOCUMENT_BLOCK` — one of three, and this is the review's real result.**
+This is the weakest kind and the sample says so plainly.
+
+- `Chipotle Mexican Grill. Order a burrito Order a bowl`, from a store page, is
+  navigation furniture. **No.**
+- The `ALLERGENS & SPECIAL DIET` block is the whole allergens page as one
+  chunk — answerable, but it **contains** the text of three `ALLERGEN_CAVEAT`
+  chunks that already exist, including the cross-contact sentence PRD K3 turns
+  on.
+- The gluten/celiac block is likewise a duplicate of `ALLERGEN_CAVEAT
+  b6303eb9f3eb`, minus the vegan half.
+
+So two of the three either say nothing or say what a purpose-built kind already
+says better. That is not a chunking failure — the block is one deduplicated
+prose block and became exactly one chunk, which is the rule — it is a
+**retrieval** finding, and it belongs to #48: an allergen question can now
+return the caveat and the page that contains it, and the second is longer,
+vaguer and cites the same URL. `DOCUMENT_BLOCK` exists as the catch-all for
+published prose no other kind claims, and on this corpus most of what it catches
+is either furniture or a superset. Filed for #48 to weight or filter; not
+removed here, because the kind is right for a page whose prose no other kind
+reaches, and this corpus is four documents.
 
 ## 7. What the live run has to show
 
@@ -494,11 +550,18 @@ the two fails `make ci`.
 
 ## 10. What this does not do
 
-- **The hand review does not cover three of the six kinds.** §6.1 says which and
-  why. Twenty chunks is what the criterion asks for and twenty is what was read;
-  `POLICY_SECTION`, `FAQ_ENTRY` and `DOCUMENT_BLOCK` are 29 of the 51 chunks
-  the live run produced and none of them was read one by one. They are printed
-  by `gold_chunk_verify`, so the material is there.
+- **It does not decide what retrieval does with a duplicate.** §6.2's finding:
+  a `DOCUMENT_BLOCK` can contain the text of several `ALLERGEN_CAVEAT` chunks,
+  so an allergen question can return both the caveat and the page around it,
+  citing the same URL. Both are correct chunks of correctly identified
+  structures. Which one an answer should quote is [#48](https://github.com/gganssle/chip_chat/issues/48)'s
+  and the retrieval evaluation's, and this layer deliberately does not decide it
+  by dropping one.
+
+- **It does not police punctuation.** §6.2 found `CAREFULLY..` — a heading that
+  already ends in a full stop, given another by `_sentence`. Cosmetic, filed,
+  and not fixed here, because a rule that tidied the publisher's wording is a
+  rule this issue exists to refuse in a smaller form.
 - **No nutrient detail beyond calories.** `silver-conformance.md` §7 leaves this
   open and it stays open. The catalogue lands `calories` and the allergen marks;
   the per-nutrient figures in `parsed/chipotle/nutrition/item_nutrition` are not
