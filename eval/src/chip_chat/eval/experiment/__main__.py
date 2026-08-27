@@ -276,6 +276,7 @@ def _execute(
         judge_name="" if judge is None else judge.name,
         judge_tokens=0 if judge is None else judge.spend.total_tokens,
         only=args.only,
+        pace=args.pace,
         caveat=LIVE_CAVEAT,
     )
     if judge is not None:
@@ -446,6 +447,17 @@ def _parser() -> argparse.ArgumentParser:
         "--only",
         nargs="+",
         help="run only these dataset entry ids",
+    )
+    parser.add_argument(
+        "--pace",
+        type=float,
+        default=0.0,
+        help=(
+            "seconds between rows on a live run. A shared Foundry deployment "
+            "has a per-minute ceiling, and thirty-four turns fired back to back "
+            "will hit it -- every row after that comes back 429 and lands in no "
+            "rate, which is an honest document with a denominator of two."
+        ),
     )
     parser.add_argument(
         "--session",

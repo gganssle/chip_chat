@@ -107,6 +107,7 @@ def run_experiment(
     photo_lane: bool = False,
     prompt_read: bool = True,
     only: Sequence[str] | None = None,
+    pace: float = 0.0,
     caveat: str = "",
     now: datetime | None = None,
 ) -> Experiment:
@@ -135,6 +136,8 @@ def run_experiment(
             :meth:`~chip_chat.eval.experiment.configurations.
             ExperimentConfiguration.inert_axes`.
         only: Entry ids to run, for iterating on one row.
+        pace: Seconds between rows. See
+            :func:`~chip_chat.eval.experiment.turns.record_rows`.
         caveat: What this run's numbers are worth, in prose.
         now: The clock, for a test that wants a fixed timestamp.
 
@@ -145,7 +148,9 @@ def run_experiment(
     deployment = factory(resolved)
     rows = expectations(dataset)
     asked = questions(dataset)
-    recorded = record_rows(golden, [row.entry_id for row in rows], deployment, only=only)
+    recorded = record_rows(
+        golden, [row.entry_id for row in rows], deployment, only=only, pace=pace
+    )
     by_id = {row.entry_id: row for row in recorded}
 
     golden_scores = score_golden(golden, [item.observation for item in recorded])

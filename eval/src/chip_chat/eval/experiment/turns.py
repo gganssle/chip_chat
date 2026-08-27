@@ -35,8 +35,19 @@ field the deployment never filled in.
 readings, for the reason :func:`chip_chat.eval.golden.run._run_one` gives at
 greater length: an outage is not a model being wrong, and a deployment that
 refuses the eleventh row must not cost the other twenty-three.
+
+**And a run can be paced, because a shared deployment has a per-minute limit.**
+Thirty-four turns fired back to back at one Foundry deployment will hit its TPM
+ceiling, and every row that arrives after it does comes back a ``429`` -- which
+this module correctly records as an outage, and which correctly lands in no rate.
+The result is a document whose numbers are honest and whose denominators are two.
+``pace`` puts a pause between rows, which is the same affordance
+``chip_chat.eval.adversarial`` already carries under the same name and for the
+same reason. It is off by default: a free run against the routing oracle should
+not sleep for three minutes to protect a service it never calls.
 """
 
+import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 
@@ -96,6 +107,7 @@ def record_rows(
     deployment: Deployment,
     *,
     only: Sequence[str] | None = None,
+    pace: float = 0.0,
 ) -> tuple[Recorded, ...]:
     """Run each row once and record all three readings of it.
 
@@ -108,11 +120,14 @@ def record_rows(
         entry_ids: The dataset rows to run, in dataset order.
         deployment: What answers them.
         only: Entry ids to run, for iterating on one row. ``None`` runs all.
+        pace: Seconds to wait between rows. Zero fires them back to back, which
+            is right against an oracle and wrong against a shared deployment
+            with a per-minute ceiling; see the module docstring.
 
     Returns:
         One :class:`Recorded` per row run, in dataset order.
     """
-    return tuple(_recorded(golden, entry_ids, deployment, only))
+    return tuple(_recorded(golden, entry_ids, deployment, only, pace))
 
 
 def _recorded(
@@ -120,12 +135,17 @@ def _recorded(
     entry_ids: Sequence[str],
     deployment: Deployment,
     only: Sequence[str] | None,
+    pace: float = 0.0,
 ) -> Iterator[Recorded]:
     wanted = None if only is None else set(only)
     by_id = {case.case_id: case for case in golden}
+    first = True
     for entry_id in entry_ids:
         if wanted is not None and entry_id not in wanted:
             continue
+        if pace and not first:
+            time.sleep(pace)
+        first = False
         case = by_id.get(entry_id.removeprefix(GOLDEN_PREFIX))
         if case is None:
             yield _failed(

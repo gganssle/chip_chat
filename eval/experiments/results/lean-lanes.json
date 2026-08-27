@@ -1,0 +1,455 @@
+{
+  "caveat": "> **The week-one slice registers six of the eleven tools.** A tool that is not registered cannot be routed to, so its rows come back `no_tool` however good the model is, and a span tree cannot tell that apart from a model that chose not to call. Read `eval/trajectory/BASELINE.md` beside this document.",
+  "configuration": {
+    "chat_deployment": "gpt-5-mini",
+    "matcher": {},
+    "name": "lean-lanes",
+    "prompt_directory": "eval/experiments/prompts",
+    "prompt_revision": "v2-lean",
+    "retrieval": {
+      "rerank": true,
+      "top": 5
+    },
+    "vision_deployment": "gpt-4.1-mini"
+  },
+  "dataset": "cilantro-golden-set",
+  "dataset_version": "9ba196eb786c",
+  "experiment": "lean-lanes",
+  "fingerprint": "7f1ab05ad991",
+  "inert_axes": [
+    "retrieval",
+    "matcher"
+  ],
+  "judge": "",
+  "judge_tokens": 0,
+  "lanes": [
+    {
+      "cases": 12,
+      "completion": 0.0,
+      "failed": 0,
+      "grounded_failed": 0,
+      "grounded_scored": 0,
+      "lane": "knowledge",
+      "over_refusals": 0,
+      "passed": 0,
+      "shapes": {
+        "correct": 0,
+        "extra_tools": 0,
+        "no_tool": 0,
+        "unscored": 12,
+        "wrong_lane": 0,
+        "wrong_query": 0
+      },
+      "tool_selection": null,
+      "uncited": null,
+      "under_refusals": 0,
+      "unscored": 12
+    },
+    {
+      "cases": 7,
+      "completion": 0.0,
+      "failed": 0,
+      "grounded_failed": 0,
+      "grounded_scored": 0,
+      "lane": "account",
+      "over_refusals": 0,
+      "passed": 0,
+      "shapes": {
+        "correct": 0,
+        "extra_tools": 0,
+        "no_tool": 0,
+        "unscored": 7,
+        "wrong_lane": 0,
+        "wrong_query": 0
+      },
+      "tool_selection": null,
+      "uncited": null,
+      "under_refusals": 0,
+      "unscored": 7
+    },
+    {
+      "cases": 4,
+      "completion": 0.0,
+      "failed": 0,
+      "grounded_failed": 0,
+      "grounded_scored": 0,
+      "lane": "personalization",
+      "over_refusals": 0,
+      "passed": 0,
+      "shapes": {
+        "correct": 0,
+        "extra_tools": 0,
+        "no_tool": 0,
+        "unscored": 4,
+        "wrong_lane": 0,
+        "wrong_query": 0
+      },
+      "tool_selection": null,
+      "uncited": null,
+      "under_refusals": 0,
+      "unscored": 4
+    },
+    {
+      "cases": 7,
+      "completion": 0.0,
+      "failed": 0,
+      "grounded_failed": 0,
+      "grounded_scored": 0,
+      "lane": "action",
+      "over_refusals": 0,
+      "passed": 0,
+      "shapes": {
+        "correct": 0,
+        "extra_tools": 0,
+        "no_tool": 0,
+        "unscored": 7,
+        "wrong_lane": 0,
+        "wrong_query": 0
+      },
+      "tool_selection": null,
+      "uncited": null,
+      "under_refusals": 0,
+      "unscored": 7
+    },
+    {
+      "cases": 1,
+      "completion": 0.0,
+      "failed": 1,
+      "grounded_failed": 0,
+      "grounded_scored": 0,
+      "lane": "vision",
+      "over_refusals": 0,
+      "passed": 0,
+      "shapes": {
+        "correct": 0,
+        "extra_tools": 0,
+        "no_tool": 0,
+        "unscored": 0,
+        "wrong_lane": 1,
+        "wrong_query": 0
+      },
+      "tool_selection": 0.0,
+      "uncited": null,
+      "under_refusals": 0,
+      "unscored": 0
+    },
+    {
+      "cases": 3,
+      "completion": 0.0,
+      "failed": 2,
+      "grounded_failed": 0,
+      "grounded_scored": 0,
+      "lane": "none",
+      "over_refusals": 0,
+      "passed": 0,
+      "shapes": {
+        "correct": 0,
+        "extra_tools": 0,
+        "no_tool": 0,
+        "unscored": 1,
+        "wrong_lane": 2,
+        "wrong_query": 0
+      },
+      "tool_selection": 0.0,
+      "uncited": null,
+      "under_refusals": 0,
+      "unscored": 1
+    }
+  ],
+  "metrics": [
+    {
+      "asked": 34,
+      "metric": "completion",
+      "note": "",
+      "scored": 3,
+      "value": 0.0
+    },
+    {
+      "asked": 34,
+      "metric": "tool_selection",
+      "note": "",
+      "scored": 3,
+      "value": 0.0
+    },
+    {
+      "asked": 10,
+      "metric": "groundedness",
+      "note": "no judge settled a row",
+      "scored": 0,
+      "value": null
+    },
+    {
+      "asked": 34,
+      "metric": "uncited_claims",
+      "note": "no source reported citations (cc-bap)",
+      "scored": 0,
+      "value": null
+    },
+    {
+      "asked": 0,
+      "metric": "photo_f1",
+      "note": "delegated to eval/photos (#56); one whole-turn case cannot say whether the salsa was right",
+      "scored": 0,
+      "value": null
+    }
+  ],
+  "prompt_version": "v2-lean+a3c60ea9af5f",
+  "ran_at": "2026-08-27T20:35:01+00:00",
+  "requirements": [
+    {
+      "cases": 6,
+      "delegated_to": "",
+      "failed": 0,
+      "lane": "knowledge",
+      "passed": 0,
+      "requirement": "K1",
+      "unscored": 6
+    },
+    {
+      "cases": 10,
+      "delegated_to": "",
+      "failed": 0,
+      "lane": "knowledge",
+      "passed": 0,
+      "requirement": "K2",
+      "unscored": 10
+    },
+    {
+      "cases": 4,
+      "delegated_to": "",
+      "failed": 0,
+      "lane": "knowledge",
+      "passed": 0,
+      "requirement": "K3",
+      "unscored": 4
+    },
+    {
+      "cases": 3,
+      "delegated_to": "",
+      "failed": 0,
+      "lane": "knowledge",
+      "passed": 0,
+      "requirement": "K4",
+      "unscored": 3
+    },
+    {
+      "cases": 2,
+      "delegated_to": "",
+      "failed": 0,
+      "lane": "knowledge",
+      "passed": 0,
+      "requirement": "K5",
+      "unscored": 2
+    },
+    {
+      "cases": 2,
+      "delegated_to": "",
+      "failed": 0,
+      "lane": "account",
+      "passed": 0,
+      "requirement": "A1",
+      "unscored": 2
+    },
+    {
+      "cases": 3,
+      "delegated_to": "",
+      "failed": 0,
+      "lane": "account",
+      "passed": 0,
+      "requirement": "A2",
+      "unscored": 3
+    },
+    {
+      "cases": 2,
+      "delegated_to": "the adversarial suite, #30",
+      "failed": 1,
+      "lane": "account",
+      "passed": 0,
+      "requirement": "A3",
+      "unscored": 1
+    },
+    {
+      "cases": 1,
+      "delegated_to": "",
+      "failed": 0,
+      "lane": "account",
+      "passed": 0,
+      "requirement": "A4",
+      "unscored": 1
+    },
+    {
+      "cases": 3,
+      "delegated_to": "",
+      "failed": 0,
+      "lane": "personalization",
+      "passed": 0,
+      "requirement": "P1",
+      "unscored": 3
+    },
+    {
+      "cases": 1,
+      "delegated_to": "",
+      "failed": 0,
+      "lane": "personalization",
+      "passed": 0,
+      "requirement": "P2",
+      "unscored": 1
+    },
+    {
+      "cases": 1,
+      "delegated_to": "",
+      "failed": 0,
+      "lane": "personalization",
+      "passed": 0,
+      "requirement": "P3",
+      "unscored": 1
+    },
+    {
+      "cases": 6,
+      "delegated_to": "",
+      "failed": 0,
+      "lane": "action",
+      "passed": 0,
+      "requirement": "T1",
+      "unscored": 6
+    },
+    {
+      "cases": 8,
+      "delegated_to": "",
+      "failed": 0,
+      "lane": "action",
+      "passed": 0,
+      "requirement": "T2",
+      "unscored": 8
+    },
+    {
+      "cases": 1,
+      "delegated_to": "",
+      "failed": 0,
+      "lane": "action",
+      "passed": 0,
+      "requirement": "T3",
+      "unscored": 1
+    },
+    {
+      "cases": 2,
+      "delegated_to": "",
+      "failed": 1,
+      "lane": "action",
+      "passed": 0,
+      "requirement": "T4",
+      "unscored": 1
+    },
+    {
+      "cases": 3,
+      "delegated_to": "",
+      "failed": 0,
+      "lane": "action",
+      "passed": 0,
+      "requirement": "T5",
+      "unscored": 3
+    },
+    {
+      "cases": 0,
+      "delegated_to": "api/tests/test_upload_limits.py and vision/tests/test_intake.py",
+      "failed": 0,
+      "lane": "vision",
+      "passed": 0,
+      "requirement": "V1",
+      "unscored": 0
+    },
+    {
+      "cases": 1,
+      "delegated_to": "the labeled photo set, #56",
+      "failed": 1,
+      "lane": "vision",
+      "passed": 0,
+      "requirement": "V2",
+      "unscored": 0
+    },
+    {
+      "cases": 0,
+      "delegated_to": "the labeled photo set, #56",
+      "failed": 0,
+      "lane": "vision",
+      "passed": 0,
+      "requirement": "V3",
+      "unscored": 0
+    },
+    {
+      "cases": 0,
+      "delegated_to": "the labeled photo set, #56",
+      "failed": 0,
+      "lane": "vision",
+      "passed": 0,
+      "requirement": "V4",
+      "unscored": 0
+    },
+    {
+      "cases": 0,
+      "delegated_to": "the labeled photo set, #56",
+      "failed": 0,
+      "lane": "vision",
+      "passed": 0,
+      "requirement": "V5",
+      "unscored": 0
+    },
+    {
+      "cases": 0,
+      "delegated_to": "chip_chat.vision.matcher, and RFC-001 D3",
+      "failed": 0,
+      "lane": "vision",
+      "passed": 0,
+      "requirement": "V6",
+      "unscored": 0
+    },
+    {
+      "cases": 0,
+      "delegated_to": "the labeled photo set, #56, and docs/decisions/multi-meal-photos.md",
+      "failed": 0,
+      "lane": "vision",
+      "passed": 0,
+      "requirement": "V7",
+      "unscored": 0
+    },
+    {
+      "cases": 0,
+      "delegated_to": "api/tests/test_guard.py and vision/tests/test_moderation.py",
+      "failed": 0,
+      "lane": "none",
+      "passed": 0,
+      "requirement": "S1",
+      "unscored": 0
+    },
+    {
+      "cases": 1,
+      "delegated_to": "the adversarial suite, #30",
+      "failed": 1,
+      "lane": "none",
+      "passed": 0,
+      "requirement": "S2",
+      "unscored": 0
+    },
+    {
+      "cases": 0,
+      "delegated_to": "api/tests/test_limits.py and api/tests/test_source_ratelimit.py",
+      "failed": 0,
+      "lane": "none",
+      "passed": 0,
+      "requirement": "S3",
+      "unscored": 0
+    },
+    {
+      "cases": 0,
+      "delegated_to": "api/tests/test_killswitch.py and api/tests/test_spend_gate.py",
+      "failed": 0,
+      "lane": "none",
+      "passed": 0,
+      "requirement": "S4",
+      "unscored": 0
+    }
+  ],
+  "rows": 34,
+  "schema": 1,
+  "source": "week-one slice on gpt-5-mini under prompt v2-lean+a3c60ea9af5f"
+}
