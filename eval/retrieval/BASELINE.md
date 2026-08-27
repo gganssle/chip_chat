@@ -1,7 +1,7 @@
 # Retrieval eval — baseline
 
 - Source: `corpus`
-- Corpus release: `corpus-20260827t060000z-2` (30 chunks)
+- Corpus release: `corpus-20260827t053000z-2` (31 chunks)
 - Reranker floor: `1.5`
 - Questions: 40
 
@@ -28,7 +28,7 @@ These numbers come from a real retrieval service over the corpus release named a
 
 ## Do the labels still name anything
 
-34 of 37 labels resolve against `corpus-20260827t060000z-2`.
+35 of 37 labels resolve against `corpus-20260827t053000z-2`.
 
 These labels name nothing in this corpus. Each is **unscored** — in no numerator and no denominator — rather than counted as a miss: a retriever cannot return a passage the corpus does not hold. If one of these resolved in the previous baseline, that is a chunking regression rather than a gap.
 
@@ -36,7 +36,6 @@ These labels name nothing in this corpus. Each is **unscored** — in no numerat
 |---|---|
 | `ing-barbacoa` | MENU_ITEM primary_filling=Barbacoa |
 | `alg-caveat` | ALLERGEN_CAVEAT contains='allerg' |
-| `rew-points-expire` | FAQ_ENTRY heading=Do points expire? |
 
 ## The demo bar: top-3 recall on the allergen questions
 
@@ -45,8 +44,8 @@ These labels name nothing in this corpus. Each is **unscored** — in no numerat
 | Configuration | recall@3 | hit@3 | MRR | P@1 | scored | unscored |
 |---|---:|---:|---:|---:|---:|---:|
 | keyword only | 100% | 100% | 100% | 100% | 6 | 1 |
-| vector only | 0% | 0% | 0% | 0% | 6 | 1 |
-| hybrid | 67% | 67% | 67% | 67% | 6 | 1 |
+| vector only | 83% | 83% | 83% | 83% | 6 | 1 |
+| hybrid | 100% | 100% | 100% | 100% | 6 | 1 |
 | hybrid + reranker | 100% | 100% | 100% | 100% | 6 | 1 |
 
 **The baseline the rest of the project is held to: 100% on 6 allergen questions, under `hybrid + reranker` — the configuration production runs.** A chunking change, a prompt change or an index rebuild that moves this number down has broken something, whatever else it improved.
@@ -64,8 +63,8 @@ BM25 over the five searchable fields. The arm RFC-001 §08 expects to win on pro
 | ingredients | 100% | 100% | 100% | 100% | 100% | 5 | 1 |
 | nutrition | 80% | 80% | 80% | 80% | 100% | 5 | 0 |
 | allergens | 100% | 100% | 100% | 100% | 100% | 6 | 1 |
-| rewards_policy | 64% | 86% | 70% | 57% | 100% | 7 | 0 |
-| ordering_policy | 83% | 83% | 87% | 83% | 100% | 6 | 0 |
+| rewards_policy | 62% | 86% | 80% | 71% | 100% | 7 | 0 |
+| ordering_policy | 83% | 83% | 83% | 83% | 100% | 6 | 0 |
 | **all categories** | **84%** | | | | | | |
 
 ### vector only
@@ -74,12 +73,12 @@ The index's own vectorizer alone. The arm expected to survive a paraphrase and t
 
 | Category | recall@3 | hit@3 | MRR | P@1 | ceiling | scored | unscored |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| ingredients | 0% | 0% | 0% | 0% | 100% | 5 | 1 |
-| nutrition | 0% | 0% | 0% | 0% | 100% | 5 | 0 |
-| allergens | 0% | 0% | 0% | 0% | 100% | 6 | 1 |
-| rewards_policy | 86% | 86% | 89% | 86% | 100% | 7 | 0 |
+| ingredients | 80% | 80% | 80% | 80% | 100% | 5 | 1 |
+| nutrition | 100% | 100% | 100% | 100% | 100% | 5 | 0 |
+| allergens | 83% | 83% | 83% | 83% | 100% | 6 | 1 |
+| rewards_policy | 57% | 57% | 60% | 57% | 100% | 7 | 0 |
 | ordering_policy | 100% | 100% | 100% | 100% | 100% | 6 | 0 |
-| **all categories** | **41%** | | | | | | |
+| **all categories** | **83%** | | | | | | |
 
 ### hybrid
 
@@ -87,12 +86,12 @@ Both halves, fused by reciprocal rank. **This is the degrade path** — what a v
 
 | Category | recall@3 | hit@3 | MRR | P@1 | ceiling | scored | unscored |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| ingredients | 0% | 0% | 0% | 0% | 100% | 5 | 1 |
-| nutrition | 0% | 0% | 0% | 0% | 100% | 5 | 0 |
-| allergens | 67% | 67% | 67% | 67% | 100% | 6 | 1 |
-| rewards_policy | 79% | 100% | 93% | 86% | 100% | 7 | 0 |
-| ordering_policy | 100% | 100% | 89% | 83% | 100% | 6 | 0 |
-| **all categories** | **53%** | | | | | | |
+| ingredients | 100% | 100% | 100% | 100% | 100% | 5 | 1 |
+| nutrition | 80% | 80% | 80% | 80% | 100% | 5 | 0 |
+| allergens | 100% | 100% | 100% | 100% | 100% | 6 | 1 |
+| rewards_policy | 62% | 86% | 80% | 71% | 100% | 7 | 0 |
+| ordering_policy | 83% | 83% | 83% | 83% | 100% | 6 | 0 |
+| **all categories** | **84%** | | | | | | |
 
 ### hybrid + reranker
 
@@ -100,12 +99,12 @@ What production sends while the allowance lasts. The only arm whose ordering is 
 
 | Category | recall@3 | hit@3 | MRR | P@1 | ceiling | scored | unscored |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| ingredients | 100% | 100% | 90% | 80% | 100% | 5 | 1 |
+| ingredients | 80% | 80% | 84% | 80% | 100% | 5 | 1 |
 | nutrition | 80% | 80% | 80% | 80% | 100% | 5 | 0 |
 | allergens | 100% | 100% | 100% | 100% | 100% | 6 | 1 |
 | rewards_policy | 93% | 100% | 83% | 71% | 100% | 7 | 0 |
 | ordering_policy | 100% | 100% | 100% | 100% | 100% | 6 | 0 |
-| **all categories** | **95%** | | | | | | |
+| **all categories** | **91%** | | | | | | |
 
 ## The negative set
 
@@ -114,8 +113,8 @@ Questions the published corpus genuinely cannot answer. The correct behaviour is
 | Configuration | restrained | asked | rate |
 |---|---:|---:|---:|
 | keyword only | 2 | 8 | 25% |
-| vector only | 4 | 8 | 50% |
-| hybrid | 3 | 8 | 38% |
+| vector only | 6 | 8 | 75% |
+| hybrid | 2 | 8 | 25% |
 | hybrid + reranker | 1 | 8 | 12% |
 
 Reported as grounded under `keyword only`, and unanswerable:
@@ -129,13 +128,12 @@ Reported as grounded under `keyword only`, and unanswerable:
 
 Reported as grounded under `vector only`, and unanswerable:
 
-- `neg-vegetarian` — what's vegetarian here
-- `neg-calories-last-year` — how many calories were in a chicken bowl last year
-- `neg-peanut-safe` — which items are safe for a peanut allergy
-- `neg-crew-pay` — how much do you pay the people who work here
+- `neg-bean-pot` — are the black beans cooked in the same pot as the chicken
+- `neg-halal` — is the chicken halal
 
 Reported as grounded under `hybrid`, and unanswerable:
 
+- `neg-bean-pot` — are the black beans cooked in the same pot as the chicken
 - `neg-halal` — is the chicken halal
 - `neg-vegetarian` — what's vegetarian here
 - `neg-calories-last-year` — how many calories were in a chicken bowl last year
@@ -148,8 +146,8 @@ Reported as grounded under `hybrid + reranker`, and unanswerable:
 - `neg-halal` — is the chicken halal
 - `neg-vegetarian` — what's vegetarian here
 - `neg-calories-last-year` — how many calories were in a chicken bowl last year
+- `neg-gluten-cross-contact` — is the kitchen free of gluten cross contact
 - `neg-peanut-safe` — which items are safe for a peanut allergy
-- `neg-store-hours` — what time does the store on market street close today
 - `neg-crew-pay` — how much do you pay the people who work here
 
 ## Constraints

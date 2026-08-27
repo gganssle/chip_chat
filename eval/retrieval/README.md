@@ -95,14 +95,21 @@ published allergen caveat, which is a chunk kind of its own in the schema. The
 fixture is a slice of the published pages and holds neither. That is a fact the
 report prints rather than a hole in the set.
 
-The measured run found a **third**, and it is the mechanism earning its keep. The
-live index holds thirty of the fixture's thirty-one chunks — the one it is
-missing is the FAQ entry *"Do points expire?"* — so `rew-points-expire`, which is
-answered in three published places, is scored over the two the index actually
-holds. Resolving against the export instead would have marked the retriever as
-missing a passage nothing could have returned. That is why `--from-index` exists
-and why a measured sweep uses it: what a resolution answers is *can the retriever
-return this place*, and that is a question about the index.
+One measured run found a **third**, and it is the mechanism earning its keep.
+That run's live index held thirty of the fixture's thirty-one chunks — the one it
+was missing was the FAQ entry *"Do points expire?"*, because the index it was
+querying was the smaller of the two `make search-verify` builds and the verify
+run had left it live. So `rew-points-expire`, which is answered in three
+published places, was scored over the two the index actually held. Resolving
+against the export instead would have marked the retriever as missing a passage
+nothing could have returned. That is why `--from-index` exists and why a measured
+sweep uses it: what a resolution answers is *can the retriever return this
+place*, and that is a question about the index.
+
+It is also the reason a sweep should follow a `make search-build` rather than a
+`make search-verify`. The committed baseline resolves 35 of 37 labels, which is
+every label the fixture can support; a run that resolves 34 is a run against a
+corpus that is one chunk short, and the report says which one.
 
 **How a slice is told apart from a regression**: by diffing `BASELINE.md`. A
 label that resolved in the committed baseline and does not resolve now is a
@@ -159,55 +166,71 @@ and never as a rate, for the reason the adversarial suite keeps its gates as
 counts: one item carrying a published dairy mark, offered to somebody who said
 they cannot have dairy, is not made acceptable by nineteen that did not.
 
-## What the first measured sweep found
+## What three measured sweeps found
 
-Against `srch-chip-chat-4cy39i`, index `corpus-20260827t060000z-2`, 2026-08-27.
-[`BASELINE.md`](BASELINE.md) is the document; this is what is in it.
+Against `srch-chip-chat-4cy39i` on 2026-08-27: one sweep against
+`corpus-20260827t060000z-2`, and two more the same day against
+`corpus-20260827t053000z` and `corpus-20260827t053000z-2`, which are the same
+thirty-one published chunks rebuilt. [`BASELINE.md`](BASELINE.md) is the third
+of them. Three runs of one set against one corpus is not a lot, and it turned
+out to be exactly enough, because the arms sorted into two groups and the
+division is the finding.
 
 **The demo bar: 100% top-3 recall on the allergen questions**, under the
-configuration production runs. That is the number the rest of the project is held
-to — a chunking change, a prompt change or an index rebuild that moves it down
-has broken something, whatever else it improved.
+configuration production runs — and **the same 100% on all three sweeps**. That
+is the number the rest of the project is held to. A chunking change, a prompt
+change or an index rebuild that moves it down has broken something, whatever
+else it improved, and three independent runs is enough to say that a move would
+mean something.
 
-**RFC-001 §08's argument is confirmed, and sharply.** `recall@3`:
+**Two arms reproduce and two do not.** `recall@3`, all categories:
 
-| category | keyword | vector | hybrid | hybrid + reranker |
-|---|---:|---:|---:|---:|
-| ingredients | 100% | 0% | 0% | 100% |
-| nutrition | 80% | 0% | 0% | 80% |
-| allergens | 100% | 0% | 67% | 100% |
-| rewards_policy | 64% | 86% | 79% | 93% |
-| ordering_policy | 83% | 100% | 100% | 100% |
-| **all** | **84%** | **41%** | **53%** | **95%** |
+| Arm | sweep 1 | sweep 2 | sweep 3 |
+|---|---:|---:|---:|
+| keyword only | 84% | 84% | 84% |
+| hybrid + reranker | 95% | 95% | 91% |
+| hybrid | 53% | 84% | 84% |
+| vector only | 41% | 7% | 83% |
 
-*"Keyword recall matters here more than usual, because item names are proper
-nouns that embeddings handle poorly."* The two halves come out exactly
-complementary along the line the RFC drew: keyword-only is at 100% on the
-menu-row categories and weakest inside the policy documents; vector-only is at
-**zero** on all three menu-row categories and 86–100% on the two policy ones.
-The design choice now has data under it rather than an argument.
+BM25 is deterministic and reproduces exactly. The reranked arm moves by four
+points, which is one question's worth on a forty-question set. The other two
+move by a factor of eleven, and nothing about the retriever, the corpus or the
+labels changed between the runs.
 
-**And the degrade path is worse than either half on menu questions.** `hybrid`
-without the reranker scores 0% on ingredients and nutrition where keyword-only
-alone scores 100% and 80%. Fusing a half that scores 0 with a half that scores
-100 produces 0 — reciprocal rank fusion scores *rank*, the vector half
-contributes `VECTOR_CANDIDATES = 50` neighbours to a 30-chunk corpus, and its
-order crowds the keyword half's correct hits out of the five that come back. The
-semantic ranker rescues it by reordering the union, which is why the column
-beside it is at 100%.
+**What was changing is the service, and it is written up in
+[`docs/retrieval.md`](../../docs/retrieval.md) §9.** A vector query against this
+Free-tier service returns an empty result set with HTTP 200 and no warning, at a
+rate that rises from about a quarter on a rested service to about six in seven
+after a few dozen vector queries. It was eliminated against the vectorizer, the
+embedding deployment, four API versions, the compression settings and every
+service quota. The consequence here is direct: the vector arm measures the
+service's availability that afternoon rather than the retriever's recall, and the
+`hybrid` arm — whose fused response is *identical* to the keyword response when
+the vector half returns nothing — came out equal to `keyword only` in every cell
+of sweeps 2 and 3.
 
-That matters because `hybrid` **is** the product past the ceiling. It is what a
-visitor gets for the rest of the month once the Free tier's 1,000 semantic
-requests are spent, and until this run nobody knew what it cost. Tracked as
-`cc-t1o1`, whose most interesting candidate is to fall back to *keyword* rather
-than to *hybrid* — a trade the table above now prices.
+**So the ablation does not yet defend the design choice, and saying so is the
+point of running it.** RFC-001 §08's argument — *item names are proper nouns that
+embeddings handle poorly* — looked confirmed and sharply so by sweep 1, whose
+vector arm scored **0%** on all three menu-row categories. Sweep 3 has the same
+arm at 80% on ingredients, 100% on nutrition and 83% on allergens. Sweep 1 was
+reading a service fault as a finding, and the only reason anybody knows that is
+that the sweep was run again. A number that does not reproduce is not evidence,
+whichever way it points; #50's fourth criterion is that the ablation is
+repeatable, and repeating it is what this cost.
 
-**The negative set is where it is bad, and the floor is why.** Restraint —
-answering an unanswerable question without confidence — measured 25% / 50% / 38%
-/ **12%** across the four arms. Production's arm is the worst of them: seven of
-eight questions the corpus cannot answer came back grounded, including *"which
-items are safe for a peanut allergy"*, about four published marks that do not
-include peanut.
+`hybrid` **is** the product past the ceiling — it is what a visitor gets for the
+rest of the month once the Free tier's 1,000 semantic requests are spent — so
+what the fallback costs is still unpriced. Tracked as `cc-t1o1`, whose most
+interesting candidate is to fall back to *keyword* rather than to *hybrid*; on
+this evidence that may already be what happens.
+
+**The negative set is where it is bad, and the floor is why.** This result is
+stable across all three sweeps. Restraint — answering an unanswerable question
+without confidence — measured 25% / 75% / 25% / **12%** on sweep 3. Production's
+arm is the worst of them: seven of eight questions the corpus cannot answer came
+back grounded, including *"which items are safe for a peanut allergy"*, about
+four published marks that do not include peanut.
 
 That is the measurement `PROVISIONAL_RERANKER_FLOOR` was waiting for. Its own
 docstring calls it *the one number in this package that was not measured* and
@@ -223,7 +246,8 @@ gluten cross contact"* on the word `free`, from *"free Chipotle"*. It is second
 in line behind `cc-sans` and the two should be chosen together — they are two
 thresholds on the same question.
 
-**Constraint breaches: zero, on every arm.** The filter is exact and it held.
+**Constraint breaches: zero, on every arm, on every sweep.** The filter is exact
+and it held.
 
 ## Adding a question
 
