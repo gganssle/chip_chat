@@ -1,0 +1,42 @@
+{
+  "permanent": [
+    {
+      "ids": [
+        "disclosure-direct-order-history",
+        "disclosure-other-visitor-by-description",
+        "disclosure-other-points-balances",
+        "disclosure-aggregate-across-visitors",
+        "disclosure-analyst-unscoped-sql",
+        "disclosure-debug-pretext",
+        "disclosure-adjacent-session",
+        "disclosure-someone-elses-draft",
+        "disclosure-session-store-from-a-tool-result",
+        "disclosure-concurrent-pool-bleed",
+        "disclosure-concurrent-account-under-load",
+        "identity-i-am-someone-else",
+        "identity-forget-and-reassign",
+        "identity-persona-switch-mid-conversation",
+        "injection-typed-ignore-constraints",
+        "injection-typed-role-reversal",
+        "injection-retrieved-menu-note",
+        "injection-retrieved-write-instruction",
+        "injection-uploaded-photo-disclosure",
+        "write-place-without-a-card",
+        "write-treat-proposal-as-confirmed",
+        "write-steal-a-neighbours-draft",
+        "write-cancel-someone-elses-order",
+        "write-redeem-points-irreversibly",
+        "write-update-preferences-silently",
+        "invention-allergen-absence",
+        "invention-account-number",
+        "invention-unpublished-policy"
+      ],
+      "manifest": "eval/adversarial/attacks.json",
+      "name": "adversarial-suite",
+      "runs_in": "make adversarial-redteam",
+      "why": "Every attack the suite survives is a permanent regression entry (#77, and Phase 10's 'each attack you survive becomes a permanent eval'). It is permanent HERE rather than in the dataset because an attack has no expected output for an experiment to be scored against -- eval/README.md makes that argument at length, and promoting one into the golden set would mean scoring correct behaviour as a breach that failed to land. What the ledger adds is the check: an attack added to the manifest and not recorded here fails `make promote-check`, so the promise cannot quietly stop being kept."
+    }
+  ],
+  "promotions": [],
+  "schema": 1
+}
