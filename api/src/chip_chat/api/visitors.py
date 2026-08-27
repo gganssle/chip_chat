@@ -85,6 +85,7 @@ __all__ = [
     "JOURNAL_VARIABLE",
     "MAX_DISPLAY_NAME_CHARS",
     "ROSTER_COLUMNS",
+    "SHIPPED_ROSTER_PATH",
     "VISITORS_LOGGER",
     "FileJournal",
     "NoJournal",
@@ -98,6 +99,7 @@ __all__ = [
     "VisitorSessionStore",
     "clean_display_name",
     "journal_from_env",
+    "shipped_roster",
 ]
 
 VISITORS_LOGGER: Final = logging.getLogger("chip_chat.api.visitors")
@@ -699,6 +701,69 @@ def _roster_rows(connection: UnboundConnection) -> Sequence[Sequence[object]]:
     return connection.execute(_ROSTER_QUERY)
 
 
+SHIPPED_ROSTER_PATH: Final = Path(__file__).with_name("fixtures") / (
+    "persona_fixtures.json"
+)
+"""An export of ``ACCOUNTS.persona_fixtures``, committed and shipped in the image.
+
+This file exists because of a gap between two issues that is real today and will
+close on its own. :class:`SnowflakeRoster` is the right roster and reads the
+authoritative rows, but it needs a connection factory, and there is no Snowflake
+driver in this lockfile: ``build_service`` is called with ``connect=None`` on
+every deployment, so the roster is empty and every visitor is served unbound.
+
+An unbound visitor is precisely the failure PRD §06 and issue #67 are written
+about -- *a visitor types their name, arrives at an empty account, asks the only
+question that occurs to them, and is told they have zero points and no order
+history.* Between "no personas at all" and "the same twenty-eight rows Snowflake
+holds, read from a file", the second is better, and it is better in a way that
+does not compromise anything: these are not invented accounts. They are the
+rows ``data-gen`` generated and ``#26`` curated, exported verbatim, ``demo_id``
+included, so a session bound from this file is bound to the *same* synthetic
+customer a Snowflake-backed deployment would have bound it to.
+
+``docs/decisions/shipped-persona-roster.md`` is the write-up, including the one
+rule that keeps this honest: the shipped roster is consulted **only** when there
+is no connection factory. The moment ``cc-lpy4`` lands a driver, this file stops
+being read, and the fallback becomes dead weight rather than a second source of
+truth competing with the first.
+"""
+
+
+def shipped_roster() -> StaticRoster:
+    """Return the roster held in :data:`SHIPPED_ROSTER_PATH`.
+
+    Returns:
+        A :class:`StaticRoster` over the committed export, or an empty one when
+        the file is missing or unreadable. Missing is not fatal: an empty roster
+        is a state the app already handles, and a demo that refuses to boot
+        because a data file did not make it into the image is worse than one
+        that boots and says so.
+    """
+    try:
+        payload = json.loads(SHIPPED_ROSTER_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        VISITORS_LOGGER.exception(
+            "the shipped persona roster at %s could not be read; every visitor "
+            "will be served without a synthetic account",
+            SHIPPED_ROSTER_PATH,
+        )
+        return StaticRoster()
+    fixtures = [
+        PersonaFixture.from_row(tuple(record.get(column) for column in ROSTER_COLUMNS))
+        for record in payload
+    ]
+    roster = StaticRoster(fixtures)
+    VISITORS_LOGGER.warning(
+        "no Snowflake connection factory was supplied, so persona assignment is "
+        "reading the %d fixture(s) committed at %s rather than "
+        "ACCOUNTS.persona_fixtures. See docs/decisions/shipped-persona-roster.md.",
+        len(roster.fixtures()),
+        SHIPPED_ROSTER_PATH.name,
+    )
+    return roster
+
+
 class VisitorSessionStore:
     """The server-side session store RFC-001 §05's first clause names.
 
@@ -974,7 +1039,74 @@ class VisitorDesk:
                 )
             )
 
-    def _choose(self, fixtures: Sequence[PersonaFixture]) -> PersonaFixture:
+    def switch(
+        self,
+        old_session_id: str,
+        new_session_id: str,
+        *,
+        display_name: str | None = None,
+    ) -> VisitorSession | None:
+        """Release one session's binding and assign the next one a *different* archetype.
+
+        Issue #69's last scope bullet is the whole of this method: *a switch is a
+        new* ``demo_id`` *on a clean connection, not a mutation of the existing
+        one.* So the old binding is dropped from the store before the new one is
+        made, which is what makes the release real -- the pool resolves
+        identities by asking the store, and a session the store has forgotten
+        checks out nothing at all.
+
+        Note what is **not** a parameter. The caller does not say who the visitor
+        should become next, and it does not say who they were: the archetype to
+        move away from is read out of the store, under the same lock that makes
+        the choice. Two session ids in, one binding out, and no way for a
+        request body or a tool result to steer either.
+
+        Args:
+            old_session_id: The conversation being left. Its binding is
+                released whether or not a new one can be made.
+            new_session_id: The conversation being started. Minted by the app,
+                on the same terms as any other session id.
+            display_name: What the visitor would like to be called. ``None``
+                carries the leaving session's name across, which is what a
+                switcher on the chat surface wants: the visitor is changing who
+                they are shopping as, not who they are.
+
+        Returns:
+            The new binding, or ``None`` when the roster is empty -- the same
+            decided state :meth:`admit` returns it for.
+        """
+        now = self._clock.now()
+        with self._lock:
+            leaving = self._store.session(old_session_id)
+            cleaned = clean_display_name(display_name) or (
+                leaving.display_name if leaving is not None else None
+            )
+            self._store.release(old_session_id)
+            fixtures = self._roster.fixtures()
+            if not fixtures:
+                return None
+            avoid = frozenset() if leaving is None else frozenset({leaving.persona_id})
+            fixture = self._choose(fixtures, avoid_personas=avoid)
+            return self._store.bind(
+                VisitorSession(
+                    session_id=new_session_id,
+                    demo_id=fixture.demo_id,
+                    persona_id=fixture.persona_id,
+                    label=fixture.label,
+                    display_name=cleaned,
+                    thread_id=None,
+                    created_at=now,
+                    last_seen=now,
+                    fixture=fixture,
+                )
+            )
+
+    def _choose(
+        self,
+        fixtures: Sequence[PersonaFixture],
+        *,
+        avoid_personas: frozenset[str] = frozenset(),
+    ) -> PersonaFixture:
         """Pick the fixture that collides with the fewest live sessions.
 
         Called with :attr:`_lock` held. Three tiers, best first: an archetype
@@ -982,10 +1114,21 @@ class VisitorDesk:
         genuinely exhausted -- the customer whose holder has been idle longest,
         because reusing an account somebody is mid-conversation with is worse
         than reusing one nobody has touched for an hour.
+
+        Args:
+            fixtures: The assignable customers.
+            avoid_personas: Archetypes to treat as already held even when no
+                live session holds them. :meth:`switch` passes the one the
+                visitor is leaving, because *"the point of switching is to see
+                the Lapsed Customer after the Regular"* and a switch that
+                re-rolled the same archetype would be a reshuffle. It is a
+                preference and not a rule: if avoiding it would leave nothing to
+                assign, the tiers below fall through to the ordinary choice
+                rather than returning nobody.
         """
         live = self._store.sessions()
         held_visitors = {session.demo_id for session in live}
-        held_personas = {session.persona_id for session in live}
+        held_personas = {session.persona_id for session in live} | avoid_personas
         fresh_persona = [
             fixture
             for fixture in fixtures

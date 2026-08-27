@@ -3,11 +3,13 @@ name = "chip-chat-web"
 version = "0.0.0"
 description = "Chat widget and entry flow."
 requires-python = ">=3.13"
+# Nothing but `otel`, for `service_name`. This package used to import
+# `chip_chat.agent.hardcoded` for the one account the week-one slice served to
+# everybody; the opening message is now written from the persona the app
+# assigned and handed in as a `Persona` value, so `web/` no longer knows what a
+# menu, an account or a model is. It renders copy and markup.
 dependencies = [
     "chip-chat-otel",
-    # For the persona sentence on the entry page, and nothing else. The opening
-    # message quotes the account's real balance rather than a second copy of it.
-    "chip-chat-agent",
 ]
 
 [build-system]
@@ -18,5 +20,4 @@ build-backend = "hatchling.build"
 packages = ["src/chip_chat"]
 
 [tool.uv.sources]
-chip-chat-agent = { workspace = true }
 chip-chat-otel = { workspace = true }
