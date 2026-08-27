@@ -724,7 +724,11 @@ snowflake-rebuild: ## Tear the account down and build it back -- #41 criterion 4
 # Succeeded` is not the same as "deployed".
 
 IMAGE_NAME ?= chip-chat-web
-IMAGE_TAG  ?= latest
+# The commit, not `latest`. A revision that references a mutable tag cannot be
+# rolled back to: the tag it names has already moved, so "roll back to the
+# previous revision" redeploys the thing that is broken. `make rollback` below
+# depends on this being immutable. Override it for a scratch build.
+IMAGE_TAG  ?= $(shell git rev-parse --short HEAD)
 # linux/amd64 explicitly: Container Apps runs amd64 and this repository is
 # developed on Apple silicon, where the default build would be arm64 and would
 # fail to start with an exec-format error nobody enjoys diagnosing.
@@ -736,7 +740,7 @@ APP      = $(shell $(TF_RUN) output -raw container_app_name)
 APP_URL  = $(shell $(TF_RUN) output -raw web_url)
 RG       = $(shell $(TF_RUN) output -raw resource_group_name)
 
-.PHONY: image image-push deploy deploy-check
+.PHONY: image image-push deploy deploy-check rollback revisions scale-one scale-zero takedown
 
 image: ## Build the chat app image for Container Apps
 	docker buildx build --platform $(IMAGE_PLATFORM) -t $(IMAGE) --load .
@@ -762,3 +766,40 @@ deploy-check: ## Wait until the NEWEST revision is the one actually serving
 		sleep 10; \
 	done; \
 	echo "  not serving after 400s -- see docs/deployment.md section 3.3"; exit 1
+
+revisions: ## List revisions newest first, with the image each one references
+	@az containerapp revision list -n $(APP) -g $(RG) \
+		--query "reverse(sort_by([].{created:properties.createdTime,name:name,active:properties.active,replicas:properties.replicas,image:properties.template.containers[0].image}, &created))" \
+		-o table
+
+# Rollback, and the reason it is one line. Revision mode is Single, so the way
+# back is not "shift traffic" -- it is "deploy the previous image again", which
+# only works because IMAGE_TAG is a commit. `make revisions` tells you which.
+# Tested against the live app on 27 August 2026; docs/deployment.md section 7.2.
+rollback: ## Roll back to a previous image: make rollback TO=<tag-or-@sha256:...>
+	@test -n "$(TO)" || { echo "usage: make rollback TO=<image tag or @sha256:...>"; \
+		echo "run 'make revisions' to see what was deployed"; exit 2; }
+	az containerapp update -n $(APP) -g $(RG) \
+		--image $(REGISTRY)/$(IMAGE_NAME)$(if $(findstring @,$(TO)),,:)$(TO) -o none
+	@$(MAKE) deploy-check
+
+# Scale-to-one and back, as issue #71 asks: a documented one-liner each way.
+# Hold the app warm while you are actively sharing the link, and let it go
+# afterwards. Neither changes the image or creates a revision you have to
+# reason about later.
+scale-one: ## Keep one replica warm (no cold start) while sharing the link
+	az containerapp update -n $(APP) -g $(RG) --min-replicas 1 -o none
+	@echo "one replica pinned; run 'make scale-zero' when you are done sharing"
+
+scale-zero: ## Back to scale-to-zero. Idle costs nothing; visitors pay a cold start
+	az containerapp update -n $(APP) -g $(RG) --min-replicas 0 -o none
+
+# The takedown. #70's posture is that if anyone at Chipotle asks for this to
+# come down, it comes down cheerfully -- so it is one command that needs no
+# build, no deploy and no code change. The kill switch is read on every request
+# (chip_chat.api.killswitch) and every visitor gets the stop state; setting
+# min/max replicas to zero then stops the app answering at all.
+takedown: ## Throw the kill switch and stop serving. See docs/deployment.md section 7.3
+	az containerapp update -n $(APP) -g $(RG) \
+		--set-env-vars CHIP_CHAT_KILL_SWITCH=on --min-replicas 0 --max-replicas 0 -o none
+	@echo "kill switch thrown and replicas capped at zero: $(APP_URL) serves nothing"

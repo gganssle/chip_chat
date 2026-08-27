@@ -36,6 +36,18 @@ Issue #4 was closed without buying a domain, so there is no DNS zone and no
 certificate resource in the stack — which also means the hostname changes if the
 app is ever recreated. Read it from `terraform output web_url`, never from here.
 
+**Issue #71's title asks for "the custom domain with a managed certificate", and
+the custom-domain half of it is satisfied by a decision rather than by work.**
+#4 was closed without buying one, and that is the settled state, not an
+omission: the app is on the Container Apps default FQDN, and that FQDN already
+carries a managed certificate that Azure provisions and renews without a
+`azurerm_container_app_custom_domain` resource, a DNS zone or a TXT record to
+verify. Verified 27 August 2026 — the TLS handshake presents
+`CN=whitesea-eea6e4c0.eastus2.azurecontainerapps.io`, issued by Microsoft TLS G2
+RSA CA OCSP 04, valid to 21 February 2027. So *"a managed certificate"* is true
+today and *"the custom domain"* is a purchase nobody made. Everything else in
+#71 — CI deploy, cold start, rollback, scale-to-one, telemetry — is below.
+
 ## 2. The procedure
 
 ```bash
@@ -199,6 +211,54 @@ and `place_order` refuses them either way.
 No test would have found this, because every test scripted the model's next move.
 It took a real model, on the real URL, being genuinely unconvinced.
 
+### 3.11 Default health probes cannot tell "starting" from "dead"
+
+The Phase 8 deploy went out and the revision never became ready. It looked
+healthy for about thirty-five seconds after each start, then stopped answering
+`/healthz`, and Container Apps restarted it — every ninety seconds, for twenty
+minutes. From outside, every `POST` hung for exactly sixty seconds and died in
+curl's HTTP/2 framing layer; the container's own access log showed the request
+being answered `200 OK` moments before the process was killed.
+
+Two separate faults, and the deploy needed both fixed.
+
+**The app was holding its own event loop.** `POST /api/chat` is an `async def`
+handler and `_run_turn` is several seconds of blocking work — a model call and
+whatever the tools do. `_run_turn`'s docstring says it is synchronous *on
+purpose*, on the strength of FastAPI running a `def` handler's work in a thread
+pool. That reasoning is correct and this handler is not a `def`. So a turn held
+the only loop the process has, `/healthz` went unanswered for the length of it,
+and the platform did the one thing a liveness probe can do about a process that
+has stopped answering: it restarted it, mid-conversation. The fix is
+`run_in_threadpool` in the handler; the streaming branch never had the problem,
+because Starlette iterates a synchronous generator off the loop already.
+
+**And Azure client construction was on the start-up path.** Assembling the photo
+intake in `build_service` constructed two Azure SDK clients and a
+`DefaultAzureCredential` before uvicorn started serving. It is now built on the
+first upload and memoised. Nothing that talks to Azure belongs in the start-up
+of a process that scales from zero and has a one-second liveness probe pointed
+at it.
+
+**The probes themselves were the amplifier.** Container Apps' defaults are a
+one-second timeout with no initial delay, and a cold Python process on a
+fraction of a vCPU cannot answer anything in the first second of its life — so
+the platform opens a restart loop against an application that is merely
+starting. `compute.tf` now sets them explicitly: ten seconds of grace, a
+five-second timeout, three consecutive failures before liveness concludes the
+process is gone. Readiness is deliberately more patient than liveness, because a
+revision that is still importing should be *not ready*, which is correct, and
+should not also be *restarted*, which is not.
+
+The general lesson is worth the space. **A liveness probe is a statement about
+what "alive" means, and the default statement is "answers HTTP within one
+second, from the instant the process exists".** For an app that starts cold and
+occasionally blocks, that statement is false, and the platform enforces false
+statements enthusiastically. `.github/workflows/deploy.yml` now starts the image
+and curls `/healthz` before it is allowed anywhere near the Container App, so
+the next version of this is a red CI run rather than a restart loop in
+production.
+
 ## 4. What it costs
 
 | Thing | Charge |
@@ -238,3 +298,206 @@ it is worth knowing that it is the *only* thing there.
 Before the link is shared, `#85` should trip the ceiling against the real
 deployment. `SpendLimits.from_env` and `var.spend_caps` are how that is done
 without a code change.
+
+## 6. The numbers, measured
+
+Issue #71 asks for the cold start to be *measured and recorded — the visitor-
+visible number, not the container's*, and PRD §05 asks for turn latency from
+Application Insights. Both were taken against
+<https://ca-chip-chat-web.whitesea-eea6e4c0.eastus2.azurecontainerapps.io> on
+27 August 2026, on revision `0000013`, from a laptop in the United States over
+domestic broadband — which is deliberately the wrong place to measure from if
+you want a flattering number and the right place if you want the visitor's.
+
+### 6.1 What the app tier costs
+
+| What | Measured |
+| --- | --- |
+| `GET /` warm — the whole page, one request | ~0.19 s |
+| `POST /api/entry` warm — name to persona to conversation | **0.20 s** |
+| `POST /api/switch` warm — release, reassign, restart | **0.17 s** |
+| `guard.budget_check` span, median over 88 | **0 ms** |
+
+The two that are acceptance criteria are the entry and the switch, and both are
+asked to be *under two seconds*. They are two hundred milliseconds, and the
+reason is structural rather than lucky: neither route touches a model, neither
+touches a database, and the roster they choose from is already in memory. The
+whole of #66's *"name → persona → conversation in one screen, under two
+seconds"* is one JSON round trip against an in-process store, because the second
+screen was already loaded before the visitor typed.
+
+### 6.2 The cold start
+
+`min_replicas = 0`, so a visitor who opens the link when nobody else has
+recently pays for a container starting from nothing.
+
+MEASURED_COLD_START_PLACEHOLDER
+
+`make scale-one` removes it entirely while you are actively sharing the link;
+`make scale-zero` gives it back. Section 7.1.
+
+### 6.3 Turn latency, and why the number is what it is
+
+**Measured, from `chat.turn` spans in Application Insights, 69 turns:**
+
+| Metric | PRD §05 target | Measured |
+| --- | --- | --- |
+| Median turn latency | < 2 s | **34.2 s** |
+| 95th percentile | < 4 s | **62.7 s** |
+
+That is not a near miss, and it is worth saying exactly where it goes before
+anybody tries to optimise the app tier:
+
+| Span | n | Median | p95 |
+| --- | --- | --- | --- |
+| `chat.turn` | 69 | 34.2 s | 62.7 s |
+| `agent.step` | 123 | 20.2 s | 39.2 s |
+| `llm.completion` | 123 | 20.2 s | 39.2 s |
+| `guard.budget_check` | 88 | 0 ms | 0 ms |
+| `retriever.search` | 9 | 0 ms | 0 ms |
+
+`agent.step` and `llm.completion` are the same number to three digits, which
+means **the entire turn is the model call**, twice over — a turn is typically
+two round trips, one to choose a tool and one to answer. Everything this
+repository's app tier contributes is inside the rounding.
+
+Two things are inflating the model call, and they should not be conflated.
+
+**The deployment was rate limited while these were taken.** Ten consecutive
+turns came back with the *"Something went wrong on my side just then"* copy, and
+the container's log gives the reason without ambiguity:
+
+```
+openai.RateLimitError: Error code: 429 - {'error': {'message': 'Your requests to
+gpt-5-mini for gpt-5-mini in eastus2 have exceeded rate limit.', ...
+```
+
+`gpt-5-mini` is one shared GlobalStandard deployment and several evaluation
+suites were running against it at the same time. The OpenAI client retries a 429
+with backoff, so a turn that eventually fails still bills thirty to sixty
+seconds of wall clock to `llm.completion`. **These percentiles are therefore an
+upper bound taken under contention, not a clean baseline.**
+
+**And `gpt-5-mini` is a reasoning model.** Even the turns that succeeded ran a
+median of 30.8 s. A reasoning model on the hot path of a conversational product
+is a product decision, not a tuning problem, and it is the first thing to
+revisit if the target matters.
+
+**On the target itself.** Issue #104 decided that PRD §05's `< 2 s` / `< 4 s`
+must be re-baselined, because they were set against a co-located, natively
+supported serving layer and Snowflake is now on AWS `us-east-2` with cross-region
+inference. **That re-baseline has not happened** — §05 still reads `< 2 s` and
+`< 4 s` — so the numbers above are reported raw, against the stale target, and
+nothing here should be read as a pass or a fail until #104's second bullet is
+done. What the measurement *does* settle is where the time is not: it is not in
+the app tier, not in the budget check, and not in retrieval.
+
+### 6.4 Telemetry is arriving
+
+Application Insights has the full span tree from the deployed app, under
+`cloud_RoleName = chip-chat.chip-chat-api`:
+
+```
+chat.turn → agent.step → llm.completion
+                      ↳ tool.get_points_balance, tool.get_usual_order,
+                        tool.search_menu_knowledge → retriever.search
+          → guard.budget_check
+          → render.response
+```
+
+560 spans in the three hours the Phase 8 verification took, latest at 19:56 UTC.
+The connection string is a plain `env` entry on the Container App
+(`APPLICATIONINSIGHTS_CONNECTION_STRING`, set from
+`azurerm_application_insights.main.connection_string`), so there is nothing to
+configure at deploy time and nothing to rotate.
+
+## 7. The runbook
+
+### 7.1 Scale to one, and back
+
+One replica pinned means no cold start for anybody. It costs the active vCPU
+rate continuously rather than in bursts, so it is for the hour you are actively
+sharing the link and not for the week around it.
+
+```bash
+make scale-one     # az containerapp update --min-replicas 1
+make scale-zero    # az containerapp update --min-replicas 0
+```
+
+### 7.2 Rollback, tested
+
+**Revision mode is `Single`**, so rolling back is not a traffic shift — the
+previous revision is deactivated the moment a new one is created. The way back
+is to deploy the previous *image* again, and that only works because the tag is
+a commit rather than `latest`:
+
+```bash
+make revisions                  # which image each revision references
+make rollback TO=<short-sha>    # or TO=@sha256:<digest> for an untagged one
+```
+
+**Tested against the live app on 27 August 2026, not merely documented.** The
+Phase 8 image was rolled out as `0000009`, failed its liveness probes, and was
+rolled back to the previous image by digest:
+
+```bash
+az containerapp update -n ca-chip-chat-web -g rg-chip-chat \
+  --image acrchipchat4cy39i.azurecr.io/chip-chat-web@sha256:70976272...
+```
+
+Revision `0000011` came up on the old image and served `GET /healthz` `200` in
+1.70 s and `POST` in 0.17 s, which is how the fault was localised to the new
+image rather than to the platform. Roll-forward was the same command with the
+new tag. **Three to five minutes end to end**, most of it waiting for the new
+revision to pass readiness.
+
+The one thing to know under pressure: `provisioningState: Succeeded` comes back
+long before the rollback is serving (§3.3). `make deploy-check` — which
+`make rollback` runs for you — polls `latestReadyRevisionName` and the live
+`/healthz` and is the only signal worth believing.
+
+### 7.3 Takedown
+
+Issue #70's posture: *if anyone at Chipotle ever asks for this to come down,
+take it down cheerfully. Having built it is the point, not keeping it online.*
+So this is one command, needs no build and no code change, and takes effect in
+about a minute:
+
+```bash
+make takedown
+```
+
+which is
+
+```bash
+az containerapp update -n ca-chip-chat-web -g rg-chip-chat \
+  --set-env-vars CHIP_CHAT_KILL_SWITCH=on --min-replicas 0 --max-replicas 0
+```
+
+Two independent things, deliberately. `CHIP_CHAT_KILL_SWITCH=on` is read on
+every request by `chip_chat.api.killswitch` and turns every visitor into the
+stop state, so the app is harmless even if a replica is still up; capping
+replicas at zero then stops it answering at all. Neither deletes anything, so
+putting it back is the same command with `off` and `--max-replicas 1`.
+
+If the request is to remove the data as well: the harvested corpus is in the
+`raw` container of the storage account and the catalogue is under
+`catalog/chipotle/` in the same place. Nothing in the app serves either
+(`api/tests/test_public_demo.py::test_no_endpoint_serves_a_bulk_export_of_the_corpus`),
+so a takedown does not have to race an export.
+
+### 7.4 Deploying from CI
+
+`.github/workflows/deploy.yml` runs on every push to the default branch that
+touches the image: build for `linux/amd64`, start the image and curl its own
+`/healthz` and `/robots.txt`, push under the commit sha, roll the Container App,
+poll until the new revision is the one serving, and finally fetch the live URL
+and assert that the unaffiliated-demo disclosure and both halves of `noindex`
+are still on it.
+
+Like `agent-image.yml`, the deploy half is conditional on credentials existing,
+so a clone with no Azure federation still gets the build gate. It needs
+`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `ACR_NAME`,
+`CONTAINER_APP_NAME` and `RESOURCE_GROUP` as repository secrets, and the
+federated identity needs `AcrPush` on the registry and
+`Microsoft.App/containerApps/write` on the app.
