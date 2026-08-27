@@ -46,6 +46,15 @@ because a turn that has not answered in a minute has already failed as a
 conversation. Fifty thousand order lines is a minute of work, and the first
 version of this module found that out by having a ``TRUNCATE`` cancelled.
 
+**It asks for every visitor by name.** #43 puts a row access policy on every
+visitor-scoped table, and the policy denies a cross-visitor read to every role
+including the one that owns the database -- the escape is the presence of an
+``ALL_VISITORS`` session variable rather than the absence of a bound visitor,
+so an unbound owner session reads zero rows exactly as a lane role does.
+Replacing a table and counting what landed are both questions about the whole
+population, so this sets the variable and says so. Nothing that serves a
+conversation ever does.
+
 **It loads as CHIP_CHAT_ADMIN.** Not as CHIP_CHAT_PUBLISH, which is the
 identity #39 will use: the publish role cannot see ACCOUNTS at all, on purpose,
 so it cannot land the synthetic account tables and was never meant to. The
@@ -161,10 +170,21 @@ def unfillable(table: schema.Table, path: Path) -> list[str]:
 
 
 def _count(table: schema.Table) -> int:
-    """Return how many rows ``table`` holds."""
+    """Return how many rows ``table`` holds.
+
+    "How many rows are there" is a question about every visitor at once, and
+    #43's row access policies deny that to every role by default -- the owner
+    role included, because the escape is the presence of
+    :data:`~chip_chat.snowflake.schema.MAINTENANCE_VARIABLE` rather than the
+    absence of a bound visitor. So this asks for it by name. Without the
+    variable a load reports zero rows for every visitor-scoped table it has
+    just filled, which reads as a failed load rather than as a policy doing its
+    job.
+    """
     rows = snow.query(
         f"USE ROLE {account.ADMIN_ROLE};\n"
         f"USE WAREHOUSE {account.PUBLISH_WAREHOUSE};\n"
+        f"SET {schema.MAINTENANCE_VARIABLE} = 'counting a load';\n"
         f"SELECT COUNT(*) AS n FROM {table.qualified()};"
     )[-1]
     return int(next(iter(rows[0].values()))) if rows else 0
@@ -203,6 +223,12 @@ def load(table: schema.Table, path: Path) -> Loaded:
     result = snow.run_statements(
         f"USE ROLE {account.ADMIN_ROLE};\n"
         f"USE WAREHOUSE {account.PUBLISH_WAREHOUSE};\n"
+        # Replacing a table is a statement about every visitor in it. TRUNCATE
+        # is not one of the operations #43's policies filter, so this is belt
+        # and braces rather than a fix -- but the failure it forecloses is a
+        # TRUNCATE that silently removed nothing followed by a COPY that
+        # appended a second generation on top of the first.
+        f"SET {schema.MAINTENANCE_VARIABLE} = 'replacing a table';\n"
         f"CREATE STAGE IF NOT EXISTS {stage} FILE_FORMAT = (TYPE = JSON);\n"
         f"PUT file://{path.resolve()} @{stage}/{table.name}/ "
         "AUTO_COMPRESS = TRUE OVERWRITE = TRUE;\n"

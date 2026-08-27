@@ -406,6 +406,12 @@ search-verify: ## Hold the live index to #48.3 and #48.4 -- costs a minute
 # that is what makes #41's fourth criterion something you can run rather than
 # something you can assert.
 #
+# It also attaches #43's row access policies, which is the launch gate: an apply
+# that has not run since a visitor-scoped table was added leaves that table
+# readable by every visitor. `make ci` fails on the missing attachment and
+# `snowflake-verify` fails on the unguarded table, so the gap has two ways of
+# announcing itself and neither of them is somebody remembering.
+#
 # `snowflake-verify` is the one target here that spends credits, and about five
 # cents of them: it wakes the serving warehouse and waits to watch it suspend,
 # because #41's first criterion says "verified" rather than "configured".
@@ -464,7 +470,7 @@ snowflake-load: ## Load a harvested and generated landing zone into the serving 
 	$(UV) run python -m chip_chat.snowflake.load \
 		$(LANDING)/catalog $(LANDING)/accounts/synthetic
 
-snowflake-verify: ## Check the live account against issues #41, #42 and #88
+snowflake-verify: ## Check the live account against issues #41, #42, #43 and #88
 	$(UV) run python -m chip_chat.snowflake.verify
 
 snowflake-verify-fast: ## The same, minus the minute spent watching it suspend

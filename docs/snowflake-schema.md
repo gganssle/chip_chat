@@ -300,10 +300,12 @@ match that never matches.
 
 ## 7. What this deliberately does not do
 
-- **No row access policies.** [#43], and it is the launch gate. Everything here
-  exists so that ticket has somewhere to attach: `demo_id` on all eight
-  visitor-scoped tables, `NOT NULL` so no row is undecidable, and
-  `visitor_scoped_tables` as the list its coverage test needs.
+- **No row access policies.** [#43] landed them in `sql/10_policies.sql` and
+  they are documented in
+  [docs/snowflake-isolation.md](snowflake-isolation.md). Everything here is
+  what that ticket attached to: `demo_id` on all eight visitor-scoped tables,
+  `NOT NULL` so no row is undecidable, and `visitor_scoped_tables` as the list
+  its coverage check reads.
 - **No stored procedures.** [#46]. `USAGE ON FUTURE PROCEDURES IN SCHEMA
   CHIP_CHAT.ACCOUNTS` was already granted to `CHIP_CHAT_WRITE` by [#41].
 - **No semantic view.** [#45]. The comments on every table and every column are

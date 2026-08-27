@@ -7,7 +7,7 @@ otherwise has two -- RFC-001 §04 fixes the schema, `sql/06_catalogue.sql`
 through `sql/08_marts.sql` spell it as DDL, and `tests/test_schema_layout.py`
 holds the second to the first through this.
 
-Three things are declared here that the DDL cannot check about itself:
+Four things are declared here that the DDL cannot check about itself:
 
 **Which columns RFC-001 §04 actually prints.** :attr:`Table.rfc` is §04
 transcribed, and it is the whole of "match the schema exactly" as a test. A
@@ -28,6 +28,14 @@ question and defaults to deny in the same direction; the two are not redundant,
 because this one sees the tables somebody wrote down and that one sees the
 tables nobody did.
 
+**Which policy guards each of them.** :attr:`Table.policy` names the row access
+policy `sql/10_policies.sql` attaches, and :data:`POLICIES` is the two of them
+with what each promises about a session that has bound nobody.
+`tests/test_row_access_policies.py` compares the two lists in both directions,
+which is issue #43's coverage requirement: a visitor-scoped table added without
+a policy fails `make ci`, and so does a policy attached to a table nobody
+declared visitor-scoped.
+
 The types are not §04's -- §04 fixes no types. They are the producing layer's:
 silver's ``DECIMAL(10,2)`` for money and ``DECIMAL(8,2)`` for calories in
 CATALOGUE and ACCOUNTS, gold's ``DECIMAL(12,2)``, ``DECIMAL(5,4)`` and
@@ -46,12 +54,19 @@ __all__ = [
     "DEMO_ID",
     "EDITABLE_COLUMNS",
     "EXEMPT",
+    "ISOLATION_POLICY",
+    "MAINTENANCE_VARIABLE",
     "MART_INPUTS",
+    "POLICIES",
+    "ROSTER_POLICY",
+    "SESSION_VARIABLE",
     "TABLES",
     "Addition",
     "Column",
+    "Policy",
     "Table",
     "columns_of",
+    "policy",
     "table",
     "tables_in",
     "visitor_scoped",
@@ -64,6 +79,27 @@ Every visitor-scoped table carries it, #43's row access policies compare
 against it, and a session that has not set the variable behind it sees nothing.
 A visitor-scoped table without this column is not a table with a missing
 convenience -- it is a table no policy can be written for.
+"""
+
+SESSION_VARIABLE: Final = "DEMO_ID"
+"""The Snowflake session variable that holds the bound visitor.
+
+The app sets it on checkout and clears it on return (#44); every policy in
+`sql/10_policies.sql` reads it with ``GETVARIABLE``. It is spelled once here so
+that the pool, the verification and the policies cannot drift apart -- a pool
+setting ``DEMO`` while the policies read ``DEMO_ID`` is a demo where every table
+returns nothing, which looks like an empty database rather than like a bug.
+"""
+
+MAINTENANCE_VARIABLE: Final = "ALL_VISITORS"
+"""The second variable :data:`ISOLATION_POLICY` needs before it will cross
+visitors, and it is only honoured for :data:`~chip_chat.snowflake.account.ADMIN_ROLE`.
+
+Default deny survives the escape because of this: an owner session that has
+bound nobody reads zero rows exactly as a lane role does, and a cross-visitor
+read has to be asked for by name. `chip_chat.snowflake.load` asks for it --
+counting the rows it has just landed is precisely a question about every
+visitor -- and nothing that serves a conversation ever does.
 """
 
 EDITABLE_COLUMNS: Final = ("display_name", "home_store_override", "stated_preferences")
@@ -88,6 +124,23 @@ The second must always return zero rows. `chip_chat.snowflake.verify` asks the
 live account, as ``CHIP_CHAT_ADMIN`` -- INFORMATION_SCHEMA hides objects a
 narrower role may not see, even through a view, so a lesser role gets a shorter
 list and a pass it did not earn.
+"""
+
+ISOLATION_POLICY: Final = "visitor_isolation"
+"""The row access policy seven of the eight visitor-scoped tables carry.
+
+A row belongs to the visitor bound to the session and to nobody else, and an
+unbound session reads zero rows rather than all of them. `sql/10_policies.sql`
+is the body; :data:`POLICIES` is what a test can hold it to.
+"""
+
+ROSTER_POLICY: Final = "entry_roster"
+"""The eighth, and the one inversion in the mechanism.
+
+``persona_fixtures`` is the roster the entry flow chooses a visitor's synthetic
+customer from, so it is read on a connection that has bound nobody. This policy
+opens that case and only that case: bind a visitor and the same table returns
+that visitor's fixture and no other.
 """
 
 EXEMPT: Final[dict[tuple[SchemaName, str], str]] = {
@@ -145,6 +198,66 @@ class Addition:
 
 
 @dataclass(frozen=True, slots=True)
+class Policy:
+    """One row access policy, and what it promises about an unbound session.
+
+    The body itself is not here. It lives in `sql/10_policies.sql` and nowhere
+    else -- a policy expression copied into Python is a second thing to keep
+    true, and the copy is the one a reviewer would read. What is here is the
+    part a test can hold the SQL to.
+
+    Attributes:
+        name: The policy, as `sql/10_policies.sql` creates it.
+        open_when_unbound: Whether a session that has set no
+            :data:`SESSION_VARIABLE` sees rows. False is default deny and is the
+            whole of RFC-001 §05; True is an inversion that has to be argued
+            for, and `test_row_access_policies.py` allows exactly one.
+        why: For an inverted policy, what breaks without the inversion and why
+            it is narrower than leaving the table unprotected. For a
+            default-deny policy, what it is for.
+    """
+
+    name: str
+    open_when_unbound: bool
+    why: str
+
+
+POLICIES: Final[tuple[Policy, ...]] = (
+    Policy(
+        ISOLATION_POLICY,
+        open_when_unbound=False,
+        why=(
+            "the isolation mechanism. A visitor's connection is physically "
+            "incapable of returning another visitor's rows however broad the "
+            "query Cortex Analyst generates, and an unset session variable "
+            "returns nothing rather than everything"
+        ),
+    ),
+    Policy(
+        ROSTER_POLICY,
+        open_when_unbound=True,
+        why=(
+            "persona_fixtures is the roster the entry flow picks a visitor's "
+            "synthetic customer FROM, and switching personas mints a new "
+            "demo_id on a clean connection -- both reads happen before any "
+            "visitor is bound, so a default-deny policy would return an empty "
+            "roster and break entry rather than protect it. Inverting the "
+            "unbound case only is strictly narrower than the alternative of "
+            "leaving the table with no policy: the state that can read the "
+            "whole roster is the lane that has no visitor to leak it to, "
+            "rather than every bound conversation for the life of the demo"
+        ),
+    ),
+)
+"""Both policies. Two, and a third would need an argument written beside it.
+
+The set is closed by `test_row_access_policies.py`: every visitor-scoped table
+names one of these, exactly one of them may be open when unbound, and the open
+one may guard exactly one table.
+"""
+
+
+@dataclass(frozen=True, slots=True)
 class Table:
     """One table, and what it promises.
 
@@ -159,8 +272,11 @@ class Table:
             table §04 does not print at all.
         additions: The columns beyond ``rfc``, each with its argument.
         visitor_scoped: Whether every row belongs to one visitor. True means
-            the table carries :data:`DEMO_ID` and #43 attaches a row access
-            policy to it.
+            the table carries :data:`DEMO_ID` and carries a row access policy.
+        policy: The row access policy `sql/10_policies.sql` attaches to it, or
+            the empty string for a table the demo_id rule does not apply to.
+            Visitor-scoped and unguarded is not a state
+            `test_row_access_policies.py` allows, in either direction.
     """
 
     name: str
@@ -170,6 +286,7 @@ class Table:
     rfc: tuple[str, ...]
     visitor_scoped: bool
     additions: tuple[Addition, ...] = field(default_factory=tuple)
+    policy: str = ""
 
     def column_names(self) -> tuple[str, ...]:
         """Return the column names, in declaration order."""
@@ -331,6 +448,7 @@ _DEMO_VISITORS = Table(
         "last_seen",
     ),
     visitor_scoped=True,
+    policy=ISOLATION_POLICY,
 )
 
 _PERSONA_FIXTURES = Table(
@@ -428,6 +546,7 @@ _PERSONA_FIXTURES = Table(
         ),
     ),
     visitor_scoped=True,
+    policy=ROSTER_POLICY,
 )
 
 _ORDERS = Table(
@@ -460,6 +579,7 @@ _ORDERS = Table(
         ),
     ),
     visitor_scoped=True,
+    policy=ISOLATION_POLICY,
 )
 
 _ORDER_ITEMS = Table(
@@ -505,6 +625,7 @@ _ORDER_ITEMS = Table(
         ),
     ),
     visitor_scoped=True,
+    policy=ISOLATION_POLICY,
 )
 
 _LOYALTY_LEDGER = Table(
@@ -536,6 +657,7 @@ _LOYALTY_LEDGER = Table(
         ),
     ),
     visitor_scoped=True,
+    policy=ISOLATION_POLICY,
 )
 
 # ---------------------------------------------------------------------------
@@ -574,6 +696,7 @@ _CUSTOMER_360 = Table(
     ),
     additions=(_DERIVED_AT,),
     visitor_scoped=True,
+    policy=ISOLATION_POLICY,
 )
 
 _USUAL_ORDER = Table(
@@ -589,6 +712,7 @@ _USUAL_ORDER = Table(
     key=("demo_id",),
     rfc=("demo_id", "item_id", "modifiers", "confidence", "derived_at"),
     visitor_scoped=True,
+    policy=ISOLATION_POLICY,
 )
 
 _ITEM_AFFINITY = Table(
@@ -620,6 +744,7 @@ _SPEND_SUMMARY = Table(
     rfc=("demo_id", "period", "total", "order_count"),
     additions=(_DERIVED_AT,),
     visitor_scoped=True,
+    policy=ISOLATION_POLICY,
 )
 
 TABLES: Final[tuple[Table, ...]] = (
@@ -662,6 +787,24 @@ def table(name: str) -> Table:
         if candidate.name.upper() == name.upper():
             return candidate
     raise KeyError(f"no table {name!r} in CHIP_CHAT")
+
+
+def policy(name: str) -> Policy:
+    """Return one row access policy by name.
+
+    Args:
+        name: A policy name, in any case.
+
+    Returns:
+        The declaration.
+
+    Raises:
+        KeyError: If no policy is called that.
+    """
+    for candidate in POLICIES:
+        if candidate.name.upper() == name.upper():
+            return candidate
+    raise KeyError(f"no row access policy {name!r} in CHIP_CHAT")
 
 
 def tables_in(schema_name: SchemaName) -> Iterator[Table]:

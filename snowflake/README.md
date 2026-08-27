@@ -22,6 +22,8 @@ sql/06_catalogue.sql      the real half: menu_items, item_prices, modifiers, sto
 sql/07_accounts.sql       the synthetic half. Every table here carries demo_id
 sql/08_marts.sql          the four marts Databricks publishes overnight
 sql/09_audit.sql          the demo_id rule, as a view that must return no rows
+sql/10_policies.sql       the isolation mechanism. Two row access policies and
+                          the eight tables they are attached to
 sql/optional/             never run by an apply: reset.sql, network_policy.sql,
                           trial_credit_cap.sql
 
@@ -37,16 +39,16 @@ src/chip_chat/snowflake/verify.py    `make snowflake-verify`
 make snowflake-apply         # create or re-assert every object. Safe to repeat
 make snowflake-cap QUOTA=60  # cap the whole trial. The one number nothing here knows
 make snowflake-load-sample   # the committed catalogue fixture, 60 rows
-make snowflake-verify        # 62 checks against the live account, ~3 minutes
-make snowflake-verify-fast   # 61 of them, skipping the minute of watching
+make snowflake-verify        # 75 checks against the live account, ~3 minutes
+make snowflake-verify-fast   # 74 of them, skipping the minute of watching
 make snowflake-rebuild       # drop it all, build it back, verify
 ```
 
 The tables are `CREATE OR ALTER TABLE`, which converges an existing table to the
 declaration and **keeps its rows** — and keeps a row access policy attached to
-it, which is what makes a routine apply safe once [#43] lands. Changing that one
-word to `OR REPLACE` would empty every table on the next apply, so
-`test_account_layout.py` fails on it.
+it, which is what makes a routine apply safe now that [#43] has landed. Changing
+that one word to `OR REPLACE` would empty every table on the next apply *and*
+detach its policy, so `test_account_layout.py` fails on it.
 
 `snowflake-cap` is the odd one out. Everything else here is a file an apply runs;
 that target sets a credit quota on the whole account, and the quota is the one
@@ -87,8 +89,45 @@ and `item_affinity`, which is about two items and nobody. `verify` also creates
 a table without the column and requires the audit to notice, because an audit
 that has quietly stopped looking reports a clean account forever.
 
-`visitor_scoped_tables`, beside it, is the list [#43]'s coverage test needs:
-every table on it must carry a policy.
+`visitor_scoped_tables`, beside it, is the list the coverage check reads: every
+table on it must carry a row access policy, and `make snowflake-verify` names
+any that does not.
+
+## Two policies, and one of them is open on purpose
+
+[#43] is the launch gate and `sql/10_policies.sql` is it. Identity originates in
+the app's server-side session, reaches Snowflake as the `DEMO_ID` session
+variable, and is enforced under every query the system runs — so that no tool
+signature has to carry a visitor identifier and no injected instruction has a
+field to populate.
+
+```sql
+visitor_isolation   demo_id = the bound visitor. Seven tables. DEFAULT DENY:
+                    an unset variable returns zero rows, never all of them
+entry_roster        persona_fixtures only, and open while nothing is bound —
+                    entry chooses a visitor's customer from it before there
+                    is a visitor to bind
+```
+
+The inversion is one table, one policy of its own, and an argument written down
+in three places rather than remembered. Bind a visitor and the roster narrows to
+that visitor's fixture like everything else does; the state that can read the
+whole roster is the lane with no visitor to leak it to.
+
+Neither body names a lane role. Snowflake has no owner exemption, so the ops
+API's `CHIP_CHAT_WRITE` is bound by exactly the same policy the read lane is,
+and `test_row_access_policies.py` fails if a role name ever appears in one — a
+single `OR` clause is all it would take, and it would read like a convenience.
+The one escape needs both `CHIP_CHAT_ADMIN`, which no service user holds and
+which can detach the policy anyway, *and* an `ALL_VISITORS` variable set on
+purpose: default deny therefore survives for every role in the account,
+including the one that runs every load.
+
+[docs/snowflake-isolation.md](../docs/snowflake-isolation.md) is the whole
+argument — why a policy rather than middleware, why the redundant `IS NOT NULL`
+is the most important half of the body, why the attachments are a scripting
+block rather than eight `ALTER TABLE` statements, and the four things to know
+before extending it.
 
 ## Two files, two different questions
 

@@ -15,6 +15,8 @@ editing a file.
     #41.4  the account is rebuildable from snowflake/ in one run
     #42    the schema is the fourteen tables the DDL declares, every one of
            them commented, and every visitor-scoped one carrying demo_id
+    #43    every visitor-scoped table carries a row access policy, and an
+           unbound session reads nothing at all
 
 #41's first three are checked here. Its fourth is checked by running
 `make snowflake-rebuild`, which tears the account down and builds it back before
@@ -32,12 +34,30 @@ does not create. That check fails on a freshly rebuilt account, on purpose --
 `optional/trial_credit_cap.sql` needs a number read off the remaining balance,
 and an uncapped trial should be a named failure rather than a quiet gap.
 
-Criterion 3 needs a row access policy to exist, and the real ones are #43's.
-This builds a throwaway one on a throwaway table, proves the write role is
-subject to it, and drops both. That is deliberately not a stand-in for #43: what
-is under test is the *role*, not the policy. #41's grants are what leave
+#41's criterion 3 needs a row access policy to exist, and it builds a throwaway
+one on a throwaway table rather than borrowing #43's. That is deliberate: what is
+under test there is the *role*, not the policy. #41's grants are what leave
 CHIP_CHAT_WRITE without ``APPLY ROW ACCESS POLICY`` and without ownership of
-anything, and this is where that absence gets demonstrated rather than asserted.
+anything, and that is where the absence gets demonstrated rather than asserted.
+
+#43 is the launch gate and gets its own fixture, guarded by the **real**
+``visitor_isolation`` policy. Three things are asked of the account and the
+third is the one that keeps the other two honest:
+
+**Coverage.** Every table on `09_audit.sql`'s ``visitor_scoped_tables`` carries
+a policy, and the tables that carry one are exactly the tables
+`chip_chat.snowflake.schema` says should. The live list is the view's rather
+than Python's, because a table somebody created by hand is invisible to
+`make ci` and is exactly the table this is looking for.
+
+**Behaviour.** Two bound sessions see different rows; an unbound session sees
+none; ``SELECT *`` returns only the bound visitor's rows; the write role is
+bound by the same policy; and the maintenance escape is unreachable from a lane
+role even with the variable set.
+
+**That the coverage check still bites.** A table with a ``demo_id`` and no
+policy is created and the check has to name it. A coverage check that has
+quietly stopped seeing anything reports a protected account forever.
 
 Four Snowflake behaviours the checks are built around, each of which cost an
 hour to discover:
@@ -105,6 +125,22 @@ would be one release note away from being recognised by accident.
 PROBE_TABLE = account.table("ACCOUNTS", "_VERIFY_PROBE")
 PROBE_POLICY = account.table("ACCOUNTS", "_VERIFY_PROBE_POLICY")
 PROBE_MART = account.table("MARTS", "_VERIFY_PROBE_MART")
+
+# #43's own fixture. Two rows and the REAL policy, so what is under test is the
+# expression `sql/10_policies.sql` actually attached rather than a copy of it.
+ISOLATION_PROBE = account.table("ACCOUNTS", "_VERIFY_ISOLATION_PROBE")
+
+# A table with a demo_id and no policy. `09_audit.sql`'s view calls it
+# visitor-scoped, because that view defaults to deny, so the coverage check has
+# to name it -- and if it does not, every clean run of that check meant nothing.
+UNPROTECTED_PROBE = account.table("ACCOUNTS", "_VERIFY_UNPROTECTED")
+
+ISOLATION_POLICY = account.table("ACCOUNTS", schema.ISOLATION_POLICY)
+
+# A visitor nothing is called. Bound to it, a session must see zero rows of
+# every table -- including the roster, whose policy is open only while nothing
+# is bound at all.
+NOBODY = "verify-visitor-nobody"
 
 # The three schemas, quoted, for the INFORMATION_SCHEMA predicates in #42's
 # checks. Built from account.SCHEMAS so a fourth schema is covered by adding
@@ -1062,12 +1098,21 @@ def _check_the_serving_joins_answer() -> list[Check]:
     reported either way -- zero is a load that has not happened yet
     (`make snowflake-load-sample`, or #39's nightly publish), not a broken
     schema.
+
+    Both of them count across every visitor, which #43's policy denies to
+    every role by default. They therefore run with the maintenance variable
+    set, which is what makes them a question about the schema rather than a
+    second and much worse test of the policy.
     """
     catalogue = account.table("CATALOGUE", "menu_items")
     prices = account.table("CATALOGUE", "item_prices")
     orders = account.table("ACCOUNTS", "orders")
     lines = account.table("ACCOUNTS", "order_items")
-    preamble = _preamble(account.ADMIN_ROLE, account.SERVING_WAREHOUSE)
+    # Both joins cross visitors, which is exactly what #43's policy denies by
+    # default -- to every role, the owner included. Counting rows across the
+    # whole population is a maintenance question, so it is asked as one; without
+    # the variable these two probes report an empty database forever.
+    preamble = _session(account.ADMIN_ROLE, {schema.MAINTENANCE_VARIABLE: "yes"})
 
     probes = (
         (
@@ -1106,6 +1151,485 @@ def _check_the_serving_joins_answer() -> list[Check]:
                 Check("#42", name, passed=False, detail=_refusal_line(str(error)))
             )
     return checks
+
+
+# ---------------------------------------------------------------------------
+# #43 -- the isolation mechanism. RFC-001 §05, and one of the two launch gates
+# ---------------------------------------------------------------------------
+
+
+def _session(role: str, variables: dict[str, str] | None = None) -> str:
+    """Return a preamble pinned to ``role`` with ``variables`` set.
+
+    Absence is the interesting case throughout this section, so a caller that
+    passes nothing gets a session that has bound no visitor -- which is what a
+    connection the pool forgot to bind looks like, and what every table must
+    answer with nothing.
+    """
+    lines = [_preamble(role, account.SERVING_WAREHOUSE)]
+    lines += [f"SET {name} = '{value}';" for name, value in (variables or {}).items()]
+    return "\n".join(lines)
+
+
+def _visitors_seen(
+    role: str, variables: dict[str, str] | None, table: str
+) -> tuple[bool, str]:
+    """Return whether ``table`` could be read, and which visitors came back.
+
+    ``LISTAGG`` of the values rather than a row count, and it reads the returned
+    *value* rather than the CLI's output for the reason
+    :func:`_visitors_visible_to` gives: `snow sql` echoes the statements it runs,
+    and those contain the visitor names, so a check that searched the output
+    would find them whether or not a single row came back.
+    """
+    try:
+        statements = snow.query(
+            f"{_session(role, variables)}\n"
+            f"SELECT LISTAGG(demo_id, ',') AS seen FROM {table};"
+        )
+    except snow.SnowError as error:
+        return False, _refusal_line(str(error))
+    rows = statements[-1] if statements else []
+    if not rows:
+        return True, ""
+    return True, str(rows[0].get("SEEN") or "")
+
+
+def _live_attachments() -> dict[tuple[str, str], str]:
+    """Return ``(schema, table) -> policy`` for every table a policy guards.
+
+    ``POLICY_REFERENCES`` is asked once per declared policy rather than once per
+    table, and as CHIP_CHAT_ADMIN: the function shows a session only what its
+    role may see, and the write role cannot see MARTS at all -- so the same
+    query run as a lane role reports three unprotected marts as protected by
+    not looking at them.
+    """
+    found: dict[tuple[str, str], str] = {}
+    for policy in schema.POLICIES:
+        qualified = account.table("ACCOUNTS", policy.name).upper()
+        rows = snow.query(
+            f"{_preamble(account.ADMIN_ROLE, account.SERVING_WAREHOUSE)}\n"
+            "SELECT ref_schema_name, ref_entity_name FROM TABLE(\n"
+            f"  {account.DATABASE}.INFORMATION_SCHEMA.POLICY_REFERENCES(\n"
+            f"    POLICY_NAME => '{qualified}'))\n"
+            "WHERE ref_entity_domain = 'TABLE';"
+        )[-1]
+        for row in rows:
+            key = (
+                str(row["REF_SCHEMA_NAME"]).upper(),
+                str(row["REF_ENTITY_NAME"]).upper(),
+            )
+            found[key] = policy.name.upper()
+    return found
+
+
+def _unprotected() -> tuple[bool, list[str]]:
+    """Return the visitor-scoped tables the live account leaves unguarded.
+
+    The list of what *must* be protected is `09_audit.sql`'s
+    ``visitor_scoped_tables`` rather than `chip_chat.snowflake.schema`, and the
+    difference is the whole point of asking a live account at all: that view
+    defaults to deny, so a table somebody created in Snowsight at four in the
+    afternoon is on it, and a table `make ci` has never heard of is exactly the
+    table with no policy on it.
+    """
+    view = account.table("ACCOUNTS", "visitor_scoped_tables")
+    try:
+        rows = snow.query(
+            f"{_preamble(account.ADMIN_ROLE, account.SERVING_WAREHOUSE)}\n"
+            f"SELECT table_schema, table_name FROM {view};"
+        )[-1]
+        attached = _live_attachments()
+    except snow.SnowError as error:
+        return False, [_refusal_line(str(error))]
+    return True, sorted(
+        f"{row['TABLE_SCHEMA']}.{row['TABLE_NAME']}"
+        for row in rows
+        if (str(row["TABLE_SCHEMA"]).upper(), str(row["TABLE_NAME"]).upper())
+        not in attached
+    )
+
+
+def _check_policy_coverage() -> list[Check]:
+    """Every visitor-scoped table carries a policy, and the check still bites.
+
+    Three checks, and the third is the one that matters. The first asks the
+    account. The second asks whether the account agrees with the DDL about
+    *which* policy guards what, which is how the roster's inversion is kept to
+    the one table it was argued for. The third creates a table with a demo_id
+    and no policy and requires the first to name it -- because a coverage check
+    that has stopped seeing anything passes forever, and this one is the whole
+    of issue #43's fourth acceptance criterion.
+    """
+    preamble = _preamble(account.ADMIN_ROLE, account.SERVING_WAREHOUSE)
+    ran, named = _unprotected()
+    checks = [
+        Check(
+            "#43",
+            "every visitor-scoped table carries a row access policy",
+            passed=ran and not named,
+            detail=(
+                "every table on ACCOUNTS.visitor_scoped_tables is guarded"
+                if ran and not named
+                else f"UNGUARDED: {', '.join(named)}. Every row of each is "
+                "readable by every visitor. Run `make snowflake-apply`"
+                if ran
+                else f"the coverage query did not run: {named[0]}"
+            ),
+        )
+    ]
+
+    try:
+        attached = _live_attachments()
+    except snow.SnowError as error:
+        attached = {}
+        checks.append(
+            Check(
+                "#43",
+                "the account agrees with the DDL about which policy guards what",
+                passed=False,
+                detail=f"POLICY_REFERENCES did not run: {_refusal_line(str(error))}",
+            )
+        )
+    else:
+        declared = {
+            (table.schema, table.name.upper()): table.policy.upper()
+            for table in schema.visitor_scoped()
+        }
+        differences = [
+            f"{s}.{t}: {attached.get((s, t), 'no policy')} not {want}"
+            for (s, t), want in declared.items()
+            if attached.get((s, t)) != want
+        ]
+        differences += [
+            f"{s}.{t}: guarded by {name}, and nothing declares it visitor-scoped"
+            for (s, t), name in attached.items()
+            if (s, t) not in declared
+        ]
+        checks.append(
+            Check(
+                "#43",
+                "the account agrees with the DDL about which policy guards what",
+                passed=not differences,
+                detail=(
+                    f"{len(declared)} tables, each carrying the policy it declares"
+                    if not differences
+                    else "; ".join(differences[:4])
+                ),
+            )
+        )
+
+    snow.run_statements(
+        f"{preamble}\nCREATE OR REPLACE TABLE {UNPROTECTED_PROBE} "
+        "(demo_id VARCHAR, note VARCHAR);"
+    )
+    try:
+        ran, named = _unprotected()
+        caught = ran and any(name.endswith("_VERIFY_UNPROTECTED") for name in named)
+        checks.append(
+            Check(
+                "#43",
+                "the coverage check names a visitor-scoped table with no policy",
+                passed=caught,
+                detail=(
+                    "created a table with demo_id and no policy, and the check "
+                    "reported it"
+                    if caught
+                    else "created a table with demo_id and no policy and the "
+                    "check stayed clean. It is not looking at anything, and "
+                    "every pass above meant nothing"
+                ),
+            )
+        )
+    finally:
+        snow.run_statements(f"{preamble}\nDROP TABLE IF EXISTS {UNPROTECTED_PROBE};")
+    return checks
+
+
+def _check_default_deny_on_the_real_tables() -> list[Check]:
+    """An unbound read lane sees nothing, asked of the tables themselves.
+
+    Read-only and it costs one query, so it runs against whatever the account
+    actually holds rather than against a fixture. This is issue #43's second
+    acceptance criterion in the place it matters: the fixture below proves the
+    policy expression denies an unbound session, and this proves the expression
+    is the one attached to `orders`.
+
+    ``persona_fixtures`` is excluded and is checked the other way round in
+    :func:`_check_the_roster_inversion`: its policy is open while nothing is
+    bound, which is the single deliberate exception in the mechanism.
+    """
+    guarded = [
+        table
+        for table in schema.visitor_scoped()
+        if table.policy == schema.ISOLATION_POLICY
+    ]
+    counts = "\nUNION ALL ".join(
+        f"SELECT '{table.qualified()}' AS t, COUNT(*) AS n FROM {table.qualified()}"
+        for table in guarded
+    )
+    try:
+        rows = snow.query(f"{_session('CHIP_CHAT_READ')}\n{counts};")[-1]
+    except snow.SnowError as error:
+        return [
+            Check(
+                "#43",
+                "an unbound read lane sees no rows of any visitor-scoped table",
+                passed=False,
+                detail=f"the query did not run: {_refusal_line(str(error))}",
+            )
+        ]
+    leaking = [str(row["T"]) for row in rows if int(row["N"]) != 0]
+    return [
+        Check(
+            "#43",
+            "an unbound read lane sees no rows of any visitor-scoped table",
+            passed=len(rows) == len(guarded) and not leaking,
+            detail=(
+                f"{len(guarded)} tables, all of them zero rows with "
+                f"{schema.SESSION_VARIABLE} unset"
+                if len(rows) == len(guarded) and not leaking
+                else f"LEAK: {', '.join(leaking)} returned rows to a session "
+                "that had bound no visitor. This is the failure that turns a "
+                "connection the pool forgot to clear into a disclosure"
+            ),
+        )
+    ]
+
+
+def _check_the_roster_inversion() -> list[Check]:
+    """The one open policy is open only while nothing is bound.
+
+    ``persona_fixtures`` is the roster the entry flow chooses a visitor's
+    synthetic customer from, so it is read before any visitor exists. Two
+    checks, and they are the two halves of the argument for inverting it rather
+    than leaving the table unprotected: the roster is readable when nothing is
+    bound, and it is *not* readable across visitors once something is.
+    """
+    roster = schema.table("persona_fixtures").qualified()
+    checks: list[Check] = []
+
+    try:
+        theirs = snow.query(
+            f"{_preamble(account.ADMIN_ROLE, account.SERVING_WAREHOUSE)}\n"
+            f"SELECT COUNT(*) AS n FROM {roster};"
+        )[-1]
+        expected = int(next(iter(theirs[0].values()))) if theirs else 0
+        mine = snow.query(
+            f"{_session('CHIP_CHAT_READ')}\nSELECT COUNT(*) AS n FROM {roster};"
+        )[-1]
+        found = int(next(iter(mine[0].values()))) if mine else 0
+    except snow.SnowError as error:
+        checks.append(
+            Check(
+                "#43",
+                "the roster is readable by a session that has bound nobody",
+                passed=False,
+                detail=f"the query did not run: {_refusal_line(str(error))}",
+            )
+        )
+    else:
+        checks.append(
+            Check(
+                "#43",
+                "the roster is readable by a session that has bound nobody",
+                passed=found == expected,
+                detail=(
+                    f"{found} fixtures, the same number the owner sees. Entry "
+                    "picks a visitor's customer from this before there is a "
+                    "visitor to bind"
+                    if found == expected
+                    else f"the read lane sees {found} of {expected} fixtures. "
+                    "Entry has no roster to choose from, and the opening "
+                    "message #67 needs cannot be built"
+                ),
+            )
+        )
+
+    ran, seen = _visitors_seen(
+        "CHIP_CHAT_READ", {schema.SESSION_VARIABLE: NOBODY}, roster
+    )
+    checks.append(
+        Check(
+            "#43",
+            "a bound session sees no other visitor's fixture",
+            passed=ran and not seen,
+            detail=(
+                f"bound to {NOBODY}, which owns no fixture, and the roster "
+                "returned nothing"
+                if ran and not seen
+                else f"LEAK: {seen}"
+                if ran
+                else f"the query did not run: {seen}"
+            ),
+        )
+    )
+    return checks
+
+
+def _check_isolation() -> list[Check]:
+    """Two visitors, one table, the real policy. Issue #43's first three criteria.
+
+    The fixture is a throwaway table carrying the policy
+    `sql/10_policies.sql` attached to `orders`, which is what makes this a test
+    of the expression rather than of a copy of it. Every check runs as a lane
+    role with ``USE SECONDARY ROLES NONE``, so nothing an operator's own
+    privileges could do is what let a row through.
+    """
+    checks: list[Check] = []
+
+    for visitor, other in ((MINE, THEIRS), (THEIRS, MINE)):
+        ran, seen = _visitors_seen(
+            "CHIP_CHAT_READ", {schema.SESSION_VARIABLE: visitor}, ISOLATION_PROBE
+        )
+        correct = ran and seen == visitor
+        checks.append(
+            Check(
+                "#43",
+                f"a session bound to {visitor} sees its own row and only its own",
+                passed=correct,
+                detail=(
+                    f"returned {visitor} and nothing else"
+                    if correct
+                    else f"LEAK: {other} came back too:\n      {seen}"
+                    if other in seen
+                    else f"returned {seen or 'nothing'}, expected {visitor}"
+                ),
+            )
+        )
+
+    # The over-broad query the account lane will genuinely generate. SELECT *
+    # is not a query anybody has to be tricked into writing -- it is what a
+    # text-to-SQL system produces for "show me my orders" often enough.
+    ran, seen = _visitors_seen(
+        "CHIP_CHAT_READ",
+        {schema.SESSION_VARIABLE: MINE},
+        f"(SELECT * FROM {ISOLATION_PROBE}) AS unfiltered",
+    )
+    checks.append(
+        Check(
+            "#43",
+            "SELECT * returns only the bound visitor's rows",
+            passed=ran and seen == MINE,
+            detail=(
+                "a query with no WHERE clause came back filtered"
+                if ran and seen == MINE
+                else f"LEAK: {seen}"
+            ),
+        )
+    )
+
+    ran, seen = _visitors_seen("CHIP_CHAT_READ", None, ISOLATION_PROBE)
+    checks.append(
+        Check(
+            "#43",
+            f"an unset {schema.SESSION_VARIABLE} returns zero rows, not every row",
+            passed=ran and not seen,
+            detail=(
+                "nothing came back"
+                if ran and not seen
+                else f"LEAK: an unbound session read {seen}. A policy that "
+                "opens when the variable is missing is worse than no policy, "
+                "because the pool clears that variable on every checkin"
+            ),
+        )
+    )
+
+    # The maintenance escape, from the wrong side. A lane role that sets
+    # ALL_VISITORS must get exactly what it got without it: nothing.
+    ran, seen = _visitors_seen(
+        "CHIP_CHAT_READ", {schema.MAINTENANCE_VARIABLE: "yes"}, ISOLATION_PROBE
+    )
+    checks.append(
+        Check(
+            "#43",
+            "a lane role cannot reach the escape by setting "
+            f"{schema.MAINTENANCE_VARIABLE}",
+            passed=ran and not seen,
+            detail=(
+                "the variable is inert without the owner role"
+                if ran and not seen
+                else f"LEAK: {seen}. The escape is reachable by anything that "
+                "can run SET, which includes Cortex Analyst"
+            ),
+        )
+    )
+
+    # And from the right side, so that the check above is not vacuous. If the
+    # escape does not work, `make snowflake-load-sample` reports zero rows for
+    # every visitor-scoped table it has just filled.
+    ran, seen = _visitors_seen(
+        account.ADMIN_ROLE, {schema.MAINTENANCE_VARIABLE: "yes"}, ISOLATION_PROBE
+    )
+    both = ran and MINE in seen and THEIRS in seen
+    checks.append(
+        Check(
+            "#43",
+            f"the owner role with {schema.MAINTENANCE_VARIABLE} set reads every visitor",
+            passed=both,
+            detail=(
+                "both visitors, which is what a load count and #47's nightly "
+                "reset need and what makes the check above mean something"
+                if both
+                else f"returned {seen or 'nothing'}. Every cross-visitor "
+                "maintenance query in this repository now returns zero rows"
+            ),
+        )
+    )
+
+    # The ops API is not exempt. #41.3 makes the same point against a throwaway
+    # policy, to test the role; this makes it against the real one.
+    ran, seen = _visitors_seen(
+        "CHIP_CHAT_WRITE", {schema.SESSION_VARIABLE: MINE}, ISOLATION_PROBE
+    )
+    checks.append(
+        Check(
+            "#43",
+            "the write role is bound by the real policy exactly as the read role is",
+            passed=ran and seen == MINE,
+            detail=(
+                f"the ops API's role saw {MINE} and not {THEIRS}"
+                if ran and seen == MINE
+                else f"saw {seen or 'nothing'}, expected {MINE}"
+            ),
+        )
+    )
+    return checks
+
+
+def _build_isolation_fixture() -> None:
+    """Create the two-visitor probe and attach the real policy to it.
+
+    Raises:
+        snow.SnowError: If the fixture cannot be built, which usually means
+            `sql/10_policies.sql` has not been applied.
+    """
+    result = snow.run_statements(
+        f"USE ROLE {account.ADMIN_ROLE};\n"
+        f"USE WAREHOUSE {account.SERVING_WAREHOUSE};\n"
+        f"CREATE OR REPLACE TABLE {ISOLATION_PROBE} "
+        "(demo_id VARCHAR, note VARCHAR);\n"
+        f"INSERT INTO {ISOLATION_PROBE} VALUES "
+        f"('{MINE}', 'belongs to one visitor'), "
+        f"('{THEIRS}', 'belongs to another');\n"
+        f"ALTER TABLE {ISOLATION_PROBE} ADD ROW ACCESS POLICY {ISOLATION_POLICY} "
+        "ON (demo_id);"
+    )
+    if not result.ok:
+        raise snow.SnowError(
+            "could not build #43's isolation fixture -- has `make snowflake-apply` "
+            "run since sql/10_policies.sql landed?",
+            result.output,
+        )
+
+
+def _drop_isolation_fixture() -> None:
+    """Remove the probe. The policy itself is the account's and stays."""
+    snow.run_statements(
+        f"USE ROLE {account.ADMIN_ROLE};\n"
+        f"DROP TABLE IF EXISTS {ISOLATION_PROBE};\n"
+        f"DROP TABLE IF EXISTS {UNPROTECTED_PROBE};"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1175,12 +1699,20 @@ def run(*, watch_suspend: bool = True) -> list[Check]:
             suspend in 63".
     """
     checks = _check_warehouse_settings()
-    # Before the fixture, deliberately: the probe table lives in ACCOUNTS, and
-    # "nothing is in these schemas that snowflake/sql did not create" would
-    # report the probe as the thing it is looking for.
+    # Before either fixture, deliberately: both probe tables live in ACCOUNTS,
+    # and "nothing is in these schemas that snowflake/sql did not create" would
+    # report a probe as the thing it is looking for.
     checks += _check_schema()
     checks += _check_demo_id_audit()
+    checks += _check_policy_coverage()
+    checks += _check_default_deny_on_the_real_tables()
+    checks += _check_the_roster_inversion()
     checks += _check_the_serving_joins_answer()
+    _build_isolation_fixture()
+    try:
+        checks += _check_isolation()
+    finally:
+        _drop_isolation_fixture()
     _build_fixture()
     try:
         checks += _check_read_role()
@@ -1202,7 +1734,9 @@ def main(argv: list[str] | None = None) -> int:
     """Entry point. Returns a process exit status."""
     parser = argparse.ArgumentParser(
         prog="python -m chip_chat.snowflake.verify",
-        description="Check the live Snowflake account against issues #41 and #88.",
+        description=(
+            "Check the live Snowflake account against issues #41, #42, #43 and #88."
+        ),
     )
     parser.add_argument(
         "--no-watch",
