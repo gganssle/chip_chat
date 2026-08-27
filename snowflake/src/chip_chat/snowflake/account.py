@@ -37,14 +37,18 @@ from typing import Final, Literal
 
 __all__ = [
     "ADMIN_ROLE",
+    "ALL_SCHEMAS",
     "AUTO_SUSPEND_SECONDS",
     "DATABASE",
     "GRANTS",
     "LANE_ROLES",
     "MONITORS",
+    "PUBLISHED_ACCOUNT_TABLES",
     "PUBLISH_WAREHOUSE",
     "SCHEMAS",
     "SERVING_WAREHOUSE",
+    "STAGING_ACCESS",
+    "STAGING_SCHEMA",
     "TRIAL_MONITOR",
     "USERS",
     "WAREHOUSES",
@@ -54,7 +58,9 @@ __all__ = [
     "SchemaName",
     "ServiceUser",
     "Warehouse",
+    "access",
     "may_write",
+    "may_write_table",
     "readable_by",
     "schema",
     "table",
@@ -63,7 +69,7 @@ __all__ = [
 DATABASE: Final = "CHIP_CHAT"
 """The one database. `snowflake/sql/02_database.sql` creates it."""
 
-SchemaName = Literal["CATALOGUE", "ACCOUNTS", "MARTS"]
+SchemaName = Literal["CATALOGUE", "ACCOUNTS", "MARTS", "STAGING"]
 
 SCHEMAS: Final[tuple[SchemaName, ...]] = ("CATALOGUE", "ACCOUNTS", "MARTS")
 """The three populations that must not blur.
@@ -73,6 +79,54 @@ cited. ``ACCOUNTS`` is synthetic and visitor-scoped -- every table in it carries
 ``demo_id``, which is what the row access policies in #43 attach to. ``MARTS``
 is derived: computed overnight in the lakehouse and published in (#39), read by
 the personalization lane and written by nobody else.
+
+:data:`STAGING_SCHEMA` is deliberately not one of them. These three are the
+lanes a conversation reads; that one is a loading dock, and every check built
+over this tuple -- the grants table, the schema audit, `verify`'s
+INFORMATION_SCHEMA predicate -- is about the lanes.
+"""
+
+STAGING_SCHEMA: Final = "STAGING"
+"""The fourth schema. Not a population: the loading dock #39 writes into.
+
+The nightly publish lands each incoming generation here and then makes it live
+with one ``INSERT OVERWRITE`` into the serving table. It cannot land it beside
+the target, because :data:`GRANTS` gives ``CHIP_CHAT_READ`` ``SELECT ON FUTURE
+TABLES`` in all three lanes -- so an ``orders_incoming`` in ACCOUNTS would be a
+complete unscoped copy of the population, readable by the identity the agent
+runs as and covered by no row access policy, since #43 attaches policies to
+tables by name.
+
+So this schema is granted to ``CHIP_CHAT_PUBLISH`` and to nobody else, holds no
+declared table, and is empty between runs: a staging table is dropped when its
+swap succeeds, which makes one that is still there the evidence of a run that
+stopped. :data:`STAGING_ACCESS` is the whole of its security boundary and
+`databricks/src/chip_chat/databricks/publish.py` is the job that uses it.
+"""
+
+ALL_SCHEMAS: Final[tuple[SchemaName, ...]] = (*SCHEMAS, STAGING_SCHEMA)
+"""Every schema ``sql/02_database.sql`` creates, lanes first.
+
+What an existence check iterates. :data:`SCHEMAS` is what a check about the
+serving boundary iterates, and the difference between the two tuples is the
+distinction the paragraph above draws.
+"""
+
+PUBLISHED_ACCOUNT_TABLES: Final = ("orders", "order_items", "loyalty_ledger")
+"""The account tables the nightly publish is trusted with, and no others.
+
+These are exactly ``chip_chat.snowflake.schema.MART_INPUTS`` -- the tables the
+gold marts are computed from -- and `test_account_layout.py` asserts the two
+lists are one list. The publisher writes what the marts were derived from and
+nothing else.
+
+The three that are missing are the point. ``demo_visitors`` holds all three
+columns a visitor may edit and is the one account table a visitor writes to, so
+a nightly overwrite would delete every edit made that day; RFC-001 §04 also
+rests its answer to PRD Q2 on the publisher physically not being able to read
+it. ``personas`` and ``persona_fixtures`` are reference rows the generator emits
+once. All three reach Snowflake through ``chip_chat.snowflake.load``, run by an
+operator as :data:`ADMIN_ROLE`.
 """
 
 AUTO_SUSPEND_SECONDS: Final = 60
@@ -96,12 +150,24 @@ class Access:
     """What one lane role may do to one schema.
 
     Attributes:
-        read: Whether the role may ``SELECT`` from the schema at all.
-        write: Whether the role may change rows in it.
+        read: Whether the role may ``SELECT`` from the schema AT LARGE -- every
+            table in it, including the ones a later issue adds.
+        write: Whether the role may change rows in it at large.
+        tables: Individual tables the role may read and write where the schema
+            itself is closed to it. Empty for every access decided at the schema
+            level, which is all of them but one. A named exception rather than a
+            widened schema is the difference between "the publisher writes the
+            three tables the marts came from" and "the publisher can see the
+            demo accounts", and only the second of those is a hole.
+        why: Why the exception exists. Empty where there is none, and required
+            where there is: a table-level grant with no argument beside it is a
+            boundary somebody moved and nobody has to defend.
     """
 
     read: bool
     write: bool
+    tables: tuple[str, ...] = ()
+    why: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,14 +287,45 @@ GRANTS: Final[dict[str, dict[SchemaName, Access]]] = {
     },
     "CHIP_CHAT_PUBLISH": {
         "CATALOGUE": Access(read=True, write=True),
-        "ACCOUNTS": Access(read=False, write=False),
+        "ACCOUNTS": Access(
+            read=False,
+            write=False,
+            tables=PUBLISHED_ACCOUNT_TABLES,
+            why=(
+                "#39 publishes the synthetic account tables on the same "
+                "schedule as the marts, and these three are the ones the marts "
+                "are computed from. Granted table by table so that the "
+                "publisher still cannot see demo_visitors, where every "
+                "visitor-editable column lives -- which is the containment "
+                "RFC-001 §04 rests its answer to PRD Q2 on, and which a "
+                "schema-level grant would have thrown away to move three tables"
+            ),
+        ),
         "MARTS": Access(read=True, write=True),
     },
 }
 """The whole security boundary as a table. `snowflake/sql/03_grants.sql` is this
 table spelled as privileges, and `test_account_layout.py` checks that it still
 is -- in particular that no ``GRANT`` in that file gives a mutating privilege to
-a role this table says may not write."""
+a role this table says may not write.
+
+Read the ACCOUNTS row of CHIP_CHAT_PUBLISH as the exception it is. The schema is
+closed to the publisher and three tables in it are open, by name. Everything
+about that arrangement is in :attr:`Access.tables` and its ``why``.
+"""
+
+STAGING_ACCESS: Final[dict[str, Access]] = {
+    "CHIP_CHAT_READ": Access(read=False, write=False),
+    "CHIP_CHAT_WRITE": Access(read=False, write=False),
+    "CHIP_CHAT_PUBLISH": Access(read=True, write=True),
+}
+"""Who may reach :data:`STAGING_SCHEMA`. One role, and the other two by name.
+
+Spelled as a full row rather than as a single grant, because the value of this
+declaration is the two ``False`` entries: an incoming generation is a complete
+unscoped copy of a published table, and the whole reason the schema exists is
+that neither of the lanes a conversation runs on can read one.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,6 +383,55 @@ def table(schema_name: SchemaName, name: str) -> str:
     return f"{schema(schema_name)}.{name}"
 
 
+def access(role: str, schema_name: SchemaName) -> Access:
+    """Return what ``role`` may do to ``schema_name``, lanes and staging alike.
+
+    :data:`GRANTS` answers for the three serving schemas and
+    :data:`STAGING_ACCESS` for the fourth. This is the one lookup that covers
+    both, so a check over every schema does not have to know which table it is
+    reading from.
+
+    Args:
+        role: One of :data:`LANE_ROLES`.
+        schema_name: One of :data:`ALL_SCHEMAS`.
+
+    Returns:
+        The access.
+
+    Raises:
+        KeyError: If ``role`` is not a lane role, or ``schema_name`` is not a
+            schema this account has.
+    """
+    if schema_name == STAGING_SCHEMA:
+        return STAGING_ACCESS[role]
+    return GRANTS[role][schema_name]
+
+
+def may_write_table(role: str, schema_name: SchemaName, name: str) -> bool:
+    """Whether ``role`` may change the rows of one named table.
+
+    Schema-level access answers for almost everything; this is what answers when
+    a schema is closed to a role and a table in it is not. See
+    :attr:`Access.tables`.
+
+    Args:
+        role: One of :data:`LANE_ROLES`.
+        schema_name: One of :data:`ALL_SCHEMAS`.
+        name: An unqualified table name, in any case.
+
+    Returns:
+        True if the role holds mutating privileges on that table, whether it got
+        them from the schema or by name.
+
+    Raises:
+        KeyError: If ``role`` or ``schema_name`` is unknown.
+    """
+    granted = access(role, schema_name)
+    if granted.write:
+        return True
+    return name.upper() in {table_name.upper() for table_name in granted.tables}
+
+
 def may_write(role: str, schema_name: SchemaName) -> bool:
     """Whether ``role`` may change rows in ``schema_name``.
 
@@ -294,19 +440,25 @@ def may_write(role: str, schema_name: SchemaName) -> bool:
         schema_name: One of :data:`SCHEMAS`.
 
     Returns:
-        True if the role holds mutating privileges there.
+        True if the role holds mutating privileges on the schema AT LARGE. False
+        for a role that may write named tables in it and nothing else --
+        :func:`may_write_table` is the question to ask about one of those.
 
     Raises:
         KeyError: If ``role`` is not a lane role. :data:`ADMIN_ROLE` is not one,
             and asking about it is a question about ownership rather than about
             grants.
     """
-    return GRANTS[role][schema_name].write
+    return access(role, schema_name).write
 
 
 def readable_by(role: str) -> Iterator[SchemaName]:
-    """Yield the schemas ``role`` may ``SELECT`` from, in :data:`SCHEMAS` order."""
-    access = GRANTS[role]
-    for name in SCHEMAS:
-        if access[name].read:
+    """Yield the schemas ``role`` may ``SELECT`` from, in :data:`ALL_SCHEMAS` order.
+
+    At large. A schema the role reaches only through a named table is not one it
+    may ``SELECT`` from, and saying otherwise here would make the publisher look
+    like it can read the demo accounts.
+    """
+    for name in ALL_SCHEMAS:
+        if access(role, name).read:
             yield name

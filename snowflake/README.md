@@ -14,7 +14,7 @@ almost every design choice here is about idleness rather than about speed.
 ```
 sql/00_roles.sql          four roles, and why they are siblings not a ladder
 sql/01_warehouses.sql     two X-Small warehouses, both suspending after 60s
-sql/02_database.sql       CHIP_CHAT, three managed-access schemas, PUBLIC dropped
+sql/02_database.sql       CHIP_CHAT, four managed-access schemas, PUBLIC dropped
 sql/03_grants.sql         the security boundary. Read this one first
 sql/04_users.sql          three service users, no credentials
 sql/05_resource_monitors  a daily credit ceiling per warehouse, and why they differ
@@ -60,16 +60,31 @@ argument, and `make snowflake-verify` fails by name while it is unset.
 
 ## The boundary, in one table
 
-|  | `CATALOGUE` | `ACCOUNTS` | `MARTS` | warehouse |
-| --- | --- | --- | --- | --- |
-| `CHIP_CHAT_READ` | select | select | select | serving |
-| `CHIP_CHAT_WRITE` | select | select + DML | — | serving |
-| `CHIP_CHAT_PUBLISH` | select + DML | — | select + DML | publish |
+|  | `CATALOGUE` | `ACCOUNTS` | `MARTS` | `STAGING` | warehouse |
+| --- | --- | --- | --- | --- | --- |
+| `CHIP_CHAT_READ` | select | select | select | — | serving |
+| `CHIP_CHAT_WRITE` | select | select + DML | — | — | serving |
+| `CHIP_CHAT_PUBLISH` | select + DML | three tables | select + DML | all | publish |
 
 That table is `account.GRANTS`, `sql/03_grants.sql` is the same table spelled as
 privileges, and `tests/test_account_layout.py` fails in `make ci` if a `GRANT`
 appears that the table does not permit. Widening the ops API's reach to the
 personalization marts is a failing test, not a line nobody re-reads.
+
+**The one exception in that grid is `CHIP_CHAT_PUBLISH` on `ACCOUNTS`.** [#39]
+publishes the synthetic account tables on the same schedule as the marts, so the
+publisher holds `orders`, `order_items` and `loyalty_ledger` — granted by name,
+which is `schema.MART_INPUTS`, the tables the marts are computed from — and
+nothing at all on `demo_visitors`, where every visitor-editable column lives.
+`Access.tables` is where that exception is declared and where its argument is
+written down; a table-level grant the access table does not name is a failing
+test.
+
+`STAGING` is the loading dock the nightly publish stages a generation in before
+one `INSERT OVERWRITE` makes it live. It holds no declared table, is empty
+between runs, and is the one schema in the database that no identity a
+conversation touches can read.
+[docs/nightly-publish.md](../docs/nightly-publish.md) is the write-up.
 
 ## One column, and the view that will not let it slip
 
@@ -161,4 +176,5 @@ micro-partition holds 16 MB), and six more findings of the same kind — includi
 that `INFORMATION_SCHEMA` is filtered by the querying role *even through a
 view*, so an audit run as the wrong role passes by not looking.
 
+[#39]: https://github.com/gganssle/chip_chat/issues/39
 [#43]: https://github.com/gganssle/chip_chat/issues/43

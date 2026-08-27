@@ -33,10 +33,10 @@ CHIP_CHAT_SERVING_MONITOR   4 credits/day  notify 50/80/100 · suspend 300/400
 CHIP_CHAT_PUBLISH_MONITOR   2 credits/day  notify 80        · suspend 100/120
 CHIP_CHAT_TRIAL_MONITOR     the whole trial, on the ACCOUNT — opt-in, no default
 
-                     CATALOGUE      ACCOUNTS       MARTS       warehouse
-  CHIP_CHAT_READ     select         select         select      serving
-  CHIP_CHAT_WRITE    select         select + DML   —           serving
-  CHIP_CHAT_PUBLISH  select + DML   —              select+DML  publish
+                     CATALOGUE      ACCOUNTS       MARTS       STAGING  warehouse
+  CHIP_CHAT_READ     select         select         select      —        serving
+  CHIP_CHAT_WRITE    select         select + DML   —           —        serving
+  CHIP_CHAT_PUBLISH  select + DML   3 tables       select+DML  all      publish
 
   CHIP_CHAT_APP        → READ       the chat app and the Foundry agent
   CHIP_CHAT_OPS        → WRITE      the Azure Functions ops API
@@ -48,13 +48,21 @@ One service user per role, one role per user, and no user holds
 touches from owning a table — and an owner can drop what it owns, which would
 take [#43]'s row access policy with it.
 
-The three schemas are the real/synthetic boundary RFC-001 §04 insists on, made
-grantable. A table-name prefix could express the same distinction to a reader
-and none of it to Snowflake; `CHIP_CHAT_WRITE` having no privilege of any kind on
-`MARTS` is not a convention, it is four `GRANT` statements that were never
-written.
+The three lane schemas are the real/synthetic boundary RFC-001 §04 insists on,
+made grantable. A table-name prefix could express the same distinction to a
+reader and none of it to Snowflake; `CHIP_CHAT_WRITE` having no privilege of any
+kind on `MARTS` is not a convention, it is four `GRANT` statements that were
+never written.
 
-All three schemas are **managed access** schemas. In an ordinary schema the owner
+`STAGING` is a fourth schema and not a fourth population. [#39]'s nightly publish
+lands each incoming generation there and then makes it live with one
+`INSERT OVERWRITE`; it cannot land beside its target, because `CHIP_CHAT_READ`
+holds `SELECT ON FUTURE TABLES` in all three lanes and an incoming copy of
+`orders` would therefore be readable, unscoped, by the identity the agent runs
+as. It holds no declared table and is empty between runs.
+[nightly-publish.md](nightly-publish.md) has the argument in full.
+
+All four schemas are **managed access** schemas. In an ordinary schema the owner
 of an object may grant access to it. In a managed-access schema only the schema
 owner may, and object owners cannot — so when [#42] creates tables and [#46]
 creates procedures here, the ability to widen access to them stays with
@@ -73,12 +81,20 @@ line needs a price and a price lives on a restaurant
 personalization marts. A ladder cannot express that; three disjoint grants can.
 
 `CHIP_CHAT_PUBLISH` is the same argument from the other end. It writes the
-catalogue and the marts and cannot see `ACCOUNTS` at all — which is the same
-containment RFC-001 §04 describes when it says no visitor-editable field is an
-input to a mart, expressed as a privilege rather than as a code review. A
-reviewer confirming that property no longer has to read the medallion pipeline;
-they can observe that the identity which runs it cannot select from
-`demo_visitors`.
+catalogue and the marts, and reaches `ACCOUNTS` through exactly three tables —
+`orders`, `order_items`, `loyalty_ledger` — granted by name, with no privilege of
+any kind on the schema beyond the `USAGE` needed to reach into it. Those three
+are `schema.MART_INPUTS`, the tables the marts are computed from, which [#39]
+publishes on the same schedule as the marts themselves.
+
+The three it does **not** get are the containment RFC-001 §04 describes when it
+says no visitor-editable field is an input to a mart, expressed as a privilege
+rather than as a code review. A reviewer confirming that property still does not
+have to read the medallion pipeline; they can observe that the identity which
+runs it cannot select from `demo_visitors` — where all three editable columns
+live, and which is also the one account table a visitor writes to, so a nightly
+overwrite would delete their edits. `personas` and `persona_fixtures` are
+withheld for the duller reason that nothing publishes them.
 
 All three are granted to `CHIP_CHAT_ADMIN`, and `CHIP_CHAT_ADMIN` to `SYSADMIN`,
 so an operator can assume any lane's role to see what it can do. That is an

@@ -311,13 +311,17 @@ match that never matches.
 - **No semantic view.** [#45]. The comments on every table and every column are
   its input, which is why they are checked as strictly as the columns are.
 - **No nightly publish.** [#39] owns landing the marts and the catalogue out of
-  Databricks, atomically, with an alert on a failed run.
-  `chip_chat.snowflake.load` is the developer path: JSONL in a directory, one
-  transaction per table, `TRUNCATE` and `COPY` together so a reader sees one
-  generation or the other and never half of either.
-- **No marts data.** The four mart tables exist and are empty. They are filled
-  by [#39] from the lakehouse, and nothing in this repository computes them
-  anywhere else.
+  Databricks, atomically, with an alert on a failed run; it has since landed, in
+  `databricks/` and `CHIP_CHAT.STAGING`, and
+  [nightly-publish.md](nightly-publish.md) is its write-up. It also added the one
+  table-level grant in `03_grants.sql`, because it publishes `orders`,
+  `order_items` and `loyalty_ledger` too. `chip_chat.snowflake.load` remains the
+  developer path: JSONL in a directory, one transaction per table, `TRUNCATE` and
+  `COPY` together so a reader sees one generation or the other and never half of
+  either — and it is still the only way `demo_visitors`, `personas` and
+  `persona_fixtures` reach the account, because the publisher cannot write them.
+- **No marts data.** The four mart tables exist and are empty until [#39] runs.
+  Nothing in this repository computes them anywhere else.
 - **No `item_allergens`.** Section 3.
 - **No clustering keys.** Section 5, with the numbers.
 

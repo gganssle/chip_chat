@@ -784,3 +784,121 @@ variable "databricks_recommender_timeout_seconds" {
   type        = number
   default     = 3600
 }
+
+# ---------------------------------------------------------------------------
+# The nightly publish (gh-39). Databricks to Snowflake.
+#
+# Snowflake is not managed by this Terraform at all -- `snowflake/sql/` builds
+# the account and `make snowflake-apply` runs it, for the reason
+# `snowflake/README.md` gives. What is here is the two facts the Databricks job
+# needs in order to find it, and neither of them is a secret: an account URL and
+# a user name. The private key lives in a Databricks secret scope that this
+# Terraform creates empty and never writes to.
+# ---------------------------------------------------------------------------
+
+variable "snowflake_account_url" {
+  description = <<-EOT
+    The Snowflake account host the nightly publish connects to, e.g.
+    hq72718.us-east-2.aws.snowflakecomputing.com. No scheme and no trailing
+    slash -- the connector wants a host.
+
+    Empty means the publish job is not created at all, which is the shipped
+    default: a job pointed at no account would fail on its first scheduled run
+    and email somebody about a system that was never stood up.
+
+    AWS us-east-2, not Azure East US 2. The region was fixed when the trial was
+    created and cannot be changed; GitHub #104 has the decision and its costs.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "snowflake_publisher_user" {
+  description = <<-EOT
+    The Snowflake user the publish authenticates as. `snowflake/sql/04_users.sql`
+    creates it with TYPE = SERVICE and grants it CHIP_CHAT_PUBLISH and nothing
+    else, so this is a name rather than a choice -- it is here so that a second
+    account, or a rebuild after the trial expires, needs no code change.
+  EOT
+  type        = string
+  default     = "CHIP_CHAT_PUBLISHER"
+}
+
+variable "databricks_publish_secret_scope" {
+  description = <<-EOT
+    The Databricks secret scope holding the publisher's private key. Created
+    empty by this Terraform and filled by an operator:
+
+      databricks secrets put-secret <scope> publisher-private-key \
+        --string-value "$(cat ~/.snowflake/keys/chip_chat_publisher.p8)"
+
+    No private key enters Terraform state, which is the same argument
+    `snowflake/sql/04_users.sql` makes about RSA_PUBLIC_KEY never appearing in
+    the checked-in SQL. `chip_chat.databricks.publish.SECRET_SCOPE` is the
+    matching default on the notebook side.
+  EOT
+  type        = string
+  default     = "chip-chat-snowflake"
+}
+
+variable "databricks_publish_schedule_enabled" {
+  description = <<-EOT
+    Whether the nightly publish's schedule is RUNNING. False leaves the schedule
+    declared and PAUSED, which is the shipped default.
+
+    Issue #39 asks for a nightly job, and the rest of this directory says nothing
+    in the workspace should be able to start spending on its own. Both hold: the
+    cron is declared in Terraform where a person can read and review it, and it
+    does not fire until this is set.
+
+    Turn it on once the medallion is loaded and the marts are current. A publish
+    against an empty silver layer refuses rather than emptying the serving layer
+    -- `snowflake_publish.py` checks each source table for rows before it writes
+    anything -- but a job that fails every night at seven is an alert that stops
+    meaning anything.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "databricks_publish_cron" {
+  description = <<-EOT
+    When the publish runs, as a Quartz expression in UTC. Seconds first, and a
+    `?` in whichever of day-of-month and day-of-week is not being used.
+
+    07:00 daily by default: an hour after #38's weekly re-harvest starts and two
+    before the recommender's Monday retrain, so a Monday runs harvest, publish,
+    retrain in that order rather than publishing a catalogue the marts were not
+    computed against.
+  EOT
+  type        = string
+  default     = "0 0 7 * * ?"
+}
+
+variable "databricks_publish_alert_email" {
+  description = <<-EOT
+    Who hears about a failed publish. RFC-001 §10 requires the alert and issue
+    #39 requires it in that ticket rather than as a follow-up.
+
+    Defaults to the same address the budget alerts go to, because the failure
+    this is about -- personalization quietly going stale -- is one nobody
+    watching a dashboard would notice, and a second address to configure is a
+    second address to leave empty.
+  EOT
+  type        = string
+  default     = "grahamganssle@gmail.com"
+}
+
+variable "databricks_publish_timeout_seconds" {
+  description = <<-EOT
+    Ceiling on one publish. Eleven tables, the largest of them around fifty
+    thousand order lines, each staged and swapped over a JDBC connection.
+
+    Shorter than the recommender's, which fits two model refits, and longer than
+    the smoke job: most of this run is a cluster start and the rest is network.
+    A run that has not finished by now is not going to, and the useful thing is
+    for it to stop billing and send the mail.
+  EOT
+  type        = number
+  default     = 1800
+}
