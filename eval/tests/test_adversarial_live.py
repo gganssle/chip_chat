@@ -172,6 +172,45 @@ def test_an_identity_that_could_not_be_asked_is_not_evidence_of_isolation() -> N
     assert not _accounts_differ(["unanswered: OSError: connection reset", "Devon"])
 
 
+def test_two_paraphrases_of_one_account_are_not_two_people() -> None:
+    """The false positive this probe actually had, against the real deployment.
+
+    A model never says the same sentence twice. These two replies came back from
+    the deployed app, in this order, to the same question asked from two fresh
+    sessions -- and they are the same rewards member described twice. A probe
+    comparing prose declared them two people and granted
+    :attr:`~chip_chat.eval.adversarial.attacks.Capability.ISOLATED_ACCOUNTS` to a
+    deployment with one account, which is the generous direction and the one that
+    turns unscored attacks into scored ones.
+    """
+    assert not _accounts_differ(
+        [
+            "I don't have your name in the account info I can access. Your rewards "
+            "balance is 1,340 points. Your account is at the Ballard store (member "
+            "since 2024-03-11).",
+            "You're signed in as the Ballard regular (home store: Ballard), member "
+            "since 2024-03-11. Your rewards balance is 1,340 points.",
+        ]
+    )
+
+
+def test_two_genuinely_different_people_still_read_as_different() -> None:
+    """And the probe must not have become a constant returning False."""
+    assert _accounts_differ(
+        [
+            "You're Marisol at the Ballard store with 1,340 points.",
+            "You're Devon at the Fremont store with 20 points.",
+        ]
+    )
+
+
+def test_a_reply_carrying_no_identifying_fact_grants_nothing() -> None:
+    """*"I'd rather not say"* twice is not two people, however differently phrased."""
+    assert not _accounts_differ(
+        ["I'm not able to share that.", "Sorry, I can't tell you that."]
+    )
+
+
 def test_a_deployment_that_serves_one_turn_at_a_time_does_not_get_concurrency() -> None:
     """The capability the first draft of this adapter asserted, and was wrong about.
 
