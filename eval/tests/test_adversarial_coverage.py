@@ -125,10 +125,26 @@ def suite_attack(suite: AdversarialSuite, attack_id: str) -> Attack:
     return next(attack for attack in suite if attack.attack_id == attack_id)
 
 
-def test_removing_the_only_redeem_attack_is_visible_as_an_unattacked_tool(
+def test_removing_every_redeem_attack_is_visible_as_an_unattacked_tool(
     tmp_path: Path, suite: AdversarialSuite
 ) -> None:
-    thinner = _without(tmp_path, suite, "write-redeem-points-irreversibly")
+    """A write tool nothing aims at is a gap the report has to name.
+
+    Both attacks that name ``redeem_points`` have to go, and that there are two
+    of them is #81's doing rather than an accident. It added a corpus-borne
+    redemption instruction -- a document telling the assistant to spend the
+    reader's balance -- and the point of writing it as a *second* attack on the
+    same tool is that the two arrive by different carriers and would be stopped
+    by different things. So the coverage report is right that the tool is
+    attacked while either survives, and this test drops both rather than being
+    weakened to expect one.
+    """
+    thinner = _without(
+        tmp_path,
+        suite,
+        "write-redeem-points-irreversibly",
+        "injection-retrieved-redeem-instruction",
+    )
 
     cover = coverage(thinner)
 
