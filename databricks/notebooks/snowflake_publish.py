@@ -82,13 +82,14 @@ if CATALOG != catalog.CATALOG:
 # COMMAND ----------
 
 session_timezone = spark.conf.get("spark.sql.session.timeZone")
-if session_timezone != publish.SPARK_TIMEZONE:
+if not publish.is_utc(session_timezone):
     raise AssertionError(
         f"spark.sql.session.timeZone is {session_timezone!r} and this publish "
-        f"requires {publish.SPARK_TIMEZONE!r}. Every timestamp in CHIP_CHAT is "
-        "UTC and carries no zone, and the silver tables underneath were parsed "
-        "against this setting too -- so this is a workspace to look at rather "
-        "than a value to override here."
+        f"requires {publish.SPARK_TIMEZONE!r}, spelled any of "
+        f"{publish.UTC_SPELLINGS}. Every timestamp in CHIP_CHAT is UTC and "
+        "carries no zone, and the silver tables underneath were parsed against "
+        "this setting too -- so this is a workspace to look at rather than a "
+        "value to override here."
     )
 
 PRIVATE_KEY = dbutils.secrets.get(scope=SCOPE, key=publish.PRIVATE_KEY_SECRET)

@@ -614,8 +614,37 @@ def test_the_notebook_checks_the_clock_before_it_moves_anything() -> None:
     """The UTC_TIMESTAMP transport is only correct while Spark renders UTC."""
     source = code(NOTEBOOK.read_text())
     assert "spark.sql.session.timeZone" in source
-    assert "publish.SPARK_TIMEZONE" in source
+    assert "publish.is_utc(session_timezone)" in source
     assert source.index("spark.sql.session.timeZone") < source.index("publish_one")
+
+
+def test_the_clock_check_accepts_the_name_the_workspace_uses() -> None:
+    """`dbw-chip-chat` reports `Etc/UTC`, and the first live publish died on it.
+
+    The guard compared the session's zone against `SPARK_TIMEZONE` as a string.
+    `Etc/UTC` is not a different clock, a different offset or a workspace to
+    look at -- it is the same zone under the name IANA gives it, with `UTC`
+    among the links pointing at it. Nothing was wrong, nothing could be
+    published, and the alert fired.
+    """
+    assert publish.is_utc("Etc/UTC")
+    assert publish.is_utc(publish.SPARK_TIMEZONE)
+    for name in publish.UTC_SPELLINGS:
+        assert publish.is_utc(name), name
+        assert publish.is_utc(name.casefold()), name
+        assert publish.is_utc(f"  {name} "), name
+
+
+def test_the_clock_check_still_refuses_a_zone_that_is_not_that_zone() -> None:
+    """Widening it to a spelling is not widening it to a clock.
+
+    `GMT` is the interesting exclusion: permanently zero-offset, and a
+    *different* IANA zone that happens to agree. A publish is not the place to
+    decide that two zones agreeing today is the same fact as one zone spelled
+    twice, and `UTC_SPELLINGS` says so.
+    """
+    for name in ("America/New_York", "Europe/London", "GMT", "Etc/GMT", "UTC+1", ""):
+        assert not publish.is_utc(name), name
 
 
 def test_the_notebook_refuses_to_publish_an_empty_source() -> None:

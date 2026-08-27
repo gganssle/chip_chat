@@ -151,6 +151,7 @@ __all__ = [
     "STAGING_SCHEMA",
     "TARGETS",
     "TRANSPORTS",
+    "UTC_SPELLINGS",
     "UTC_TIMESTAMP",
     "WAREHOUSE_CREDITS_PER_HOUR",
     "WAREHOUSE_MINIMUM_SECONDS",
@@ -158,6 +159,7 @@ __all__ = [
     "Target",
     "column_names",
     "drop_staging",
+    "is_utc",
     "options",
     "required_columns",
     "select",
@@ -205,12 +207,31 @@ PKCS#8 private key. Key-pair auth, because a ``TYPE = SERVICE`` user cannot use
 a password at all."""
 
 SPARK_TIMEZONE: Final = "UTC"
-"""What ``spark.sql.session.timeZone`` must be for a publish to run.
+"""How this repository spells the zone, and what the connector is handed.
 
 Asserted by the notebook rather than set by it. Databricks defaults to UTC, and
 a workspace where it is not is one where every timestamp already in silver was
 parsed against a different clock -- which is a thing to find out about rather
 than to quietly correct on the way past.
+"""
+
+UTC_SPELLINGS: Final = ("UTC", "Etc/UTC", "Etc/UCT", "UCT", "Universal", "Zulu", "Z")
+"""Every name for the zone :data:`SPARK_TIMEZONE` names, as :func:`is_utc` reads it.
+
+This exists because the first live publish failed on the assertion that used to
+compare the session's zone against ``SPARK_TIMEZONE`` as a string.
+`dbw-chip-chat` reports ``'Etc/UTC'``, which is not a different clock, a
+different offset or a workspace to look at -- it is the same zone under the name
+the IANA database gives it, with ``UTC`` among the links pointing at it. The
+check was written to catch a workspace running on New York time and it caught a
+spelling instead, which is the shape of a guard that fails safe in the wrong
+direction: nothing was wrong, nothing could be published, and the alert fired.
+
+The list is the ``Etc/UTC`` link set and stops there. ``GMT`` is permanently
+zero-offset too and is deliberately absent: it is a *different* IANA zone that
+happens to agree, and a publish is not the place to decide that two zones
+agreeing today is the same fact as one zone spelled twice. A workspace set to
+``GMT`` still fails this check, and the message says what to look at.
 """
 
 SPARK_TIMESTAMP_FORMAT: Final = "yyyy-MM-dd HH:mm:ss.SSSSSS"
@@ -730,6 +751,27 @@ def options(url: str, user: str, schema_name: str) -> dict[str, str]:
         # no timestamp depends on it having worked.
         "sfTimezone": SPARK_TIMEZONE,
     }
+
+
+def is_utc(zone: str) -> bool:
+    """Return whether ``zone`` names the zone :data:`SPARK_TIMEZONE` names.
+
+    The notebook's guard, as a function, so that the set of accepted spellings
+    is one list in one place and `make ci` can run the check the cluster runs.
+    :data:`UTC_SPELLINGS` argues for what is in the list and what is not.
+
+    Matched case-insensitively. Java's zone ids are case-sensitive and Spark
+    will not have produced ``'etc/utc'``, but a value typed into a cluster
+    configuration by hand might be, and rejecting a publish over the case of a
+    letter is the failure this function exists to stop happening twice.
+
+    Args:
+        zone: What ``spark.sql.session.timeZone`` reported.
+
+    Returns:
+        Whether a publish may proceed against it.
+    """
+    return zone.strip().casefold() in {name.casefold() for name in UTC_SPELLINGS}
 
 
 # --- What a run cost ----------------------------------------------------------
