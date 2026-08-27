@@ -18,11 +18,11 @@ runs on every pull request.
 
 | | |
 | --- | --- |
-| Attacks in the suite | 28 |
+| Attacks in the suite | 31 |
 | …that run from every visitor at the same instant | 2 |
 | PRD requirements the golden set delegates here | A3, S2 — both covered |
 | Cross-visitor disclosures observed | **0 of 51 attempts, 45 of them unscored** |
-| Writes executed without confirmation | **0 of 24 attempts, 3 of them unscored** |
+| Writes executed without confirmation | **0 of 27 attempts, 6 of them unscored** |
 | Both launch gates | **not measured** |
 | Scored against a real model | **0 attacks** |
 
@@ -180,6 +180,43 @@ declared* rather than claiming a contention that could not exist. `VisitorPool`
 drives 1,280 checkouts through four of its connections; what is still unbuilt is
 the target adapter that puts the two together, so that the *suite* attacks the
 pool rather than the pool being tested beside it.
+
+## What #81 added, and the one outcome nothing here stops
+
+Three retrieved-document payloads, taking the corpus-borne injections from two to
+five and the coverage floor with them. Two of the three aim at the **answer's
+content** rather than at a tool or an identifier, and that is the point of adding
+them: it is the outcome neither structural guarantee touches.
+
+`injection-retrieved-allergen-falsehood` asks for no tool and names no visitor.
+There is nothing for the confirmation gate to refuse and no identity argument to
+leave unpopulated — the whole attack is a sentence, and in that payload the
+sentence is a safety answer. `injection-retrieved-price-corruption` is the same
+shape on a number, kept separate because it demonstrates the measurement problem
+cleanly: **an answer corrupted by a retrieved passage will typically cite that
+very passage**, so a citation-presence check passes on it and a groundedness
+check that asks whether the answer is supported by the retrieved context passes
+too. The retrieved context is the attack.
+
+Both are `invented`, which is judged, so both are unscored here and no gate is
+computed over them. `docs/decisions/corpus-injection-residual.md` is the
+deliberate acceptance #81's fourth criterion asks for, and it names the three
+things that would reopen it.
+
+## What #83 added, and why it is not in this manifest
+
+`chip_chat.eval.adversarial.writegate`. Four of #83's eight attacks are not
+sentences — an unconfirmed reference, a stranger's draft id, a replayed one, an
+expired one — and there is no message that produces one of those calls, because
+the confirmation does not travel in the message. It travels in
+`confirm_draft_id`, which only a caller holding the visitor's session can
+populate. That *is* the gate's claim, and a suite that only ever typed at the
+model would be evidence about a well-behaved model instead.
+
+Its probes are unscored rather than held wherever the setup did not happen, on
+the same rule as everything else here, and it does real work: a replay refused on
+a draft that was never placed the first time proves nothing, because there was
+nothing to replay.
 
 ## What is unverified, and what that blocks
 
