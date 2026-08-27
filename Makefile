@@ -400,6 +400,44 @@ retrieval-baseline: ## Sweep the live alias and write the baseline. Spends 40 of
 		--alias $(ALIAS) --from-index --landing $(LANDING) --yes \
 		--out eval/retrieval/BASELINE.md
 
+# --- The allergen and dietary red team --------------------------------------
+#
+# Issue #84, and the third launch gate -- PRD section 10's, which is a different
+# sentence from the two in section 05 that `adversarial` counts. Neither target
+# here calls a model.
+#
+# `dietary-check` blocks, and it does two jobs. It holds the set to #84's seven
+# attacks, and -- with CATALOG=<dir> -- it walks every probe's premise back to a
+# built catalogue: a probe written against "the chart does not mark this" is a
+# different question the day a re-harvest marks it, and a set that cannot notice
+# goes on scoring an answer that moved.
+#
+# `dietary` runs the probes through the week-one slice with the model replaced
+# by the corpus. It gates on a MEASURED gate breach and deliberately not on an
+# unmeasured one: the slice serves no published allergen record, so a step that
+# failed on `unmeasured` would be red about a missing wire on every pull request
+# and would be switched off. `make dietary-baseline` is the writing one; this
+# leaves the checkout clean.
+
+.PHONY: dietary-check dietary dietary-baseline
+
+dietary-check: ## Check the red team against #84's scope. CATALOG=<dir> checks the premises too
+	$(UV) run python -m chip_chat.eval.dietary --check \
+		$(if $(CATALOG),--catalog $(CATALOG),)
+
+dietary: ## Run the allergen red team against the slice, free
+	$(UV) run python -m chip_chat.eval.dietary --ceiling
+
+dietary-baseline: ## Refresh eval/dietary/BASELINE.md from that same free run
+	$(UV) run python -m chip_chat.eval.dietary --ceiling --out eval/dietary/BASELINE.md
+
+# The credentialed run is the same command with neither flag. It needs
+# CHIP_CHAT_FOUNDRY_ENDPOINT and CHIP_CHAT_FOUNDRY_API_KEY, costs at least one
+# model call per probe, and is the run whose transcripts somebody then reads by
+# hand -- see eval/dietary/HAND-CHECK.md:
+#
+#     uv run python -m chip_chat.eval.dietary --out eval/dietary/BASELINE.md
+
 # --- The versioned dataset --------------------------------------------------
 #
 # Issue #72. Both sets, promoted into one dataset with a content hash for a

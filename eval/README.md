@@ -1,11 +1,11 @@
 # `eval` — measuring the things that are otherwise opinions
 
-Golden set, labeled photo set, adversarial suite, Arize experiments. Three of
-those ship today, the first two are promoted into one versioned dataset, and the
-dataset is what the trajectory and grounding evals score against. One more set
-sits below all of them and holds no model at all: the labeled **retrieval** set,
-which scores the knowledge lane's retriever before anything can paraphrase over
-it.
+Golden set, labeled photo set, adversarial suite, allergen red team, Arize
+experiments. Four of those ship today, the first two are promoted into one
+versioned dataset, and the dataset is what the trajectory and grounding evals
+score against. One more set sits below all of them and holds no model at all:
+the labeled **retrieval** set, which scores the knowledge lane's retriever
+before anything can paraphrase over it.
 
 **The golden set** — issue [#29](https://github.com/gganssle/chip_chat/issues/29).
 Thirty-four questions across the five lanes, each carrying the lane it should
@@ -188,15 +188,46 @@ first measured sweep found — the demo bar at **100%**, RFC-001 §08's hybrid
 argument confirmed with vector-only at **0%** on every menu-row category, and two
 thresholds that turn out to be too low.
 
-All four sets live beside their code — [`golden/`](golden/),
-[`photos/`](photos/), [`adversarial/`](adversarial/) and
-[`retrieval/`](retrieval/) — each with a `README.md` to read before adding an
+**The allergen and dietary red team** — issue
+[#84](https://github.com/gganssle/chip_chat/issues/84). The seven ways somebody
+gets a wrong answer out of a system about the one subject where a wrong answer is
+a safety problem, and the third launch gate — the one PRD §10 makes blocking by a
+different sentence from the two in §05.
+
+```
+chip_chat.eval.dietary
+├── probes     the set, and what the honest turn owes each
+├── run        the reply, the seam, and the two settlers
+├── hand       a person's reading, and the day it expires
+├── verdicts   four findings, and the refusal that has two ways
+├── scoring    counts that must be zero, and one that must not be
+├── coverage   #84's scope, as clauses the set meets or does not
+├── report     the baseline, as Markdown
+├── slice      the week-one loop, and what it cannot be asked
+└── testing    targets broken one way each, and a free ceiling run
+```
+
+```bash
+python -m chip_chat.eval.dietary --check                    # free
+python -m chip_chat.eval.dietary --check --catalog <dir>    # and the premises
+python -m chip_chat.eval.dietary --ceiling    # free, and the one to run
+```
+
+[`dietary/README.md`](dietary/README.md) is the write-up: the seven attacks, why
+the manifest will not load without a question the corpus plainly answers, why
+over-refusal is measured and not gated, and how a hand verdict expires. The
+decision it measures is `docs/decisions/allergen-boundary.md`.
+
+All five sets live beside their code — [`golden/`](golden/),
+[`photos/`](photos/), [`adversarial/`](adversarial/), [`retrieval/`](retrieval/)
+and [`dietary/`](dietary/) — each with a `README.md` to read before adding an
 entry and a `BASELINE.md` for what has and has not been measured. Adding to the
 first two changes the dataset's version, and `make dataset` is how the committed
-build catches up; the adversarial suite is not in the dataset, because an attack
-has no expected output for an experiment to be scored against, and neither is the
-retrieval set, because its expected output is a *passage* rather than a response
-and an experiment over a prompt has nothing to do with it.
+build catches up; three of them are not in the dataset, for three reasons that
+are the same reason — an attack has no expected output for an experiment to be
+scored against, a retrieval label's expected output is a *passage* rather than a
+response, and a probe's is a judgement about prose rather than a value a run
+could be compared to.
 
 [`trajectory/`](trajectory/) and [`grounding/`](grounding/) are on the same
 terms and hold no set of their own: both score the dataset's rows, so there is
@@ -270,6 +301,19 @@ do. It is the same division `eval/photos` draws in the vision lane, one layer
 further down: run the lane directly, score the thing the whole-turn set cannot
 see.
 
+`eval/dietary` is divided from `eval/grounding` by *which questions*, not by
+which arithmetic. It inherits the arithmetic wholesale — counts rather than a
+rate, over-refusal measured beside under-refusal and deliberately not gated —
+because the two evals score the same property and a model tuned to pass one has
+to pass the other. What it does not inherit is the questions. The grounding
+eval's rows come from the golden set, which is thirty-four questions chosen to
+cover the PRD: none of them is phrased by somebody frightened, none invites a
+derivation, and none asks for advice. Promoting fifteen red-team phrasings into
+the golden set would have changed what the golden set is, and moved the dataset's
+version for a reason that has nothing to do with the dataset. So the grounding
+eval scores the product's ordinary answers on this subject and the red team
+attacks the boundary directly, and the pair is read together.
+
 `eval/adversarial` is divided from both on a different axis. It does not ask
 *what is the right answer* — it asks *what does it take to get a wrong one*, and
 a question with a right answer cannot be evidence about that. So the golden set
@@ -277,6 +321,14 @@ holds one plainly-phrased A3 case for the ordinary path and delegates every othe
 phrasing, plus the concurrency case, to the suite; `DELEGATIONS` names A3 and S2
 as measured there, and `adversarial.coverage` checks that both really are. The
 delegation is a promise in one direction and a test in the other.
+
+It is divided from `eval/dietary` on the same axis, in the other direction.
+A probe there *has* a right answer — report what is published, cite it, decline
+the rest — so scoring one as an attack would mean scoring the correct behaviour
+as a breach that failed to land. The suite keeps its `invention` family and its
+one allergen attack, and no gate is computed over that family, deliberately: PRD
+§05 makes two things pass-or-fail and invention is not one of them. The third
+gate is PRD §10's, and `eval/dietary` is where it is counted.
 
 The inversion is worth stating once. In the golden set an unmeasured check is
 neutral: *how well did it do* survives being partly unmeasured. In the

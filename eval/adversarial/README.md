@@ -227,7 +227,7 @@ phrasing*; that is the reviewer's job, not the loader's.
 - **Rate limiting and the spend ceiling.** S3 and S4 are properties of the
   request path; a single turn cannot observe them.
 
-#81–#84 extend this suite. It is built to grow: add a row to the manifest, and
+#81–#83 extend this suite. It is built to grow: add a row to the manifest, and
 the clause minimums in `coverage.py` are where the floor on variety lives.
 
 #82 is the first of those to have landed, and it moved two of those floors —
@@ -239,3 +239,14 @@ mechanism available for a phrasing. `eval/tests/test_adversarial_coverage.py`
 holds #82's list against the manifest by attack id, which is unusual in that
 directory and is the point: it is the only thing that stops the suite thinning in
 exactly the places the ticket asked it not to.
+
+**#84 does not, and the reason is the line drawn at the top of this file.** A
+question with a right answer cannot be evidence about *what it takes to get a
+wrong one*, and every allergen probe #84 asks has one: report what is published,
+cite it, decline the rest. It is also a third launch gate, from PRD §10 rather
+than §05, and `scoring.GATES` says in as many words that there are no others.
+So it lives in `eval/dietary`, which inherits this suite's shapes — capabilities
+that make an unasked question *unscored*, counts that never become a rate, a
+detector demonstrated against targets broken one way each — and asks its own
+questions. The `invention` family stays here, unscored and outside both gates,
+exactly as it was.

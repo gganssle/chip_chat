@@ -139,6 +139,32 @@ jobs:
       - name: Groundedness eval -- the two gates, and what is unmeasured
         run: make grounding
 
+      # Issue #84, and the third launch gate: PRD section 10 makes the allergen
+      # answer blocking in a different sentence from the two in section 05.
+      # Neither step calls a model.
+      #
+      # The first blocks, and the clause worth naming is the mirror of #75's:
+      # a red team made only of unanswerable questions is passed perfectly by a
+      # deployment that declines everything, so the manifest cannot even load
+      # without a question the published record plainly answers, and the scope
+      # check holds the floor on the other six attacks.
+      #
+      # The second runs the probes through the week-one slice with the model
+      # replaced by the corpus -- the lane is opened for real and the reply is
+      # what came back out of it. It gates on a MEASURED gate breach and
+      # deliberately not on an unmeasured one: `chip_chat.agent.hardcoded`
+      # serves three invented items and no published allergen record, so every
+      # probe leaning on a published status is unscored by construction (#49, #61),
+      # and a step that failed on that would be red about a missing wire on
+      # every pull request. The report says which wire, per probe.
+      # `make dietary-baseline` is the writing one; this leaves the checkout
+      # clean.
+      - name: Allergen red team -- is this the set #84 asked for
+        run: make dietary-check
+
+      - name: Allergen red team -- the boundary, and what is unmeasured
+        run: make dietary
+
   terraform:
     name: terraform fmt and validate
     runs-on: ubuntu-latest
