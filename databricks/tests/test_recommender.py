@@ -50,6 +50,9 @@ TRAIN = REPO / "databricks" / "notebooks" / "recommender_train.py"
 PUBLISH = REPO / "databricks" / "notebooks" / "recommender_publish.py"
 VERIFY = REPO / "databricks" / "notebooks" / "recommender_verify.py"
 TERRAFORM = REPO / "infra" / "terraform" / "databricks_recommender.tf"
+# The publish's Terraform, read only by the permission-vocabulary test below:
+# it is #39's file, and the mistake it guards against was made in both at once.
+PUBLISH_TERRAFORM = REPO / "infra" / "terraform" / "databricks_publish.tf"
 VARIABLES = REPO / "infra" / "terraform" / "variables.tf"
 OUTPUTS = REPO / "infra" / "terraform" / "outputs.tf"
 
@@ -958,6 +961,53 @@ def test_terraform_names_the_experiment_the_module_names() -> None:
     body = TERRAFORM.read_text(encoding="utf-8")
     assert 'resource "databricks_mlflow_experiment" "recommender"' in body
     assert f"/{recommender.EXPERIMENT}" in body
+
+
+def test_the_experiments_directory_is_declared_rather_than_assumed() -> None:
+    """The first apply of this file failed on it, so it is a test.
+
+    `databricks_notebook` and `databricks_workspace_file` create the
+    directories on the way to their path; the MLflow experiment API does not,
+    and returns `Parent directory does not exist` instead. Nothing else in this
+    repository writes an object under `experiments/`, so no other resource
+    brings it into being as a side effect.
+
+    The experiment has to take its name *from* the directory resource rather
+    than rebuild the string, because a `depends_on` somebody deletes while
+    tidying is an ordering constraint that stops existing quietly. A reference
+    is one Terraform cannot drop.
+    """
+    body = TERRAFORM.read_text(encoding="utf-8")
+    assert 'resource "databricks_directory" "recommender_experiments"' in body
+    assert (
+        'name = "${databricks_directory.recommender_experiments.path}'
+        f'/{recommender.EXPERIMENT}"' in body
+    )
+
+
+def test_no_job_is_granted_a_permission_only_a_pipeline_has() -> None:
+    """The other thing the first apply was rejected for.
+
+    Jobs and pipelines do not share a permission vocabulary. A pipeline takes
+    `CAN_RUN`; a job takes only `CAN_MANAGE`, `CAN_MANAGE_RUN`, `CAN_VIEW` and
+    `IS_OWNER`, and asking for the pipeline word on a job is refused by the API
+    rather than downgraded. The two files this repository grants the app tier a
+    start-it permission in are the recommender's and the publish's, and both
+    grant it on a job.
+
+    Checked as "this file has no `CAN_RUN` at all" rather than by parsing the
+    blocks, because neither file declares a pipeline: any `CAN_RUN` appearing
+    here later is on a job by construction, and would fail an apply nobody runs
+    in CI.
+    """
+    for path in (TERRAFORM, PUBLISH_TERRAFORM):
+        body = path.read_text(encoding="utf-8")
+        assert 'resource "databricks_pipeline"' not in body, path.name
+        for line in body.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue  # the comment explaining this is allowed to say it
+            assert "CAN_RUN" not in stripped, (path.name, stripped)
 
 
 def test_retraining_is_a_scheduled_job() -> None:

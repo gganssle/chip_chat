@@ -241,9 +241,11 @@ resource "databricks_permissions" "publish_job" {
   # The app tier may start a publish with its managed identity and no stored
   # credential -- the same grant the three pipelines and the recommender have,
   # so that a rebuild after a re-harvest can run the whole chain in sequence.
+  # `CAN_MANAGE_RUN` because this is a job and not a pipeline; see the note on
+  # `databricks_permissions.recommender_job` for why the two spellings differ.
   access_control {
     service_principal_name = databricks_service_principal.app.application_id
-    permission_level       = "CAN_RUN"
+    permission_level       = "CAN_MANAGE_RUN"
   }
 }
 

@@ -127,8 +127,25 @@ resource "databricks_notebook" "recommender_verify" {
 # anywhere, so this is a comment and the tags below are what survives into the
 # workspace.
 
+# The experiments folder has to be declared, which is not true of anything else
+# this file writes into the workspace. `databricks_notebook` and
+# `databricks_workspace_file` create the directories on the way to their path;
+# the MLflow experiment API does not, and the first apply of this file failed
+# with `Parent directory does not exist: /Shared/chip-chat/experiments`. Nothing
+# else in this repository puts an object under `experiments/`, so no other
+# resource brings it into being as a side effect, and relying on one that
+# happened to would be a dependency nobody wrote down.
+#
+# The experiment names itself from this resource's own path rather than
+# rebuilding the string, so the ordering is a real dependency in the graph
+# instead of a hope about the order Terraform picked.
+
+resource "databricks_directory" "recommender_experiments" {
+  path = "/Shared/${local.base}/experiments"
+}
+
 resource "databricks_mlflow_experiment" "recommender" {
-  name = "/Shared/${local.base}/experiments/item-affinity-recommender"
+  name = "${databricks_directory.recommender_experiments.path}/item-affinity-recommender"
 
   tags {
     key   = "project"
@@ -320,9 +337,16 @@ resource "databricks_permissions" "recommender_job" {
   # The app tier may start a retraining run with its managed identity and no
   # stored credential -- the same grant the three pipelines have, so that a
   # rebuild after a re-harvest can run the whole chain in sequence.
+  #
+  # `CAN_MANAGE_RUN` and not `CAN_RUN`, which is what the pipelines above take.
+  # The two object types do not share a permission vocabulary: a job accepts
+  # only `CAN_MANAGE`, `CAN_MANAGE_RUN`, `CAN_VIEW` and `IS_OWNER`, and the
+  # first apply of this file was rejected outright for asking for the pipeline
+  # word on a job. `CAN_MANAGE_RUN` is the job-shaped spelling of the same
+  # intent -- start and cancel runs, change nothing about the job itself.
   access_control {
     service_principal_name = databricks_service_principal.app.application_id
-    permission_level       = "CAN_RUN"
+    permission_level       = "CAN_MANAGE_RUN"
   }
 }
 
