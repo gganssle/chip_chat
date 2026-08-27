@@ -29,6 +29,7 @@ from chip_chat.otel.testing import span_recorder
 EXPECTED_ROUTES = {
     ("/", frozenset({"GET"})),
     ("/healthz", frozenset({"GET"})),
+    ("/healthz/lanes", frozenset({"GET"})),
     ("/robots.txt", frozenset({"GET"})),
     ("/api/chat", frozenset({"POST"})),
     ("/api/entry", frozenset({"POST"})),

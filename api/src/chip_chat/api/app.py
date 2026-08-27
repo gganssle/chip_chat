@@ -105,6 +105,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from chip_chat.agent import ACCOUNT, AzureChatModel, FoundryConfig
+from chip_chat.agent.health import probe
 from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.loop import PROMPT_VERSION, Conversation
 from chip_chat.agent.tools import offered_tools
@@ -756,6 +757,46 @@ def create_app(service: Service | None = None) -> FastAPI:
     async def healthz() -> JSONResponse:
         """Liveness. Never gated by the cap; see the module docstring."""
         return JSONResponse({"status": "ok"})
+
+    @application.get("/healthz/lanes")
+    async def lane_health(request: Request) -> JSONResponse:
+        """Which lanes are answering, and which are not wired at all.
+
+        Issue #65 asks that per-lane health be *surfaced somewhere operable*,
+        and this is that surface: :func:`chip_chat.agent.health.probe` asks each
+        wired lane the cheapest question it answers and reports what came back.
+        The route lives here rather than in ``agent/`` because ``agent/`` has no
+        request path -- and because two of the answers are the app tier's to
+        give. The probe needs a **bound** session, since the Snowflake-backed
+        lanes check a connection out of #44's pool by session id and an unbound
+        one would report two working lanes as down; and it needs to be told
+        whether the ops API is available, because ``agent/`` does not import
+        ``api/`` and that direction is load-bearing.
+
+        Outside the spend cap and outside the rate limit, like ``/healthz`` and
+        for the same reason. It calls no model: every probe is a lane's own
+        cheapest read, and a lane that is not wired is not asked anything.
+
+        Deliberately **not** a liveness probe. A lane being down is a fact an
+        operator wants and not a reason to restart the container -- RFC-001 §10
+        is explicit that a lane may fail and the conversation may not fail with
+        it, so the platform's probe stays pointed at ``/healthz``, which answers
+        for the process and nothing else.
+        """
+        session_id = _session_id(request)
+        # Bind first. `probe` is documented as needing a session the visitor
+        # store knows, and an operator curling this endpoint arrives with no
+        # cookie at all -- which would otherwise report the account and
+        # personalization lanes as down on a deployment where they are fine.
+        resolved.visitors.admit(session_id)
+        report = probe(
+            resolved.gate.lanes,
+            session_id=session_id,
+            ordering_available=None,
+        )
+        response = JSONResponse(report.as_dict())
+        _set_session_cookie(response, session_id, secure=_is_https(request))
+        return response
 
     @application.get("/robots.txt", response_class=PlainTextResponse)
     async def robots() -> str:

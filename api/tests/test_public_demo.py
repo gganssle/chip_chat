@@ -468,12 +468,52 @@ def test_noindex_is_asserted_by_the_header_as_well_as_the_tag(
     assert "Disallow: /" in client.get("/robots.txt").text
 
 
+def test_lane_health_is_reachable_and_costs_no_model_call(
+    client: TestClient, model: ScriptedModel
+) -> None:
+    """#65 asks that per-lane health be surfaced somewhere operable.
+
+    Outside the cap and outside the rate limit, like ``/healthz``, and it calls
+    no model: every probe is a lane's own cheapest read.
+    """
+    before = model.call_count
+
+    report = client.get("/healthz/lanes")
+
+    assert report.status_code == 200
+    body = report.json()
+    assert {lane["lane"] for lane in body["lanes"]} == {
+        "knowledge",
+        "account",
+        "personalization",
+        "photo",
+        "action",
+    }
+    assert model.call_count == before
+
+
+def test_lane_health_probes_a_bound_session(client: TestClient) -> None:
+    """An unbound session would report two working lanes as down.
+
+    ``chip_chat.agent.health.probe`` checks connections out of the pool by
+    session id, so the route admits the caller before it asks -- which an
+    operator curling the endpoint with no cookie would otherwise not be.
+    """
+    report = client.get("/healthz/lanes")
+
+    assert report.cookies.get(SESSION_COOKIE) or client.cookies.get(SESSION_COOKIE)
+    assert "demo_id" not in report.text
+    assert "demo-" not in report.text
+
+
 def test_no_endpoint_serves_a_bulk_export_of_the_corpus(client: TestClient) -> None:
     """#70: *the menu data is cached for the demo, not republished as a dataset.*
 
     Asserted as an absence of routes rather than as a 404 on a list somebody
-    thought of: the application has five POST routes and three GETs, and the
-    GETs are a page, a robots file and a probe.
+    thought of: the application has five POST routes and four GETs, and the
+    GETs are a page, a robots file and two probes -- one that answers for the
+    process and one that answers for the lanes. None of them returns a row of
+    anything.
     """
     application = client.app
     readable = {
@@ -482,4 +522,4 @@ def test_no_endpoint_serves_a_bulk_export_of_the_corpus(client: TestClient) -> N
         if "GET" in (getattr(route, "methods", None) or ())
     }
 
-    assert readable == {"/", "/robots.txt", "/healthz"}
+    assert readable == {"/", "/robots.txt", "/healthz", "/healthz/lanes"}
