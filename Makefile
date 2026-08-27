@@ -203,9 +203,7 @@ verify-tools-bare: ## The same cases, with no system prompt at all
 # rather than a comment.
 
 .PHONY: golden-check golden photos-check adversarial-check adversarial \
-        adversarial-redteam adversarial-baseline
-        adversarial-sabotaged adversarial-gate2 adversarial-baseline
-
+        adversarial-redteam adversarial-baseline adversarial-sabotaged adversarial-gate2
 golden-check: ## Check the golden set's coverage, free
 	$(UV) run python -m chip_chat.eval.golden --check
 
