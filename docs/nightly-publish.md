@@ -230,10 +230,27 @@ openssl rsa -in ~/.snowflake/keys/chip_chat_publisher.p8 -pubout \
 # ALTER USER CHIP_CHAT_PUBLISHER SET RSA_PUBLIC_KEY = '<that>';
 #   -- by hand, as an operator. It is deliberately not in snowflake/sql:
 #   -- a credential in a checked-in file is a credential in everyone's clone.
+#
+#   Use RSA_PUBLIC_KEY_2 instead if the user already carries a key. Snowflake
+#   holds two so that a rotation has an overlap, and the second slot is what
+#   makes standing this up a non-destructive act: whoever set the first key
+#   holds a private half that setting RSA_PUBLIC_KEY would silently invalidate.
+#   SHOW USERS reports has_rsa_public_key and does not say which slot, so
+#   assume the first is somebody's until you know otherwise. This is how the
+#   2026-08-27 run was authenticated.
 
 # 3. The job. snowflake_account_url is the switch -- empty, which is the default,
 #    means neither the publish job nor its verify job is created at all.
-terraform apply -var 'snowflake_account_url=hq72718.us-east-2.aws.snowflakecomputing.com'
+#
+#    Put it in a tfvars file rather than on the command line. The switch cuts
+#    both ways: a later apply that does not carry the variable computes an empty
+#    URL, and `count = length(databricks_job.publish) > 0` then plans to DESTROY
+#    the publish job, its verify job and both permission sets. `*.tfvars` is
+#    gitignored, so this is a local file each operator keeps -- and the failure
+#    mode is somebody else's routine apply quietly removing the nightly job.
+echo "snowflake_account_url = \"hq72718.us-east-2.aws.snowflakecomputing.com\"" \
+  >> infra/terraform/terraform.tfvars
+terraform apply
 
 # 4. The private key, into the scope Terraform created empty. Nothing here
 #    enters Terraform state.
