@@ -13,6 +13,13 @@ Three routes and no more:
     first, and serves the stop state instead when the door is shut. Emits no
     span: there is no turn yet.
 
+``POST /api/entry``
+    The name gate. One invented first name, and the visitor comes back holding a
+    fully populated synthetic account -- order history, a home store, a points
+    balance. The assignment is :mod:`chip_chat.api.visitors`' and the identity it
+    resolves is bound to the session **server-side**, so the response says who
+    the visitor has become without ever having been told.
+
 ``POST /api/chat``
     One visitor message. Opens ``chat.turn``, runs the budget check inside it,
     and calls the model *only* if the check allowed it.
@@ -38,18 +45,28 @@ argument, and no ``session_id`` a client can choose: the cookie is minted here,
 so a caller cannot mint a thousand sessions to walk around the per-session cap
 without also collecting a thousand cookies -- and the per-source rate limit is
 underneath that anyway.
+
+**And no** ``demo_id``, **anywhere a request can reach.** RFC-001 §05 puts the
+identity in the server-side session store and applies it to the Snowflake
+connection; this module resolves it from the cookie through
+:class:`~chip_chat.api.visitors.VisitorDesk` and passes a *session id* onward.
+Every request model here forbids unknown fields, so a body carrying ``demo_id``
+is a 422 rather than a field somebody has to prove is ignored, and
+``api/tests/test_identity_binding.py`` holds every model and every route
+signature to :data:`~chip_chat.snowflake.procedures.IDENTITY_VOCABULARY`.
 """
 
 import logging
 import secrets
 import threading
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from chip_chat.agent import ACCOUNT, AzureChatModel, FoundryConfig
 from chip_chat.agent.loop import PROMPT_VERSION, Conversation
@@ -63,7 +80,18 @@ from chip_chat.api.killswitch import (
 )
 from chip_chat.api.limits import SpendLimits
 from chip_chat.api.outcome import Stop
+from chip_chat.api.pool import DEFAULT_POOL_SIZE, SessionConnection, VisitorPool
 from chip_chat.api.turns import SpendGate
+from chip_chat.api.visitors import (
+    MAX_DISPLAY_NAME_CHARS,
+    PersonaRoster,
+    SnowflakeRoster,
+    StaticRoster,
+    VisitorDesk,
+    VisitorSession,
+    VisitorSessionStore,
+    journal_from_env,
+)
 from chip_chat.otel import (
     TelemetryConfig,
     TokenUsage,
@@ -79,8 +107,11 @@ from chip_chat.web import chat_page, stop_page
 __all__ = [
     "ChatReply",
     "ChatRequest",
+    "EntryReply",
+    "EntryRequest",
     "Service",
     "SessionStore",
+    "VisitorProfile",
     "build_service",
     "create_app",
     "default_kill_switch",
@@ -120,6 +151,15 @@ anybody looks.
 class ChatRequest(BaseModel):
     """One visitor message, and optionally a confirmation of a draft."""
 
+    model_config = ConfigDict(extra="forbid")
+    """Unknown fields are refused rather than ignored.
+
+    The field this is really about is ``demo_id``. A body that carries one gets
+    a 422, which means "no endpoint accepts a visitor identifier from a client"
+    is enforced by the schema rather than by a reviewer checking that nothing
+    reads it. See the module docstring.
+    """
+
     message: str = Field(min_length=1, max_length=_MAX_MESSAGE_CHARS)
 
     confirm_draft_id: str | None = Field(default=None, max_length=64)
@@ -140,6 +180,62 @@ class ChatReply(BaseModel):
     stopped: bool = False
     """True when the spend cap refused the turn. Still HTTP 200: the stop state
     is a designed state and never an error."""
+
+
+class EntryRequest(BaseModel):
+    """The name gate: one invented first name, and nothing else.
+
+    ``extra="forbid"`` is doing real work here. This is the request that decides
+    which synthetic customer a visitor becomes, so it is exactly the body an
+    attacker would like to add a ``demo_id`` to -- and adding one is a 422.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, max_length=MAX_DISPLAY_NAME_CHARS)
+    """What the visitor would like to be called. Invented, and optional.
+
+    Optional because the assignment does not depend on it: a visitor who submits
+    an empty form still gets a fully populated account, which is the difference
+    between a name gate and a login.
+    """
+
+
+class VisitorProfile(BaseModel):
+    """Who the visitor has become, as the entry screen renders it.
+
+    Every field is read off the roster row the app itself chose. Note the one
+    that is absent: there is no ``demo_id``. The identity is the server's, the
+    browser holds a cookie, and nothing in this payload could be handed back to
+    an endpoint to claim an account.
+    """
+
+    display_name: str | None = None
+    persona_id: str
+    label: str
+    home_store: int | None = None
+    home_store_name: str | None = None
+    points_balance: int | None = None
+    order_count: int | None = None
+    usual_item_id: str | None = None
+    narrative: str | None = None
+
+
+class EntryReply(BaseModel):
+    """The answer to the name gate.
+
+    Attributes:
+        visitor: The assigned account, or ``None`` when this deployment has no
+            synthetic population loaded. ``None`` is a decided state -- see
+            :meth:`chip_chat.api.visitors.VisitorDesk.admit` -- and the widget
+            renders the demo without an account rather than an error.
+        stopped: True when the spend cap has the door shut. Still HTTP 200.
+        message: The stop-state copy, when ``stopped``.
+    """
+
+    visitor: VisitorProfile | None = None
+    stopped: bool = False
+    message: str | None = None
 
 
 class SessionStore:
@@ -206,6 +302,26 @@ class Service:
 
     gate: SpendGate
     sessions: SessionStore = field(default_factory=SessionStore)
+    visitors: VisitorDesk = field(default_factory=lambda: VisitorDesk(StaticRoster()))
+    """Where a browser becomes a synthetic customer, and the store the pool
+    resolves identities against.
+
+    Defaults to a desk with an **empty** roster, which is the honest state of a
+    deployment whose synthetic population has not been loaded: every visitor is
+    served unbound, exactly as they were before this field existed, and
+    :data:`~chip_chat.api.visitors.VISITORS_LOGGER` has already said so. It is
+    not a default that invents customers -- an invented account is the empty
+    account issue #66 is written to prevent.
+    """
+
+    pool: VisitorPool | None = None
+    """The connection pool, where one is configured.
+
+    ``None`` on a deployment with no Snowflake connection factory, which is
+    every deployment today: ``pool.py``'s :class:`SessionConnection` is a
+    protocol and nothing in this lockfile implements it. See
+    :func:`build_service`.
+    """
 
     @property
     def guard(self) -> SpendGuard:
@@ -225,7 +341,48 @@ def default_kill_switch() -> CachedKillSwitch:
     )
 
 
-def build_service(lane: PhotoLane | None = None) -> Service:
+def build_visitors(
+    connect: Callable[[], SessionConnection] | None = None,
+    *,
+    pool_size: int = DEFAULT_POOL_SIZE,
+) -> tuple[VisitorDesk, VisitorPool | None]:
+    """Assemble the session store, the pool that binds it, and the roster.
+
+    The order is the whole of RFC-001 §05's trusted path, written once:
+
+    1. the journal decides whether bindings survive a restart, and says which;
+    2. the store holds them, and is the only thing that answers ``demo_id_for``;
+    3. the pool is built **around** that store, so the identity it applies to a
+       Snowflake session cannot have come from a caller; and
+    4. the roster is read through the pool's one deliberately unbound checkout.
+
+    Args:
+        connect: Opens a Snowflake connection. ``None`` -- the default, and the
+            state of every deployment today -- means no pool, an empty roster
+            and every visitor served unbound.
+            :class:`~chip_chat.api.pool.SessionConnection` is a protocol
+            deliberately not backed by a driver in this lockfile
+            (:mod:`chip_chat.snowflake.snow` gives the argument), so the
+            adapter is a parameter rather than an import.
+        pool_size: Live connections. See
+            :data:`~chip_chat.api.pool.DEFAULT_POOL_SIZE`.
+
+    Returns:
+        The desk and the pool, the second of which is ``None`` when ``connect``
+        was.
+    """
+    store = VisitorSessionStore(journal_from_env())
+    if connect is None:
+        return VisitorDesk(StaticRoster(), store=store), None
+    pool = VisitorPool(connect, sessions=store, size=pool_size)
+    roster: PersonaRoster = SnowflakeRoster(pool)
+    return VisitorDesk(roster, store=store), pool
+
+
+def build_service(
+    lane: PhotoLane | None = None,
+    connect: Callable[[], SessionConnection] | None = None,
+) -> Service:
     """Assemble the real service from the environment.
 
     Every ceiling comes from :meth:`~chip_chat.api.limits.SpendLimits.from_env`
@@ -246,15 +403,21 @@ def build_service(lane: PhotoLane | None = None) -> Service:
             tool no visitor could ever hand a reference to. The parameter exists
             so the seam is named rather than discovered.
 
+        connect: Opens a Snowflake connection, for the pool and the roster. See
+            :func:`build_visitors` for why it is an argument.
+
     Returns:
         The assembled service.
     """
+    visitors, pool = build_visitors(connect)
     return Service(
         gate=SpendGate(
             SpendGuard(SpendLimits.from_env(), kill_switch=default_kill_switch()),
             lambda: AzureChatModel(FoundryConfig.from_env()),
             lane=lane,
-        )
+        ),
+        visitors=visitors,
+        pool=pool,
     )
 
 
@@ -318,15 +481,50 @@ def create_app(service: Service | None = None) -> FastAPI:
         _ensure_session(request, response)
         return response
 
+    @application.post("/api/entry")
+    async def entry_gate(request: Request, body: EntryRequest) -> Response:
+        """Assign this session a synthetic customer and say who they are.
+
+        The name is the visitor's only input, and it is not what decides the
+        account: :meth:`~chip_chat.api.visitors.VisitorDesk.admit` chooses from
+        the roster, binds the result to the session id resolved from the cookie,
+        and hands back what it chose. A second call for the same cookie returns
+        the same visitor -- issue #9 decided visitor state persists between
+        visits, so a returning browser resumes rather than collects a second
+        account.
+
+        The spend cap is asked first and answered the same way the entry page
+        answers it: a stop state, at 200, with no account assigned. Assigning a
+        persona to a visitor who cannot have a conversation would spend a roster
+        slot on nobody.
+        """
+        session_id = _session_id(request)
+        if (stop := resolved.gate.entry_state()) is not None:
+            payload = EntryReply(stopped=True, message=stop.message)
+        else:
+            payload = EntryReply(
+                visitor=_profile(
+                    resolved.visitors.admit(session_id, display_name=body.name)
+                )
+            )
+        response = JSONResponse(payload.model_dump())
+        _set_session_cookie(response, session_id, secure=_is_https(request))
+        return response
+
     @application.post("/api/chat")
     async def chat(request: Request, body: ChatRequest) -> Response:
         """Run one turn: guard, then agent, then render."""
         session_id = _session_id(request)
         source_address = _source_address(request)
+        # A visitor who never posted the name gate still gets an account. The
+        # cold start is the product risk and an unbound conversation is the
+        # empty-account failure wearing a different hat, so the assignment is
+        # here as well as on the entry route rather than only on the polite path.
+        admitted = resolved.visitors.admit(session_id)
         conversation = resolved.sessions.get(
             session_id, tools=offered_tools(lane=resolved.gate.lane)
         )
-        payload = _run_turn(resolved, conversation, body, source_address)
+        payload = _run_turn(resolved, conversation, body, source_address, admitted)
         response = JSONResponse(payload.model_dump())
         _set_session_cookie(response, session_id, secure=_is_https(request))
         return response
@@ -334,17 +532,53 @@ def create_app(service: Service | None = None) -> FastAPI:
     return application
 
 
+def _profile(admitted: VisitorSession | None) -> VisitorProfile | None:
+    """Render an assigned visitor for the entry screen, or ``None``.
+
+    The ``demo_id`` is not copied across. It is the one field of the binding the
+    browser has no use for and the one an attacker would: a payload that never
+    carries it is a payload that cannot be replayed into a request claiming it.
+    """
+    if admitted is None:
+        return None
+    fixture = admitted.fixture
+    return VisitorProfile(
+        display_name=admitted.display_name,
+        persona_id=admitted.persona_id,
+        label=admitted.label,
+        home_store=fixture.home_store if fixture is not None else None,
+        home_store_name=fixture.home_store_name if fixture is not None else None,
+        points_balance=fixture.points_balance if fixture is not None else None,
+        order_count=fixture.order_count if fixture is not None else None,
+        usual_item_id=fixture.usual_item_id if fixture is not None else None,
+        narrative=fixture.narrative if fixture is not None else None,
+    )
+
+
 def _run_turn(
     service: Service,
     conversation: Conversation,
     body: ChatRequest,
     source_address: str,
+    admitted: VisitorSession | None = None,
 ) -> ChatReply:
     """One ``chat.turn``, from the budget check to the rendered reply.
 
     Synchronous on purpose. FastAPI runs a ``def`` handler's work in a thread
     pool, and this function is where that work is, so the ordering is a plain
     sequence of statements anybody can read top to bottom.
+
+    Args:
+        service: The assembled service.
+        conversation: The visitor's history.
+        body: The request.
+        source_address: What the per-source rate limit counts against.
+        admitted: The assigned synthetic customer, where the roster had one. It
+            reaches the span and nothing else: ``demo_id`` is a correlation
+            value on ``chat.turn`` -- see
+            :attr:`~chip_chat.otel.attributes.ChipChatAttributes.DEMO_ID` -- and
+            the *binding* travels to Snowflake through the session store, which
+            is the only path RFC-001 §05 permits.
     """
     session_id = conversation.session_id
     with (
@@ -352,7 +586,10 @@ def _run_turn(
             session_id=session_id,
             turn_index=conversation.next_turn_index(),
             message=body.message,
-            persona_id=ACCOUNT.persona_id,
+            persona_id=(
+                admitted.persona_id if admitted is not None else ACCOUNT.persona_id
+            ),
+            demo_id=admitted.demo_id if admitted is not None else None,
             prompt_version=PROMPT_VERSION,
         ) as turn,
         service.gate.turn(session_id=session_id, source_address=source_address) as funded,

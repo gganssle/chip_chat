@@ -31,6 +31,7 @@ EXPECTED_ROUTES = {
     ("/healthz", frozenset({"GET"})),
     ("/robots.txt", frozenset({"GET"})),
     ("/api/chat", frozenset({"POST"})),
+    ("/api/entry", frozenset({"POST"})),
 }
 """Every route this application has.
 
@@ -38,6 +39,16 @@ Listed rather than counted so that adding one fails here and makes its author
 decide, in this file, whether the new route can spend money. That is the whole
 job of this constant: it is a speed bump in front of the mistake, not a
 description of the app.
+
+``/api/entry`` is #66's name gate, and the decision it was made to charge for is
+recorded here rather than in its handler: **it cannot reach a model.** A
+:class:`~chip_chat.api.turns.SpendGate` hands a model out only inside a
+:class:`~chip_chat.api.turns.FundedTurn`, that route never opens one, and
+:func:`test_only_the_chat_route_can_reach_a_model` below is what keeps that true
+of the next person's edit. It asks
+:meth:`~chip_chat.api.turns.SpendGate.entry_state` anyway, because assigning a
+roster slot to a visitor who cannot have a conversation spends a persona on
+nobody.
 """
 
 
@@ -185,6 +196,23 @@ def test_the_application_has_exactly_the_routes_this_file_knows_about(
         if getattr(route, "methods", None) is not None
     }
     assert found == EXPECTED_ROUTES
+
+
+def test_only_the_chat_route_can_reach_a_model(
+    limits: SpendLimits, model: ScriptedModel
+) -> None:
+    """The route added by #66 buys nothing, and the assertion is on the mock.
+
+    Same shape as every refusal test in this package: the copy would still read
+    correctly if the entry route started calling a model, and the call count
+    would not.
+    """
+    service = Service(SpendGate(SpendGuard(limits), lambda: model))
+    with TestClient(create_app(service)) as client:
+        for _ in range(20):
+            client.post("/api/entry", json={"name": "Sam"})
+
+    assert model.call_count == 0
 
 
 def test_every_route_that_can_spend_goes_through_the_gate(

@@ -298,6 +298,89 @@ need columns the catalogue does not carry — the per-item `max_quantity` and th
 aggregate-cap weights — so rule 4 is flattened to one entree or five of anything
 else and rule 9 is not enforced here at all. That is `cc-of1`.
 
+## The session store — where the identity comes from
+
+`visitors.py` is [#66](https://github.com/gganssle/chip_chat/issues/66), and it
+is the first clause of the sentence the pool below implements the second half
+of. RFC-001 §05:
+
+> Identity originates in the app's **server-side session store**, is applied to
+> the Snowflake connection as a session variable, and is enforced by row access
+> policies on every visitor-scoped table.
+
+Until this module existed the store was a `VisitorSessions` protocol with a
+placeholder behind it. Now it is three things that only make sense together.
+
+| Piece | What it is |
+| --- | --- |
+| `VisitorSessionStore` | The bindings. The one object that answers `demo_id_for`, and therefore the only thing the pool will take an identity from. |
+| `SnowflakeRoster` | `persona_fixtures`, read on a connection that has bound nobody — #43's `entry_roster` policy exists for this read and no other. |
+| `VisitorDesk` | Where a browser becomes a synthetic customer. `admit(session_id, display_name=...)` and nothing else. |
+
+### An empty account is how this demo dies
+
+That is the ticket's own sentence, and it is the reason `SnowflakeRoster` does
+not *prefer* populated fixtures — it **refuses to offer** an unpopulated one. A
+row without order history, without a home store or without a points balance is
+dropped at the roster, so there is no code path that assigns one.
+
+The consequence is deliberate and worth stating: a deployment whose synthetic
+population has not been loaded has an **empty roster**, and `admit` returns
+`None`. The app then serves the demo unbound, which is exactly what it did
+before this module existed. That is a declared state with a `WARNING` behind it,
+not a visitor discovering a blank account.
+
+### Two concurrent sessions get different personas
+
+The second acceptance criterion, and it is a property of the *choice* rather
+than of the roster's size. `VisitorDesk._choose` looks at what the live sessions
+are already holding and picks in three tiers: an archetype nobody holds, then a
+customer nobody holds, then — once the roster really is exhausted — the customer
+whose holder has been idle longest. `api/tests/test_visitors.py` starts ten
+admissions on a barrier, because a desk that collides only under contention
+passes every sequential test ever written.
+
+### Survives a restart, or degrades in a way that is decided
+
+The fourth criterion offers a choice and both halves are here.
+`CHIP_CHAT_SESSION_JOURNAL` names an append-only file on the mounted share;
+`FileJournal` replays it at start-up, compacts it while it does, and ages
+entries out after thirty days so its size tracks live visitors rather than
+uptime. Unset, `journal_from_env` returns `NoJournal` **and logs a warning** — a
+decision, announced at assembly. A path that cannot be written does the same
+thing at `ERROR` rather than raising, because a file share that failed to mount
+should not also take the demo down.
+
+The journal keeps the binding and not the account: a session id, its `demo_id`,
+the invented first name and the Foundry thread pointer. The roster row is
+Snowflake's to state, and a journalled copy would let a restart serve an account
+summary the nightly reset has since changed underneath it.
+
+### No endpoint accepts a `demo_id`
+
+The third criterion is about *what an endpoint accepts*, so it is enforced in
+the schema rather than in a handler. Every request model in `app.py` sets
+`extra="forbid"`, so a body carrying `demo_id` is a 422 rather than a field
+somebody has to prove nothing reads. `api/tests/test_identity_binding.py` holds
+every request model, every request helper and `VisitorDesk.admit` to
+`IDENTITY_VOCABULARY` — the same absence the tool surface, the stored procedures
+and the ops API are already held to, now at the tier where a request arrives.
+
+`POST /api/entry` returns the assigned account and **does not return its
+`demo_id`**. There is nothing in that payload a browser could replay into a
+request to claim an account.
+
+### What is not here, and why
+
+`demo_visitors.thread_id` and `last_seen` are the app's per
+`docs/decisions/foundry-agent-shape.md`, and nothing writes them. #46 declares
+four stored procedures and none of them writes session state, and nothing in
+this package opens a Snowflake connection — `pool.py`'s `SessionConnection` is
+a protocol with no driver behind it in this lockfile, for the reason
+`chip_chat.snowflake.snow` gives. So the pointer is durable in the journal
+rather than in the column, and `build_visitors` takes the connection factory as
+an argument so the adapter lands in one place when it exists. Both are filed.
+
 ## The connection pool — where the isolation guarantee breaks
 
 `pool.py` is [#44](https://github.com/gganssle/chip_chat/issues/44), and RFC-001
@@ -398,11 +481,18 @@ unobserved is the filtering itself, on rows.
 
 ### Configuration
 
-`DEFAULT_POOL_SIZE` is four, and it is a constructor argument rather than an
-environment variable because nothing constructs the pool yet — [#66] is the app
-that will, and it is the right place for the knob to grow one. The warehouses
-are X-Small and suspend after sixty seconds, so a larger pool would not serve
-anybody faster and would keep one awake.
+`DEFAULT_POOL_SIZE` is four. [#66] is the app that constructs the pool, and
+`build_visitors` is where: it builds the store first, the pool **around** that
+store, and the roster through the pool's one unbound checkout, so the ordering
+that makes RFC-001 §05 true is written once rather than remembered per call
+site. The size is still a constructor argument rather than an environment
+variable, because the warehouses are X-Small and suspend after sixty seconds —
+a larger pool would not serve anybody faster and would keep one awake.
+
+`build_visitors` takes `connect=None` today and every deployment passes it,
+which means no pool, an empty roster and every visitor served unbound. That is
+not a placeholder for a decision: `SessionConnection` is deliberately a protocol
+with no driver in the lockfile, and the adapter is one parameter away.
 
 ## What is not here yet
 
@@ -412,7 +502,9 @@ single-instance deployment this demo runs on — and is why the container runs
 ceiling would quietly mean twice what it says. `BudgetLedger`,
 `SourceRateLimiter`, `UploadLimiter` and `DraftStore` keep their state behind one
 lock and one interface so that a shared store has exactly four places to land
-when a second instance exists. A forgotten draft costs a visitor one
+when a second instance exists. `VisitorSessionStore` is the one that already has
+somewhere to land — its `SessionJournal` is that seam, and `FileJournal` is the
+first thing behind it. A forgotten draft costs a visitor one
 re-proposal; it is never a draft placed unconfirmed.
 
 Issue #85 trips the ceiling against the real deployment. `SpendLimits.from_env`

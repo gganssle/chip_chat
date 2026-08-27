@@ -271,20 +271,32 @@ class FakeAccount:
     offered it would be offering a door the thing under test does not have.
     """
 
-    __slots__ = ("_latency", "_lock", "_orders", "opened")
+    __slots__ = ("_fixtures", "_latency", "_lock", "_orders", "opened")
 
     def __init__(
-        self, orders: Sequence[OrderRow] = (), *, latency_seconds: float = 0.0
+        self,
+        orders: Sequence[OrderRow] = (),
+        *,
+        fixtures: Sequence[Sequence[object]] = (),
+        latency_seconds: float = 0.0,
     ) -> None:
         """Initialise the account.
 
         Args:
             orders: Every row of ``orders``, across every visitor.
+            fixtures: Every row of ``persona_fixtures``, each a sequence of
+                columns in the order
+                :data:`~chip_chat.api.visitors.ROSTER_COLUMNS` names them. Only
+                the entry roster reads these, and it reads them on a connection
+                that has bound nobody -- which is the whole reason
+                ``entry_roster`` is the one inverted policy in
+                ``sql/10_policies.sql``.
             latency_seconds: Slept inside each statement. Not realism -- it is
                 the knob that widens the window a bleed lives in, so a
                 concurrency test interleaves for real rather than by luck.
         """
         self._orders = tuple(orders)
+        self._fixtures = tuple(tuple(row) for row in fixtures)
         self._latency = latency_seconds
         self._lock = threading.Lock()
         self.opened = 0
@@ -319,6 +331,21 @@ class FakeAccount:
         if demo_id is None:
             return []
         return [row for row in self._orders if row.demo_id == demo_id]
+
+    def fixture_rows_visible_to(self, demo_id: str | None) -> list[Sequence[object]]:
+        """``entry_roster``, applied to the whole row rather than to the key.
+
+        Args:
+            demo_id: What ``GETVARIABLE('DEMO_ID')`` returns, or ``None``.
+
+        Returns:
+            Every fixture while nothing is bound; otherwise just the bound
+            visitor's. The first column is ``demo_id``, per
+            :data:`~chip_chat.api.visitors.ROSTER_COLUMNS`.
+        """
+        if demo_id is None:
+            return list(self._fixtures)
+        return [row for row in self._fixtures if row and row[0] == demo_id]
 
     def roster_visible_to(self, demo_id: str | None) -> list[str]:
         """``entry_roster``, applied.
@@ -408,6 +435,12 @@ class FakeSnowflakeSession:
             return [
                 (visitor,) for visitor in self._account.roster_visible_to(self.identity)
             ]
+        if statement.startswith("SELECT ") and " FROM persona_fixtures" in statement:
+            # The entry roster's own query. Modelled by prefix rather than
+            # verbatim because `chip_chat.api.visitors` spells its column list
+            # from one tuple, and a fake that had to be edited every time a
+            # column was added would be a fake nobody kept current.
+            return self._account.fixture_rows_visible_to(self.identity)
         raise UnknownStatementError(
             f"the fake account does not model {sql!r}; add it here and say what "
             "#43's policies do with it"

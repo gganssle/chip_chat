@@ -25,6 +25,7 @@ from chip_chat.api.limits import SpendLimits
 from chip_chat.api.outcome import STOP_STATE_MESSAGE
 from chip_chat.api.testing import FakeClock
 from chip_chat.api.turns import SpendGate
+from chip_chat.api.visitors import PersonaFixture, StaticRoster, VisitorDesk
 from chip_chat.otel import ChipChatAttributes, ToolName
 from chip_chat.otel.testing import span_recorder
 
@@ -420,3 +421,107 @@ def test_a_bogus_confirmation_announces_nothing_and_places_nothing(
         "pressed Confirm" in str(message.get("content", ""))
         for message in model.requests[0]
     )
+
+
+# ---------------------------------------------------------------------------
+# The name gate (#66). Behaviour tests only -- the *absence* of a demo_id in
+# every request is `api/tests/test_identity_binding.py`, because a criterion
+# about what an endpoint accepts is a criterion about the schema.
+# ---------------------------------------------------------------------------
+
+
+def personas() -> VisitorDesk:
+    """A desk with two archetypes loaded, which is what a live deployment has."""
+    return VisitorDesk(
+        StaticRoster(
+            PersonaFixture(
+                demo_id=f"dm-{index:06d}",
+                persona_id=persona,
+                label=persona.title(),
+                home_store=679,
+                home_store_name="Ballard",
+                points_balance=1_340,
+                usual_item_id="CMG-1",
+                order_count=42,
+                narrative="Same bowl, same store, nearly every week.",
+            )
+            for index, persona in enumerate(("regular", "explorer"), start=1)
+        ),
+        clock=FakeClock(),
+    )
+
+
+def test_the_name_gate_returns_a_populated_account(limits: SpendLimits) -> None:
+    """One screen, one name, and an account with something in it to ask about."""
+    model = ScriptedModel(answer("Sure thing."))
+    service = Service(SpendGate(SpendGuard(limits), lambda: model), visitors=personas())
+    with TestClient(create_app(service)) as client:
+        body = client.post("/api/entry", json={"name": "Sam"}).json()
+
+    assert body["stopped"] is False
+    assert body["visitor"]["display_name"] == "Sam"
+    assert body["visitor"]["points_balance"] == 1_340
+    assert body["visitor"]["order_count"] == 42
+    assert body["visitor"]["home_store_name"] == "Ballard"
+
+
+def test_a_visitor_who_skips_the_name_gate_still_gets_an_account(
+    limits: SpendLimits,
+) -> None:
+    """The cold start is the product risk, so the assignment is not on the polite path."""
+    model = ScriptedModel(answer("Sure thing."))
+    service = Service(SpendGate(SpendGuard(limits), lambda: model), visitors=personas())
+    with TestClient(create_app(service)) as client:
+        say(client, "what do I usually order?")
+        session_id = client.cookies[SESSION_COOKIE]
+
+    assert service.visitors.store.demo_id_for(session_id) is not None
+
+
+def test_the_assigned_persona_reaches_the_turn_span(limits: SpendLimits) -> None:
+    """``chat.turn`` carries the visitor it was actually served as."""
+    model = ScriptedModel(answer("Sure thing."))
+    service = Service(SpendGate(SpendGuard(limits), lambda: model), visitors=personas())
+    with TestClient(create_app(service)) as client, span_recorder("api") as spans:
+        client.post("/api/entry", json={"name": "Sam"})
+        say(client, "hello")
+        session_id = client.cookies[SESSION_COOKIE]
+
+    visitor = service.visitors.visitor(session_id)
+    assert visitor is not None
+    turn = spans.attributes_of("chat.turn")
+    assert turn[ChipChatAttributes.PERSONA_ID] == visitor.persona_id
+    assert turn[ChipChatAttributes.DEMO_ID] == visitor.demo_id
+
+
+def test_the_name_gate_serves_the_stop_state_and_assigns_nobody(
+    limits: SpendLimits, kill_switch: ManualKillSwitch
+) -> None:
+    """A roster slot spent on a visitor who cannot converse is a slot wasted."""
+    model = ScriptedModel(answer("Sure thing."))
+    desk = personas()
+    service = Service(
+        SpendGate(SpendGuard(limits, kill_switch=kill_switch), lambda: model),
+        visitors=desk,
+    )
+    kill_switch.throw()
+    with TestClient(create_app(service)) as client:
+        response = client.post("/api/entry", json={"name": "Sam"})
+
+    assert response.status_code == 200, "the stop state is a designed state"
+    body = response.json()
+    assert body["stopped"] is True
+    assert body["message"] == STOP_STATE_MESSAGE
+    assert body["visitor"] is None
+    assert len(desk.store) == 0
+
+
+def test_a_deployment_with_no_population_loaded_serves_the_demo_unbound(
+    client: TestClient,
+) -> None:
+    """The default service has an empty roster, and says so rather than inventing one."""
+    body = client.post("/api/entry", json={"name": "Sam"}).json()
+
+    assert body["stopped"] is False
+    assert body["visitor"] is None
+    assert say(client, "hello").json()["reply"] == "Sure thing."

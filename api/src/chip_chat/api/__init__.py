@@ -29,6 +29,15 @@ lives in the app tier where no tool argument and no model output can reach it --
 and the ops API's refusal of an unconfirmed draft is then a fact about the
 system rather than an instruction in a prompt.
 
+:mod:`chip_chat.api.visitors` is the other half of the request path, and it is
+where RFC-001 section 05's first clause lives: *identity originates in the app's
+server-side session store*. It holds the store, the persona assignment that
+fills it, and the roster read that makes an assigned account a populated one --
+because the cold start is the product risk and an empty account is how this demo
+dies. :mod:`chip_chat.api.pool` is the second clause, and the two meet at one
+method: the pool resolves a session id against the store and nothing else in the
+system can tell it whose data to return.
+
 :mod:`chip_chat.api.ops` is the refusal itself, and the second launch gate.
 Together with :mod:`chip_chat.api.confirmations` -- the same record for the three
 writes that have no draft -- it is the only path in the system that writes, and
@@ -41,9 +50,13 @@ from chip_chat.api.app import (
     SESSION_COOKIE,
     ChatReply,
     ChatRequest,
+    EntryReply,
+    EntryRequest,
     Service,
     SessionStore,
+    VisitorProfile,
     build_service,
+    build_visitors,
     create_app,
     default_kill_switch,
 )
@@ -103,13 +116,33 @@ from chip_chat.api.outcome import (
 from chip_chat.api.ratelimit import SourceRateLimiter
 from chip_chat.api.turns import FundedTurn, SpendGate, UnfundedTurnError
 from chip_chat.api.uploads import UploadLimiter
+from chip_chat.api.visitors import (
+    JOURNAL_VARIABLE,
+    MAX_DISPLAY_NAME_CHARS,
+    ROSTER_COLUMNS,
+    FileJournal,
+    NoJournal,
+    PersonaFixture,
+    PersonaRoster,
+    SessionJournal,
+    SnowflakeRoster,
+    StaticRoster,
+    VisitorDesk,
+    VisitorSession,
+    VisitorSessionStore,
+    clean_display_name,
+    journal_from_env,
+)
 from chip_chat.otel import service_name
 
 __all__ = [
     "DEFAULT_CONFIRMATION_TTL_SECONDS",
     "DEFAULT_DRAFT_TTL_SECONDS",
+    "JOURNAL_VARIABLE",
     "KILL_SWITCH_VARIABLE",
+    "MAX_DISPLAY_NAME_CHARS",
     "OPS_UNAVAILABLE_MESSAGE",
+    "ROSTER_COLUMNS",
     "SERVICE_NAME",
     "SESSION_COOKIE",
     "SESSION_HEADER",
@@ -128,26 +161,35 @@ __all__ = [
     "DraftLine",
     "DraftRejectedError",
     "DraftStore",
+    "EntryReply",
+    "EntryRequest",
     "EnvironmentKillSwitch",
+    "FileJournal",
     "FileKillSwitch",
     "FundedTurn",
     "KillSwitch",
     "ManualKillSwitch",
+    "NoJournal",
     "OpsRejectedError",
     "OpsService",
     "OpsSession",
     "OpsUnavailableError",
     "OrderType",
+    "PersonaFixture",
+    "PersonaRoster",
     "Receipt",
     "RejectionCode",
     "Reservation",
     "Selection",
     "Service",
+    "SessionJournal",
     "SessionStore",
+    "SnowflakeRoster",
     "SourceRateLimiter",
     "SpendGate",
     "SpendGuard",
     "SpendLimits",
+    "StaticRoster",
     "Stop",
     "StopReason",
     "SystemClock",
@@ -155,13 +197,20 @@ __all__ = [
     "UnfundedTurnError",
     "UploadLimiter",
     "Usage",
+    "VisitorDesk",
+    "VisitorProfile",
+    "VisitorSession",
+    "VisitorSessionStore",
     "WriteBackend",
     "WriteSession",
     "__version__",
     "any_of",
     "build_service",
+    "build_visitors",
+    "clean_display_name",
     "create_app",
     "default_kill_switch",
+    "journal_from_env",
     "offer_cancellation",
     "offer_preferences",
     "offer_redemption",
