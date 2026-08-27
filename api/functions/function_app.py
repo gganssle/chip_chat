@@ -44,10 +44,12 @@ malformed request or a server fault; it is the answer. The status codes that are
 not 200 are for calls this service will not answer at all (401, 400) and for the
 one state RFC-001 section 10 gives copy to (503).
 
-**The seam this file does not close.** :func:`build_ops_service` needs a
+**The seam this file used to leave open.** :func:`build_ops_service` needs a
 catalogue, because the draft store prices against one, and the production
-catalogue loader is #66's -- exactly as :func:`chip_chat.api.app.build_service`
-records for its photo lane. Until it exists, this host answers 503 with
+catalogue loader was #66's. It now exists -- :mod:`chip_chat.api.menu`, an
+Azure-backed blob store over the container the catalogue build publishes to --
+and this host reads it on first use. A deployment whose storage account is
+unconfigured still answers 503 with
 :data:`~chip_chat.api.ops.OPS_UNAVAILABLE_MESSAGE`, which is the behaviour
 RFC-001 section 10 specifies for an ops API that is not there and is therefore
 the honest state rather than a hole.
@@ -73,6 +75,7 @@ import azure.functions as func
 
 from chip_chat.api.confirmations import ConfirmationLedger
 from chip_chat.api.drafts import DraftStore
+from chip_chat.api.menu import build_catalog
 from chip_chat.api.ops import (
     OPS_UNAVAILABLE_MESSAGE,
     SESSION_HEADER,
@@ -299,24 +302,28 @@ def build_ops_service(catalog: MenuCatalog | None = None) -> OpsService:
     """Assemble the ops service from the environment.
 
     Args:
-        catalog: The built catalogue the draft store prices against. **Nothing
-            supplies one yet** -- the production catalogue loader is #66's, and
-            :func:`chip_chat.api.app.build_service` records the same seam for the
-            same reason. The parameter exists so the gap is named rather than
-            discovered.
+        catalog: The built catalogue the draft store prices against. ``None``
+            reads the published one through
+            :func:`chip_chat.api.menu.build_catalog`, which is #66's production
+            loader: an ``AzureCatalogStore`` over the container the catalogue
+            build writes to, read once per process. The parameter stays so a
+            test can supply a catalogue without a storage account.
 
     Returns:
         The service.
 
     Raises:
-        RuntimeError: If ``catalog`` is ``None`` or the write credentials are
+        RuntimeError: If no catalogue can be read or the write credentials are
             missing. Both are refusals to come up, and both surface to a caller
             as :data:`~chip_chat.api.ops.OPS_UNAVAILABLE_MESSAGE`.
     """
     if catalog is None:
+        catalog = build_catalog()
+    if catalog is None:
         raise RuntimeError(
-            "the ops API has no catalogue to price drafts against; the "
-            "production loader is #66's"
+            "the ops API has no catalogue to price drafts against; "
+            "chip_chat.api.menu.build_catalog could not read one -- see its log "
+            "line for which setting is missing"
         )
     return OpsService(
         SnowflakeWriteBackend.from_env(), DraftStore(catalog), ConfirmationLedger()

@@ -114,10 +114,22 @@ resource "azurerm_container_app" "web" {
     }
 
     container {
-      name   = "web"
-      image  = var.web_image
-      cpu    = 0.25
-      memory = "0.5Gi"
+      name  = "web"
+      image = var.web_image
+
+      # Half a vCPU rather than a quarter, and the memory that has to accompany
+      # it — Container Apps only allows fixed CPU/memory pairs, so 0.5 vCPU
+      # means 1 GiB whether or not the app wants it.
+      #
+      # This is bought for exactly one number: the cold start a visitor sees.
+      # `min_replicas = 0` means every link handed to somebody who has not
+      # clicked one recently pays for a Python process starting from nothing,
+      # and that start is CPU-bound. Idle still costs nothing, because idle is
+      # still zero replicas; what doubled is the rate while a replica is
+      # actually serving, which is a few minutes a day. docs/deployment.md §6
+      # has the measurement this is justified by.
+      cpu    = 0.5
+      memory = "1.0Gi"
 
       dynamic "env" {
         for_each = local.web_env
@@ -130,16 +142,44 @@ resource "azurerm_container_app" "web" {
       # /healthz is outside the spend cap and outside the rate limit on purpose
       # (chip_chat.api.app): a probe that could be refused for spending money it
       # never spends would take the app down every time the ceiling was reached.
+      #
+      # Every timing below was a default until a deploy showed what the defaults
+      # cost. Container Apps' own are a one-second timeout with no initial
+      # delay, and a cold Python process on a fraction of a vCPU cannot answer
+      # anything in the first second of its life — so the platform opened a
+      # restart loop against an application that was merely starting, and the
+      # revision never reached "ready". docs/deployment.md §3.11.
+      #
+      # The numbers are chosen so that the probe distinguishes the two things it
+      # is for: a container that is slow to come up (wait) and a container that
+      # has stopped answering (restart). Ten seconds of grace, then a five
+      # second timeout — five times the default, because a GIL held by a batch
+      # export is a real thing on one worker — and three consecutive failures
+      # before the platform concludes the process is gone. Forty-five seconds of
+      # evidence before a restart, rather than three.
       liveness_probe {
-        transport = "HTTP"
-        port      = var.web_target_port
-        path      = "/healthz"
+        transport               = "HTTP"
+        port                    = var.web_target_port
+        path                    = "/healthz"
+        initial_delay           = 10
+        interval_seconds        = 15
+        timeout                 = 5
+        failure_count_threshold = 3
       }
 
+      # Readiness is the one that decides whether a new revision takes traffic,
+      # so it is deliberately more patient than liveness: a revision that is
+      # still importing should be *not ready*, which is the correct answer, and
+      # should not also be *restarted*, which is not.
       readiness_probe {
-        transport = "HTTP"
-        port      = var.web_target_port
-        path      = "/healthz"
+        transport               = "HTTP"
+        port                    = var.web_target_port
+        path                    = "/healthz"
+        initial_delay           = 5
+        interval_seconds        = 10
+        timeout                 = 5
+        failure_count_threshold = 6
+        success_count_threshold = 1
       }
     }
   }

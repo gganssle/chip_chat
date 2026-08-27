@@ -49,7 +49,74 @@ from chip_chat.api.clock import Clock, SystemClock
 from chip_chat.api.limits import SpendLimits
 from chip_chat.api.outcome import BudgetScope, Stop, StopReason, Usage
 
-__all__ = ["UploadLimiter"]
+__all__ = ["PhotoRegistry", "UploadLimiter"]
+
+_MAX_REFS_PER_SESSION = 8
+"""Photographs one conversation may still refer back to.
+
+Not a rate limit -- that is :class:`UploadLimiter` -- but a bound on how far
+back "the photo I sent" can reach. A conversation is a few pictures long, and a
+list that grew without one would be a per-session leak in a process that never
+restarts.
+"""
+
+_MAX_SESSIONS_WITH_PHOTOS = 2_048
+"""Conversations tracked before the least recently used is forgotten."""
+
+
+class PhotoRegistry:
+    """Which photographs each conversation is allowed to talk about.
+
+    A blob reference is not a secret and it is not an identity, but it is a
+    *capability*: whoever holds ``uploads/2026-08-27/<uuid>.jpg`` can ask the
+    photo lane to describe it. ``BlobRef.parse`` stops a caller escaping the
+    container and stops the model inventing a path, and neither of those stops a
+    caller naming a well-formed reference that belongs to somebody else's
+    upload.
+
+    So the app remembers what it minted, per session, and a chat request naming
+    a reference this session did not upload is treated as naming no photograph
+    at all. Same rule as a draft id, and the same reason: *"a well-formed id
+    belonging to someone else is a not-found"*.
+
+    Thread-safe, process-local, and bounded in both directions. Losing the
+    registry on a restart costs a visitor the ability to refer back to a photo
+    they uploaded before it; it cannot cost anybody somebody else's photograph.
+    """
+
+    __slots__ = ("_by_session", "_lock")
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._by_session: dict[str, deque[str]] = {}
+
+    def record(self, session_id: str, reference: str) -> None:
+        """Remember that ``session_id`` uploaded ``reference``."""
+        with self._lock:
+            refs = self._by_session.pop(session_id, None)
+            if refs is None:
+                refs = deque(maxlen=_MAX_REFS_PER_SESSION)
+            refs.append(reference)
+            self._by_session[session_id] = refs
+            while len(self._by_session) > _MAX_SESSIONS_WITH_PHOTOS:
+                # Insertion-ordered, and every write re-inserts.
+                self._by_session.pop(next(iter(self._by_session)))
+
+    def holds(self, session_id: str, reference: str) -> bool:
+        """Whether ``session_id`` uploaded ``reference`` recently enough to name it."""
+        with self._lock:
+            return reference in self._by_session.get(session_id, ())
+
+    def release(self, session_id: str) -> None:
+        """Forget a conversation's photographs.
+
+        Called when a persona switch retires a session. Issue #69 asks that *no
+        data from the previous persona survives into the new conversation*, and
+        a photograph the old session uploaded is data from the old session.
+        """
+        with self._lock:
+            self._by_session.pop(session_id, None)
+
 
 _SWEEP_THRESHOLD = 4096
 """Tracked keys above which drained windows are swept, as in the rate limiter."""

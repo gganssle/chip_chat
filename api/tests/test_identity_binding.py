@@ -42,7 +42,10 @@ from chip_chat.api.app import (
     SESSION_COOKIE,
     ChatRequest,
     EntryRequest,
+    ReviseLine,
+    ReviseRequest,
     Service,
+    SwitchRequest,
     create_app,
 )
 from chip_chat.api.guard import SpendGuard
@@ -60,8 +63,20 @@ from chip_chat.api.visitors import (
 )
 from chip_chat.snowflake.procedures import IDENTITY_VOCABULARY
 
-REQUEST_MODELS: tuple[type[BaseModel], ...] = (ChatRequest, EntryRequest)
-"""Every model FastAPI parses a request body into. The list a new route grows."""
+REQUEST_MODELS: tuple[type[BaseModel], ...] = (
+    ChatRequest,
+    EntryRequest,
+    SwitchRequest,
+    ReviseRequest,
+    ReviseLine,
+)
+"""Every model FastAPI parses a request body into. The list a new route grows.
+
+``ReviseLine`` is nested inside ``ReviseRequest`` rather than parsed on its own,
+and it is here anyway: a nested model is still a place a field could be added,
+and the point of this list is that every such place is checked rather than the
+top-level ones.
+"""
 
 FORBIDDEN = frozenset(IDENTITY_VOCABULARY) - {"session_id"}
 """Every word :data:`IDENTITY_VOCABULARY` names, less the cookie's own value.
@@ -151,6 +166,27 @@ def test_a_chat_body_carrying_a_demo_id_is_refused(client: TestClient) -> None:
     assert refused.status_code == 422
 
 
+def test_a_switch_body_carrying_a_demo_id_is_refused(client: TestClient) -> None:
+    """The switcher is the request that chooses a persona. It has no fields."""
+    refused = client.post("/api/switch", json={"demo_id": "dm-000002"})
+
+    assert refused.status_code == 422
+    assert not SwitchRequest.model_fields
+
+
+def test_a_revise_body_carrying_a_demo_id_is_refused(client: TestClient) -> None:
+    refused = client.post(
+        "/api/draft/revise",
+        json={
+            "draft_id": "draft-1",
+            "lines": [{"item_id": "BOWL-CHICKEN", "quantity": 1}],
+            "demo_id": "dm-000002",
+        },
+    )
+
+    assert refused.status_code == 422
+
+
 def test_an_entry_body_carrying_a_demo_id_is_refused(client: TestClient) -> None:
     refused = client.post("/api/entry", json={"name": "Sam", "demo_id": "dm-000002"})
 
@@ -182,8 +218,30 @@ def test_the_desk_cannot_be_told_which_visitor_to_assign() -> None:
     assert parameters == {"session_id", "display_name"}
 
 
+def test_the_desk_cannot_be_told_which_visitor_to_switch_to() -> None:
+    """Two session ids and a name -- and neither id names anybody.
+
+    The archetype a switch moves *away* from is read out of the store inside
+    the desk rather than passed in, so there is no parameter through which a
+    request body could steer who the visitor becomes next.
+    """
+    parameters = set(inspect.signature(VisitorDesk.switch).parameters) - {"self"}
+
+    assert parameters == {"old_session_id", "new_session_id", "display_name"}
+
+
 @pytest.mark.parametrize(
-    "handler", ["_run_turn", "_profile", "_session_id", "_source_address"]
+    "handler",
+    [
+        "_run_turn",
+        "_profile",
+        "_persona",
+        "_entry_reply",
+        "_revise",
+        "_with_photo",
+        "_session_id",
+        "_source_address",
+    ],
 )
 def test_no_request_helper_accepts_a_visitor_identifier(handler: str) -> None:
     signature = inspect.signature(getattr(app_module, handler))
@@ -244,6 +302,17 @@ def test_a_second_browser_does_not_inherit_the_first_ones_account(
     second = client.post("/api/entry", json={"name": "Alex"})
 
     assert first.json()["visitor"]["persona_id"] != second.json()["visitor"]["persona_id"]
+
+
+def test_a_switch_hands_back_no_identity_either(client: TestClient) -> None:
+    """The reply that says who you have become still cannot say who that is."""
+    client.post("/api/entry", json={"name": "Sam"})
+
+    switched = client.post("/api/switch", json={})
+
+    assert switched.status_code == 200
+    assert "demo_id" not in switched.json()["visitor"]
+    assert "dm-" not in switched.text
 
 
 def test_a_returning_cookie_resumes_rather_than_reassigns(client: TestClient) -> None:

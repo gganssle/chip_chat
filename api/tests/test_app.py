@@ -28,6 +28,7 @@ from chip_chat.api.turns import SpendGate
 from chip_chat.api.visitors import PersonaFixture, StaticRoster, VisitorDesk
 from chip_chat.otel import ChipChatAttributes, ToolName
 from chip_chat.otel.testing import span_recorder
+from chip_chat.web import BANNER
 
 
 @pytest.fixture
@@ -77,6 +78,47 @@ def client(service: Service) -> Iterator[TestClient]:
         yield running
 
 
+@pytest.fixture
+def populated(
+    limits: SpendLimits,
+    kill_switch: ManualKillSwitch,
+    clock: FakeClock,
+    model: ScriptedModel,
+) -> Iterator[TestClient]:
+    """A client whose deployment has a synthetic population behind it.
+
+    One fixture, so the persona a test asserts about is the one it wrote down.
+    """
+    service = Service(
+        SpendGate(
+            SpendGuard(limits, kill_switch=kill_switch, clock=clock), lambda: model
+        ),
+        visitors=VisitorDesk(
+            StaticRoster(
+                [
+                    PersonaFixture(
+                        demo_id="demo-0001",
+                        persona_id="regular",
+                        label="The Weekly Regular",
+                        home_store=679,
+                        home_store_name="Ballard",
+                        points_balance=1_340,
+                        usual_item_id="CMG-1",
+                        order_count=79,
+                        narrative=(
+                            "a regular at Ballard, 1,340 points on the card, and "
+                            "99% of 79 orders the same Chicken Bowl."
+                        ),
+                    )
+                ]
+            ),
+            clock=clock,
+        ),
+    )
+    with TestClient(create_app(service)) as running:
+        yield running
+
+
 def say(client: TestClient, message: str, **extra: Any) -> Any:
     return client.post("/api/chat", json={"message": message, **extra})
 
@@ -86,7 +128,7 @@ def say(client: TestClient, message: str, **extra: Any) -> Any:
 
 def test_the_entry_page_carries_the_unaffiliated_banner(client: TestClient) -> None:
     body = client.get("/").text
-    assert "Not affiliated" in body
+    assert BANNER in body
     assert "simulated" in body
 
 
@@ -98,10 +140,18 @@ def test_the_demo_is_kept_out_of_search_results(client: TestClient) -> None:
     assert "Disallow: /" in client.get("/robots.txt").text
 
 
-def test_the_opening_message_names_the_persona(client: TestClient) -> None:
-    """A visitor with an empty account has nothing to ask; this says they aren't."""
-    body = client.get("/").text
-    assert "1,340 points" in body
+def test_the_opening_message_names_the_persona(populated: TestClient) -> None:
+    """A visitor with an empty account has nothing to ask; this says they aren't.
+
+    The message is on the *entry response* rather than in the served HTML: the
+    page is the same document for everybody and the persona is not, so the
+    sentence is composed once the app has decided who the visitor became.
+    """
+    opening = populated.post("/api/entry", json={"name": "Sam"}).json()["opening"]
+
+    assert opening.startswith("Hi Sam.")
+    assert "1,340 points on the card" in opening
+    assert "Ballard" in opening
 
 
 def test_the_entry_page_mints_a_session(client: TestClient) -> None:

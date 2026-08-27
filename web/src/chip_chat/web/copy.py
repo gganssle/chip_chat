@@ -1,49 +1,91 @@
 """Every sentence the visitor reads, in one place.
 
-Copy is separated from markup because two of these strings are requirements
-rather than wording. :data:`BANNER` is the unaffiliated-demo disclosure the
-README insists on, and :data:`OPENING_MESSAGE` carries the one decision the
-public demo turns on:
+Copy is separated from markup because several of these strings are requirements
+rather than wording, and a requirement buried in an f-string in a page builder
+is a requirement nobody can test.
 
-    A visitor with an empty account has nothing to ask. So assign each new name
-    a loaded persona on entry *and say so in the opening message*.
+:data:`BANNER` is the first of them and the strictest. Issue #70 is a launch
+criterion and it quotes the sentence it wants, word for word:
 
-Which is why the opening message names the persona's balance and usual order.
-It is not scene-setting; it is what tells a cold visitor that "how many points
-do I have?" is a question worth asking.
+    Unofficial demo, not affiliated with Chipotle Mexican Grill. All orders are
+    simulated.
 
-:data:`SUGGESTIONS` is the other half of that. Clickable chips do more for a
-visitor who has never seen the app than any amount of prompt engineering, and
-these three are the three interactions issue #16 asks to be demonstrated end to
-end: a menu question, an account question, an order.
+It appears on the entry screen **and** persists in the chat header, and it is
+not dismissible. A notice a visitor can close is a notice that is absent for
+every visitor who closed it, which for a publicly reachable bot using a real
+company's menu is the whole of the problem.
+
+:data:`SIMULATED` is the second. PRD Flow 3 puts the word on the confirmation
+card itself -- ``[ Edit ]  [ Place order ]  · simulated`` -- rather than in a
+footnote, and issue #68's fourth acceptance criterion is that it is visible on
+every card *and every receipt*. So it is one constant, used in both places, and
+``web/tests/test_page.py`` counts the places.
+
+The rest is ordinary product copy, kept here for the ordinary reason: the
+opening message and the persona sentence are the interface, and an interface
+should be reviewable without reading a template.
 """
-
-from chip_chat.web.persona import ACCOUNT_SUMMARY
 
 __all__ = [
     "BANNER",
-    "OPENING_MESSAGE",
+    "NAME_GATE_HINT",
+    "NAME_GATE_PLACEHOLDER",
+    "NAME_GATE_SUBMIT",
+    "NAME_GATE_TITLE",
+    "PHOTO_RETENTION",
+    "SIMULATED",
     "STOP_STATE_HEADING",
-    "SUGGESTIONS",
+    "SWITCH_CONFIRM",
+    "SWITCH_LABEL",
     "TITLE",
 ]
 
-TITLE = "Cilantro — a demo assistant"
+TITLE = "Cilantro — an unofficial demo assistant"
 
 BANNER = (
-    "A proof of concept on publicly published menu data. Not affiliated with or "
-    "endorsed by Chipotle Mexican Grill. Orders are simulated — nothing is "
-    "cooked, charged or sent to a restaurant."
+    "Unofficial demo, not affiliated with Chipotle Mexican Grill. All orders are "
+    "simulated."
 )
+"""Issue #70's disclosure, verbatim, on every screen and in the chat header.
 
-OPENING_MESSAGE = ACCOUNT_SUMMARY
+Not a toast, not a footer, and not dismissible. The longer explanation of what
+the demo reads and what it invents lives in the README and in
+``docs/public-demo.md``; this is the sentence that has to be in front of
+somebody who arrived from a link and will read one line.
+"""
 
-SUGGESTIONS = (
-    "Is the barbacoa spicy?",
-    "How many points do I have?",
-    "Order me a chicken bowl with a side of guac",
+NAME_GATE_TITLE = "What should I call you?"
+
+NAME_GATE_HINT = (
+    "Invent a first name. There is no account to sign in to and nothing is kept "
+    "beyond the demo — you will be assigned one of twenty-eight synthetic "
+    "customers with real order history behind them."
 )
-"""The three interactions, one click each. Menu, account, order — in that order."""
+"""Why the gate is a greeting and not a login, said before the visitor types.
+
+Asking a stranger for a name is a small thing to explain and a large thing to
+get wrong. This says the name is invented, that it buys them a loaded account,
+and that the account is not theirs — all three before the cursor blinks.
+"""
+
+NAME_GATE_PLACEHOLDER = "Sam"
+
+NAME_GATE_SUBMIT = "Start"
+
+SIMULATED = "simulated"
+"""The word on every card and every receipt. PRD Flow 3, issue #68."""
+
+SWITCH_LABEL = "Switch persona"
+"""The switcher, on the chat surface. One tap, never a settings screen."""
+
+SWITCH_CONFIRM = "Start again as somebody else?"
+
+PHOTO_RETENTION = "Photos are deleted after 48 hours."
+"""What is promised beside an uploaded photograph.
+
+The same promise ``chip_chat.vision.retention`` makes to the storage account,
+said to the person it is about rather than only to the lifecycle policy.
+"""
 
 STOP_STATE_HEADING = "Cilantro is resting"
 """Heading above :data:`~chip_chat.api.outcome.STOP_STATE_MESSAGE`.
