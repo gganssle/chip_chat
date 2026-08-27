@@ -204,18 +204,26 @@ resource "databricks_registered_model" "recommender" {
   depends_on = [databricks_grants.medallion]
 }
 
-# EXECUTE, and only EXECUTE -- which is the privilege to *load* a model and
-# score with it, and is what `recommender_publish.py` and a reviewer need.
+# EXECUTE is the privilege to *load* a model and score with it, which is what
+# `recommender_publish.py` and a reviewer need. CREATE_MODEL_VERSION is the
+# privilege to add one, which is what the training run needs, and it is on the
+# model rather than on the schema.
 #
-# This comment used to say that MODIFY on the schema is what creating a version
-# and setting an alias needs. It is not, and the first live training run is how
-# that was found out: MLflow's `log_model(registered_model_name=...)` calls
-# `create_registered_model` before it logs anything, idempotently, whether or
-# not the model already exists -- and that call wants CREATE_MODEL on the
-# schema, which `databricks_catalog.tf` now grants and argues for.
+# Both of those took a live run each to establish, because this comment used to
+# say that MODIFY on the schema covered creating a version and setting an alias.
+# It covers neither. Registering a version needs two privileges on two different
+# securables:
 #
-# The read-only principal gets EXECUTE so that a reviewer can load a version and
-# reproduce a recommendation without being able to replace it.
+#   CREATE_MODEL         on the schema, because MLflow's
+#                        `log_model(registered_model_name=...)` calls
+#                        `create_registered_model` first, idempotently, whether
+#                        or not Terraform already made the model.
+#                        `databricks_catalog.tf` grants it and argues for it.
+#   CREATE_MODEL_VERSION on the model, which is the one this file owes.
+#
+# Neither is implied by the other and neither is implied by MODIFY. The
+# read-only principal gets EXECUTE alone, so a reviewer can load a version and
+# reproduce a recommendation without being able to add one.
 resource "databricks_grants" "recommender_model" {
   count = var.databricks_unity_catalog_enabled ? 1 : 0
 
@@ -223,7 +231,7 @@ resource "databricks_grants" "recommender_model" {
 
   grant {
     principal  = databricks_service_principal.jobs.application_id
-    privileges = ["EXECUTE"]
+    privileges = ["EXECUTE", "CREATE_MODEL_VERSION", "APPLY_TAG"]
   }
 
   grant {

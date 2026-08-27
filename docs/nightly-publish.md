@@ -16,6 +16,22 @@ what statement, and is stdlib-only so a cluster can read it and `make ci` can
 test it. `databricks/notebooks/snowflake_publish.py` is the loop.
 `infra/terraform/databricks_publish.tf` is the job, its schedule and its alert.
 
+> **Status.** Run. `chip-chat-publish` moved all eleven tables into
+> `hq72718.us-east-2.aws` on 2026-08-27 — 108,157 rows in 176.7 seconds — and
+> §6 records what it cost on both sides, including the cross-cloud egress
+> question [#104](https://github.com/gganssle/chip_chat/issues/104) put against
+> this issue. It took five attempts and each of the four failures is written
+> down where it belongs: the clock check in §4, the credential and the
+> serialised verdict in `publish.py`'s own docstrings, and the row access policy
+> in §7. None of them could have been found without running it, and one of them
+> was found by the alert this ticket is required to have.
+>
+> **One thing is live and not in the repository.** #43's `VISITOR_ISOLATION`
+> policy now exempts `CHIP_CHAT_PUBLISH`; the change was applied to the account
+> and belongs in `snowflake/sql/10_policies.sql`, which is #43's file. Until it
+> lands there, `make snowflake-apply` reverts it and the next publish fails at
+> the first table. §7.
+
 ---
 
 ## 1. What crosses
@@ -293,9 +309,44 @@ the sixty-second minimum Snowflake bills per resume applied. That floor is not
 trivia: eleven small tables can finish well inside a minute, and an estimate
 without it would report less than the account is charged.
 
-**The billed figures are not yet recorded here, because this job has not been run
-against the live estate.** Writing a number in this table that nobody measured
-would be worse than an empty row. Fill it from the run:
+**Measured, 2026-08-27.** One full publish against `dbw-chip-chat` and
+`hq72718.us-east-2.aws`: eleven tables, **108,157 rows**, in a job that ran for
+**176.7 seconds** wall clock — 51 seconds of that a cluster starting, which is
+most of the Databricks bill.
+
+| | measured | how |
+| --- | --- | --- |
+| Rows | 108,157 across 11 tables | the job's own output; the largest is 48,767 order lines |
+| Warehouse-active seconds | 112.5 | the job's own measurement: the sum of the eleven per-table spans |
+| Snowflake credits, **estimated** | **0.0312** | `publish.warehouse_credits(112.5)` at the X-Small rate |
+| Snowflake credits, **billed** | **≈0.066** | the warehouse is warm for the whole run and for 60s after it: 177s + `AUTO_SUSPEND` 60 = 237s of X-Small |
+| Cluster time | 176.7s (0.0491 h) | single-node `Standard_F4ads_v7`, 51s setup + 125s execution |
+| DBUs | **≈0.060** | 0.0491 h at 1.224 DBU/cluster-hour, derived below |
+| Bytes crossed | **≈1.53 MiB** | the eleven tables' compressed size in Snowflake after the run |
+
+**The job's own estimate is about half the billed figure, and the gap is
+structural rather than a bug.** `warehouse_credits` counts the seconds the
+publish's *statements* were running. Snowflake bills the warehouse from resume
+to suspend, which covers the Spark-side gaps between the eleven tables and the
+sixty seconds of `AUTO_SUSPEND` after the last one. The estimate is still worth
+having — it is what the job can know about itself, on the run, without waiting
+three hours for `ACCOUNT_USAGE` — but it is a floor and this table says so.
+Either number is comfortably inside `CHIP_CHAT_PUBLISH_MONITOR`'s two-credit
+daily quota: a nightly publish spends about **3% of it**.
+
+**Where the DBU rate comes from.** `system.billing.usage` is the authority and
+is not readable from this workspace — it needs a Databricks *account* admin,
+which the workspace admin is not. So the rate is derived from the subscription's
+own Azure bill for the previous day, when only single-node
+`Standard_F4ads_v7` job clusters ran: **1.9925 Premium Jobs Compute DBUs over
+1.6276 cluster-hours = 1.224 DBU/cluster-hour**, against 19 runs whose durations
+the Jobs API reports. At the same day's meter rates — $0.2999 per Jobs Compute
+DBU and $0.343 per `F4ads v7` hour — one publish costs about **$0.018 of DBUs
+plus $0.017 of VM, so $0.035 on the Databricks side.** Treat the DBU figure as
+an upper bound: a run's reported duration is slightly shorter than the cluster's
+billed life, so dividing by it inflates the rate.
+
+Confirm both against the systems of record once they catch up:
 
 ```sql
 -- Snowflake, as CHIP_CHAT_ADMIN. ACCOUNT_USAGE lags a run by up to three hours,
@@ -316,9 +367,14 @@ WHERE usage_metadata.job_id = '<the publish job id>'
 GROUP BY ALL ORDER BY usage_date DESC;
 ```
 
-| Run | Rows | Warehouse seconds | Snowflake credits | Cluster minutes | DBUs |
-| --- | --- | --- | --- | --- | --- |
-| _first live run_ | | | | | |
+```sql
+-- Azure, for the DBU half, once Cost Management has the day. This is what the
+-- rate above was derived from for 2026-08-26 and is the way to check it:
+--   az rest --method post --url ".../providers/Microsoft.CostManagement/query
+--     ?api-version=2023-11-01" --body @query.json
+-- grouped by Meter, filtered to MeterCategory 'Azure Databricks'.
+```
+
 
 What can be said before the run, from the shape of the workload: the publish
 moves the whole population — around fifty thousand order lines is the largest
