@@ -161,6 +161,7 @@ __all__ = [
     "drop_staging",
     "is_utc",
     "options",
+    "pem_body",
     "required_columns",
     "select",
     "staging",
@@ -751,6 +752,50 @@ def options(url: str, user: str, schema_name: str) -> dict[str, str]:
         # no timestamp depends on it having worked.
         "sfTimezone": SPARK_TIMEZONE,
     }
+
+
+def pem_body(key: str) -> str:
+    """Return ``key`` as the connector's ``pem_private_key`` option wants it.
+
+    Which is: the base64 body of an unencrypted PKCS#8 private key, with the
+    ``-----BEGIN PRIVATE KEY-----`` and ``-----END PRIVATE KEY-----`` armour
+    removed and every newline taken out. Not what ``openssl pkcs8`` writes, and
+    not what an operator following `docs/nightly-publish.md` §5 puts in the
+    secret -- they put the file in, whole, which is right: a secret holding a
+    mangled derivative of a key is a secret nobody can check against the file it
+    came from.
+
+    So the normalisation happens here, at the point of use, and the second live
+    publish is why it exists. It got past the clock check and died on
+    ``IllegalArgumentException: Input PEM private key is invalid`` -- which
+    names neither the armour nor the newlines, and reads exactly like a
+    corrupted secret.
+
+    Idempotent: a key that has already been stripped is returned unchanged, so
+    an operator who pasted the body rather than the file is not punished for it.
+
+    Args:
+        key: The secret's value. A PEM file's contents, or its body alone.
+
+    Returns:
+        The base64 body, one line, no whitespace.
+
+    Raises:
+        ValueError: If nothing is left after stripping. An empty secret and a
+            secret holding only armour both fail here rather than inside the
+            JDBC driver, where the message would name neither.
+    """
+    body = "".join(
+        line.strip()
+        for line in key.strip().splitlines()
+        if not line.strip().startswith("-----")
+    )
+    if not body:
+        raise ValueError(
+            "the publisher private key secret holds no key body; check "
+            f"{PRIVATE_KEY_SECRET!r} in the {SECRET_SCOPE!r} scope"
+        )
+    return body
 
 
 def is_utc(zone: str) -> bool:

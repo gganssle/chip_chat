@@ -771,3 +771,55 @@ def test_the_three_account_tables_are_granted_by_name() -> None:
         )
     for table_name in ("demo_visitors", "personas", "persona_fixtures"):
         assert f"ON TABLE CHIP_CHAT.ACCOUNTS.{table_name}" not in granted
+
+
+# --- The credential, as the connector wants it --------------------------------
+
+
+def test_the_pem_body_is_what_the_connector_takes() -> None:
+    """Armour off, newlines out. The second live publish died on this.
+
+    `openssl pkcs8` writes a PEM file and `docs/nightly-publish.md` §5 tells an
+    operator to put that file in the secret whole, which is right -- a secret
+    holding a mangled derivative of a key is a secret nobody can check against
+    the file it came from. The connector's `pem_private_key` option wants the
+    base64 body alone, and says so by raising `Input PEM private key is
+    invalid`, which names neither the armour nor the newlines.
+    """
+    key = (
+        "-----BEGIN PRIVATE KEY-----\n"
+        "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQ\n"
+        "C7VJTUt9Us8cKjMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dV\n"
+        "-----END PRIVATE KEY-----\n"
+    )
+    assert publish.pem_body(key) == (
+        "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQ"
+        "C7VJTUt9Us8cKjMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dV"
+    )
+    assert "\n" not in publish.pem_body(key)
+    assert "-----" not in publish.pem_body(key)
+
+
+def test_the_pem_body_does_not_punish_an_operator_who_pasted_the_body() -> None:
+    """Idempotent, so a secret filled either way works."""
+    body = "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQ"
+    assert publish.pem_body(body) == body
+    assert publish.pem_body(publish.pem_body(body)) == body
+
+
+def test_an_empty_credential_fails_here_rather_than_inside_the_driver() -> None:
+    """Both empties: nothing at all, and armour with nothing between it."""
+    for empty in (
+        "",
+        "   \n  ",
+        "-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----",
+    ):
+        with pytest.raises(ValueError, match="no key body"):
+            publish.pem_body(empty)
+
+
+def test_the_notebook_normalises_the_key_it_reads() -> None:
+    """And reads it from the secret scope rather than from anywhere else."""
+    source = code(NOTEBOOK.read_text())
+    assert "publish.pem_body(dbutils.secrets.get(" in source
+    assert "publish.PRIVATE_KEY_SECRET" in source

@@ -92,7 +92,12 @@ if not publish.is_utc(session_timezone):
         "value to override here."
     )
 
-PRIVATE_KEY = dbutils.secrets.get(scope=SCOPE, key=publish.PRIVATE_KEY_SECRET)
+# The secret holds the .p8 file whole, which is what an operator can check
+# against the file it came from. The connector wants the base64 body alone; see
+# `publish.pem_body`, which is where the second live publish died.
+PRIVATE_KEY = publish.pem_body(
+    dbutils.secrets.get(scope=SCOPE, key=publish.PRIVATE_KEY_SECRET)
+)
 
 # Staging is the only schema this job writes with the connector. The serving
 # tables are reached by fully qualified name inside `publish.swap`, never by a
