@@ -204,12 +204,18 @@ resource "databricks_registered_model" "recommender" {
   depends_on = [databricks_grants.medallion]
 }
 
-# EXECUTE, and only EXECUTE. `databricks_catalog.tf` already grants the jobs
-# service principal MODIFY on this schema, which is what creating a version and
-# setting an alias needs; loading a model to score with it is a separate
-# privilege and is granted separately. The read-only principal gets it so that a
-# reviewer can load a version and reproduce a recommendation without being able
-# to replace it.
+# EXECUTE, and only EXECUTE -- which is the privilege to *load* a model and
+# score with it, and is what `recommender_publish.py` and a reviewer need.
+#
+# This comment used to say that MODIFY on the schema is what creating a version
+# and setting an alias needs. It is not, and the first live training run is how
+# that was found out: MLflow's `log_model(registered_model_name=...)` calls
+# `create_registered_model` before it logs anything, idempotently, whether or
+# not the model already exists -- and that call wants CREATE_MODEL on the
+# schema, which `databricks_catalog.tf` now grants and argues for.
+#
+# The read-only principal gets EXECUTE so that a reviewer can load a version and
+# reproduce a recommendation without being able to replace it.
 resource "databricks_grants" "recommender_model" {
   count = var.databricks_unity_catalog_enabled ? 1 : 0
 

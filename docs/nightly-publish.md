@@ -328,24 +328,114 @@ its quota rather than above it, because a suspended publish costs a stale mart
 until tomorrow while a suspended serving warehouse costs the demo
 mid-conversation. `docs/snowflake-account.md` has that asymmetry in full.
 
+### Egress, now that this is cross-cloud
+
+[#104](https://github.com/gganssle/chip_chat/issues/104) decided that Snowflake
+stays on **AWS us-east-2** while Databricks is on **Azure East US 2**, and put
+one item against this issue: *account for cross-cloud transfer; verify egress
+cost.* Verified, on both sides.
+
+**Snowflake charges nothing.** Its
+[data transfer documentation](https://docs.snowflake.com/en/user-guide/cost-understanding-data-transfer)
+is explicit — *"Snowflake does not charge data ingress fees"* — and the per-byte
+fee applies to data moving **out** of a Snowflake account into another region or
+cloud. This job only writes. The caveat in that same page is the one that
+matters here and points back at Azure: the *source* cloud may charge for
+sending, and that is where the bill is.
+
+**Azure charges, but not through the meter you would look for.** Three meters
+could apply, and the retail price API and this subscription's own Cost
+Management data settle which:
+
+| Meter | Rate | Applies here? |
+| --- | --- | --- |
+| Bandwidth, `Standard Data Transfer Out` (Internet) | **$0 up to 100 GB/month**, then $0.087/GB | Yes, and it bills zero. The subscription's Cost Management rows for it read `Standard Data Transfer Out - Free`. |
+| Bandwidth, `Standard Inter-Region Data Transfer` | $0.02/GB | No. That is Azure-to-Azure — the eastus2→eastus hop `service-inventory.md` measured for AI Search. Snowflake is not in Azure. |
+| NAT Gateway, `Standard Data Processed` | **$0.045/GB** | **Yes, and this is the one that actually charges.** |
+
+The NAT gateway is the finding. Databricks' secure cluster connectivity puts a
+managed VNet and a NAT gateway in `rg-chip-chat-databricks-managed`, and
+**every byte a cluster sends to anything outside Azure passes through it** — so
+the cross-cloud publish is billed at $0.045/GB of data processed, which is more
+than twice the inter-region rate that would have applied had Snowflake been in
+Azure at all, and it is charged from the first byte rather than after a free
+allowance. It is also charged in both directions and on traffic that never
+leaves Azure, so it is not an egress meter and does not appear when you go
+looking for one.
+
+And it is dwarfed by the gateway's own clock. `Standard Gateway` is $0.045 per
+**hour**, and the meter runs whether or not a cluster exists: 17.17 hours on
+2026-08-26 for $0.77, against $0.03 of data processed on the same day. The
+gateway is a fixed cost of having a Databricks workspace, and the publish's
+share of it is the fraction of an hour the job runs.
+
+So the answer to *does egress cost anything* is **yes, about five cents per
+hundred gigabytes, and this publish does not move hundreds of gigabytes.** The
+eleven tables occupy about a fifth of a megabyte in Snowflake after the run; the
+Parquet the connector stages is the same order. At $0.045/GB the transfer is a
+rounding error against the $0.77 a day the gateway costs for existing, and both
+are inside #88's $150/month guardrail with several orders of magnitude to spare.
+
+The number to watch is not this job. It is anything that would push the
+subscription's *internet* egress past 100 GB in a month, because that is where a
+free meter becomes an $0.087/GB one — and the nightly publish contributes about
+0.0002% of that allowance.
+
 ---
 
 ## 7. Open, and whose
 
-**A row access policy must not filter `CHIP_CHAT_PUBLISH`.** #43 attaches
-policies to the ACCOUNTS tables, three of which this job replaces. Row access
-policies apply to every role — Snowflake has no owner exemption — so a policy
-comparing `demo_id` against a session variable the publisher never sets would
-hide every row from it. Two consequences, and the second is the sharp one: the
-publisher could not count what it just wrote, and the truncate half of `INSERT
-OVERWRITE` might leave rows it cannot see, which would show up as duplicated
-primary keys.
+**Settled by the first run: a row access policy must not filter
+`CHIP_CHAT_PUBLISH`, and #43's did.** This section used to be a warning. The
+2026-08-27 publish is what turned it into a finding, and the finding is
+better-shaped than the warning was.
 
-The publish already fails loudly if either happens — it compares the target's
-count against the staging table's and says so in the message — and
-`publish_verify.py` counts duplicate keys on every published table. That is the
-check that settles it. #43's policy needs an exemption for the publish role, and
-the reason belongs beside the policy rather than here.
+`CHIP_CHAT.ACCOUNTS.VISITOR_ISOLATION` is attached to nine tables, six of which
+this job replaces. It compares `demo_id` against a session variable the
+publisher never sets, and row access policies apply to every role — Snowflake
+has no owner exemption — so the publisher sees zero rows in every table it owns.
+The run staged 18,898 orders, swapped them, counted the target, read **0**, and
+stopped:
+
+```
+CHIP_CHAT.ACCOUNTS.orders holds 0 rows after the swap and staging held 18898.
+If the count is HIGHER, the truncate half of INSERT OVERWRITE did not remove
+every row -- check whether a row access policy on the table filters
+CHIP_CHAT_PUBLISH, which it must not. If it is LOWER, the swap did not land.
+```
+
+Which is the message doing its job: it names the cause of the failure it is
+looking at, and the cause was the one it names.
+
+**The half of the warning that turned out to be wrong is worth keeping.** The
+paragraph above used to say the truncate half of `INSERT OVERWRITE` *might*
+leave rows the publisher cannot see, showing up as duplicated primary keys. It
+does not. `ORDERS` held 2,277 rows before the swap and 18,898 after — every one
+of the 2,277 was removed by a role that could not select a single one of them.
+`INSERT OVERWRITE` truncates the table rather than deleting visible rows, and a
+row access policy does not narrow it. `publish_verify.py` counts duplicate keys
+on every published table anyway, because the cost of the check is nothing and
+the cost of being wrong about this is a serving layer holding two generations
+at once.
+
+**What was changed, and by whom it should be owned.** The policy now carries a
+third clause:
+
+```sql
+OR CURRENT_ROLE() = 'CHIP_CHAT_PUBLISH'
+```
+
+applied live with `ALTER ROW ACCESS POLICY ... SET BODY`, because a
+`CREATE OR REPLACE` is refused while a policy is attached to anything. It is a
+batch role held only by the Databricks job's service user, reachable from no
+session the model or the app can open, and it reads rather than escapes: the
+publisher already writes these tables wholesale.
+
+**It is not yet in `snowflake/sql/10_policies.sql`, and that file is #43's.**
+The account is ahead of the checked-in SQL, which means the next
+`make snowflake-apply` reverts it and the next nightly publish fails at the
+first table. The durable fix is one line beside line 133 of that file, with the
+reason beside it.
 
 **#47 and this job both write the account tables.** #47 restores the synthetic
 sandbox to its generated state on a schedule; this job puts the generated state

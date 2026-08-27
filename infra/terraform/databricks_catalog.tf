@@ -108,12 +108,30 @@ locals {
   # into a schema. CREATE_MATERIALIZED_VIEW is not implied by CREATE_TABLE and is
   # what #33 and #34 will actually create; granting it here means neither issue
   # has to come back and widen a grant to get started.
+  #
+  # CREATE_MODEL is #37's, and it is here for the same reason and against the
+  # belief `databricks_recommender.tf` used to hold: that MODIFY on the schema
+  # is what registering a version needs. It is not. MLflow's
+  # `log_model(registered_model_name=...)` calls `create_registered_model`
+  # first, idempotently, whether or not Terraform already made the model -- and
+  # that call is refused with `User does not have CREATE MODEL on Schema
+  # 'chip_chat.gold_synthetic'` after the fit, after both hit-rate evaluations,
+  # at the last step of the run.
+  #
+  # It is granted on all six schemas rather than on the one that holds a model,
+  # which is a real if small widening: nothing wants a model in
+  # `bronze_harvested`. The same is already true of CREATE_MATERIALIZED_VIEW,
+  # and one writer list that every schema shares is worth more here than a
+  # marginally narrower grant plus a second list to keep in step with it. The
+  # grants that decide anything are the per-model ones below and in
+  # `databricks_recommender.tf`.
   uc_writer_privileges = [
     "USE_SCHEMA",
     "SELECT",
     "MODIFY",
     "CREATE_TABLE",
     "CREATE_MATERIALIZED_VIEW",
+    "CREATE_MODEL",
     "REFRESH",
   ]
 
