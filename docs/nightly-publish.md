@@ -194,7 +194,17 @@ nobody hears about otherwise. One retry first, because a refused JDBC connection
 is worth trying again before it wakes somebody, and one is where that stops being
 true.
 
-To prove the mail arrives end to end, break it on purpose once:
+**It fired four times before anyone asked it to.** Standing this job up took
+five runs and the first four failed — on the clock check, on the credential, on
+#43's row access policy, and on a `Decimal` in the verdict. Every one of them
+raised the alert, which is more convincing than the deliberate test below: the
+alert was not exercised, it was *used*, on failures nobody had designed. Two of
+those are the shape the criterion is really about — a run that died before
+touching a table, and a run in which every table had already swapped correctly —
+and the same mail went out for both, which is right. What the mail says is
+"look", not "this is what is wrong".
+
+To prove the mail arrives end to end on demand, break it on purpose once:
 
 ```bash
 databricks jobs run-now $(terraform output -raw databricks_publish_job_id) \
