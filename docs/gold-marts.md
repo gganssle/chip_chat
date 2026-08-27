@@ -350,8 +350,15 @@ opening the workspace.
   §10's stale-serving behaviour is implemented where the serving happens, and
   `derived_at` is what it reads.
 - **No recommender.** [#37](https://github.com/gganssle/chip_chat/issues/37)
-  trains and registers the item-affinity model in MLflow. `item_affinity` is its
-  training input, and the support threshold in §6 is set with that in mind.
+  trains and registers the item-affinity model in MLflow — see
+  [recommender.md](recommender.md). `item_affinity` is its reference rather than
+  its input in the end: the model's full-history refit has to *reproduce* this
+  mart, which is how #37's "produce the mart from the model" was satisfied
+  without moving a table out from under §7's fifth criterion. The support
+  threshold in §6 is still set with that model in mind, and the two are asserted
+  equal. What #37 publishes is a fifth table, `recommendations`, because
+  RFC-001 §06 returns ranked items *with rationale* and `item_affinity` has
+  three columns and no `demo_id`.
 - **No row access policies.**
   [#43](https://github.com/gganssle/chip_chat/issues/43) applies them. Every
   visitor-scoped mart here carries `demo_id` so that it can.

@@ -229,7 +229,9 @@ that table-to-table lineage alone would not have shown.
   since landed bronze from ADLS with Auto Loader — see
   [bronze-ingestion.md](bronze-ingestion.md) — and #34 builds silver and gold.
 - **No MLflow model registry.** The recommender registered in Unity Catalog is
-  later in Phase 3.
+  later in Phase 3 — [#37](https://github.com/gganssle/chip_chat/issues/37) has
+  since landed it, at a three-level name inside `gold_synthetic` so that the
+  grants here already reach it. See [recommender.md](recommender.md).
 - **No Snowflake publish.** Gold is where this project's two halves meet, and
   the publish is its own issue.
 - **No column masks or row filters.** RFC-001 §05 puts visitor isolation in

@@ -177,6 +177,20 @@ ignore_missing_imports = true
 module = ["arize.*"]
 ignore_missing_imports = true
 
+# `chip_chat.databricks.recommender_model` is the MLflow half of gh-37 and is the
+# one module in the tree that runs only on a cluster. MLflow and pandas are in
+# the Databricks Runtime and deliberately not in this lockfile -- adding them
+# would put a very large dependency into every developer's virtualenv to satisfy
+# a file nothing here imports. `recommender` is the same module's stdlib-only
+# neighbour, imported flat because that is how MLflow lays out `code_paths` and
+# how Terraform uploads the workspace files; under pytest it is
+# `chip_chat.databricks.recommender` and importable normally.
+# `databricks/tests/test_recommender.py` reads the wrapper as text, the way the
+# notebooks and the Terraform are already read.
+[[tool.mypy.overrides]]
+module = ["mlflow.*", "pandas", "recommender"]
+ignore_missing_imports = true
+
 [[tool.mypy.overrides]]
 module = ["chip_chat.otel.*", "chip_chat.agent.*"]
 disallow_any_generics = true

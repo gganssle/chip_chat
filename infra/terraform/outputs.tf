@@ -318,3 +318,18 @@ output "databricks_gold_verify_job_id" {
   description = "Asserts gh-36's acceptance criteria against the gold marts. Run it after the gold pipeline with: databricks jobs run-now <id>"
   value       = var.databricks_unity_catalog_enabled ? databricks_job.gold_verify[0].id : null
 }
+
+output "databricks_recommender_job_id" {
+  description = "Trains, registers and publishes the item-affinity recommender (gh-37). Weekly, and PAUSED until var.databricks_recommender_schedule_enabled is true. Run it by hand with: databricks jobs run-now <id>. Run it after the gold pipeline -- the training run compares its own refit to the published item_affinity mart."
+  value       = var.databricks_unity_catalog_enabled ? databricks_job.recommender[0].id : null
+}
+
+output "databricks_recommender_verify_job_id" {
+  description = "Asserts gh-37's acceptance criteria against the live recommender. Run it after the recommender job with: databricks jobs run-now <id>"
+  value       = var.databricks_unity_catalog_enabled ? databricks_job.recommender_verify[0].id : null
+}
+
+output "databricks_recommender_model" {
+  description = "The registered model's three-level Unity Catalog name. Load the deployed version with: mlflow.pyfunc.load_model(\"models:/<name>@champion\")"
+  value       = var.databricks_unity_catalog_enabled ? databricks_registered_model.recommender[0].id : null
+}

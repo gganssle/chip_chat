@@ -695,3 +695,37 @@ variable "databricks_catalog_owner" {
   type        = string
   default     = ""
 }
+
+variable "databricks_recommender_schedule_enabled" {
+  description = <<-EOT
+    Whether the weekly retraining job's schedule is RUNNING. False leaves the
+    schedule declared and PAUSED, which is the shipped default.
+
+    Issue #37's fourth acceptance criterion is that retraining is a scheduled
+    job rather than a notebook somebody remembers to run, and the rest of this
+    directory says nothing in the workspace should be able to start spending on
+    its own. Both hold: the cron is declared in Terraform where a person can
+    read and review it, and it does not fire until this is set. Turning
+    retraining on is one variable and one apply.
+
+    Turn it on when the lakehouse is loaded and the marts are current -- a
+    training run against an empty silver layer registers a model fitted on
+    nothing, which is worse than no model, because it has a version number.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "databricks_recommender_timeout_seconds" {
+  description = <<-EOT
+    Ceiling on a retraining run: both tasks, one cluster start. Longer than the
+    verification jobs because it fits twice -- once over the training window for
+    the holdout, once over the whole history for the version that gets
+    registered -- and then batch-scores every visitor.
+
+    A run that has not finished by now is not going to, and the useful thing is
+    for it to stop billing.
+  EOT
+  type        = number
+  default     = 3600
+}

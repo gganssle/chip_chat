@@ -16,6 +16,7 @@ contributor — human or agent — has them locally. Read them in this order.
 | [bronze-ingestion.md](bronze-ingestion.md) | How both streams get out of ADLS and into bronze — the Auto Loader options, what a row carries, where a malformed document goes, and the run that checked all four claims |
 | [silver-conformance.md](silver-conformance.md) | How both streams stop being what arrived and start being what is true — what is deduplicated and on which key, what counts as boilerplate and how its removal is checked, and which violations stop the pipeline |
 | [gold-marts.md](gold-marts.md) | The four personalization marts — what every number in them means, how `usual_order.confidence` is defined so a low value hedges honestly, and why no mart reads the table holding the fields a visitor may edit |
+| [recommender.md](recommender.md) | The item-affinity recommender — what it scores, why it refuses to suggest anything a visitor has ever ordered, and why a run only takes the `@champion` alias by beating a popularity baseline on *novel* hits |
 | [snowflake-account.md](snowflake-account.md) | The serving layer's account — two X-Small warehouses that suspend in sixty seconds, three roles that are siblings rather than a ladder, the credit ceiling that keeps a runaway from ending the trial early, and the nine Snowflake behaviours that make a security check pass while proving nothing |
 | [deployment.md](deployment.md) | Getting the chat app onto the public URL — the procedure, and the ten things that surprised the first person to do it |
 | [chipotle-nutrition-spot-check.md](chipotle-nutrition-spot-check.md) | What the harvested nutrition and allergen data was checked against by hand, and when |
@@ -58,7 +59,12 @@ instead of writing a warning nobody reads. The gold-marts guide is the last of t
 four and argues hardest, because a mart is a *definition* rather than a
 transformation: what a usual order is, what a confidence of 0.31 licenses the
 assistant to say, and which table the whole layer refuses to read so that a
-visitor editing their display name cannot invalidate an answer.
+visitor editing their display name cannot invalidate an answer. The recommender
+guide is the personalization lane's last document and the only one about a
+*model*: what it scores, why it will not suggest anything a visitor has ever
+ordered, and why a training run takes the deployed alias only by beating a
+popularity baseline on hits the visitor had not already had — which is PRD P2's
+"rather than generic popularity" turned into a number rather than a hope.
 instead of writing a warning nobody reads. The Snowflake account guide is the
 lakehouse catalogue's opposite number on the serving side, and carries the same
 burden of proof: not that the read role is configured to be read-only, but that

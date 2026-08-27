@@ -85,7 +85,7 @@ locals {
     silver_harvested = "menu_items, item_prices, modifiers and stores. Price is keyed by restaurant, not by item — Chipotle's published prices vary ~20% between stores (docs/decisions/menu-pricing.md)."
     silver_synthetic = "personas, orders, order_items and loyalty_ledger, conformed and keyed by demo_id."
     gold_harvested   = "The versioned catalogue published to Snowflake, and the chunked corpus published to Azure AI Search. Both carry source_url and harvested_at through, because RFC-001 §08 requires them as citations and there is nowhere left to recover them from downstream."
-    gold_synthetic   = "customer_360, usual_order, item_affinity and spend_summary, published nightly to Snowflake. Computed from orders, order_items and loyalty_ledger ONLY — never from demo_visitors, because the three fields a visitor may edit live there and no editable field may be an input to a mart (RFC-001 §04)."
+    gold_synthetic   = "customer_360, usual_order, item_affinity and spend_summary, published nightly to Snowflake, plus recommendations and the item_affinity_recommender model that batch-scores it (gh-37). Computed from orders, order_items and loyalty_ledger ONLY — never from demo_visitors, because the three fields a visitor may edit live there and no editable field may be an input to a mart (RFC-001 §04)."
   }
 
   # The cross product, flattened into the map every resource below iterates.
