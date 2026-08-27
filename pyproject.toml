@@ -92,6 +92,16 @@ src = [
     "vision/src",
     "web/src",
 ]
+extend-exclude = [
+    # Full checkouts of this same repository, made by agent worktree isolation.
+    # Without this, `ruff format --check .` run from the main checkout reports
+    # another agent's in-progress file as a formatting failure of *this* tree --
+    # a red CI run that no change to this tree can fix, and which disappears on
+    # its own when the other agent happens to finish. Excluded here as well as
+    # in .gitignore because ruff does not read .gitignore for a path given
+    # explicitly as `.`.
+    ".claude/worktrees",
+]
 
 [tool.ruff.lint]
 select = [
