@@ -30,15 +30,24 @@ is a model of those policies and **not a test of them** --
 ``snowflake/tests/test_row_access_policies.py`` and ``make snowflake-verify`` are
 what test the policies, and no number produced against this fake is evidence
 about the account.
+:class:`RecordingWriteBackend` is the same idea for the second launch gate. The
+acceptance criteria of issue #63 are about writes that must *not* happen and
+retries that must not double-write, and both are properties of what reached the
+database rather than of what came back. So the double implements the one
+behaviour of ``sql/12_procedures.sql`` those criteria turn on -- a retry key is
+claimed once and replayed thereafter -- and counts the writes separately from
+the calls.
 """
 
 import threading
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
+from chip_chat.api.ops import OpsUnavailableError
 from chip_chat.api.pool import (
     DEFAULT_POOL_SIZE,
     SessionConnection,
@@ -56,7 +65,9 @@ __all__ = [
     "NaiveConnection",
     "NaivePool",
     "OrderRow",
+    "ProcedureCall",
     "RecordingModel",
+    "RecordingWriteBackend",
     "UnknownStatementError",
 ]
 
@@ -552,3 +563,185 @@ class NaivePool:
             session = self._connections[self._next % self._size]
             self._next += 1
             return session
+
+
+class ProcedureCall:
+    """One stored procedure call a :class:`RecordingWriteBackend` was asked for.
+
+    Attributes:
+        procedure: The fully qualified name, as the ops API assembled it.
+        demo_id: The visitor bound on the session it was called through. On a
+            real connection this is a session variable rather than an argument,
+            and it is recorded here because "whose row did that write" is the
+            question RFC-001 section 05 exists to answer.
+        arguments: Positional, in declaration order, retry key first.
+    """
+
+    __slots__ = ("arguments", "demo_id", "procedure")
+
+    def __init__(self, procedure: str, demo_id: str, arguments: Sequence[object]) -> None:
+        self.procedure = procedure
+        self.demo_id = demo_id
+        self.arguments = tuple(arguments)
+
+    @property
+    def retry_key(self) -> str:
+        """The idempotency key, which every procedure takes first."""
+        return str(self.arguments[0])
+
+    @property
+    def name(self) -> str:
+        """The unqualified procedure name."""
+        return self.procedure.rsplit(".", 1)[-1]
+
+    def __repr__(self) -> str:
+        return f"ProcedureCall({self.name!r}, {self.demo_id!r}, {self.arguments!r})"
+
+
+class RecordingWriteBackend:
+    """A stand-in for the Functions app's Snowflake connection.
+
+    Implements exactly as much of ``sql/12_procedures.sql`` as the ops API's
+    acceptance criteria depend on:
+
+    * a retry key is claimed once, and a second call carrying it returns the
+      stored receipt with ``replayed`` true rather than writing again;
+    * a key spent by a different action is ``RETRY_KEY_SPENT_ON_ANOTHER_ACTION``;
+    * a rejection is a returned object with ``ok`` false, never an exception.
+
+    The distinction that matters is :attr:`calls` versus :attr:`writes`. A test
+    asserting "one write" asserts on the second: a call that replayed a receipt
+    is a call the database answered and not a row anybody was charged for.
+    """
+
+    __slots__ = (
+        "_available",
+        "_commit_then_fail",
+        "_lock",
+        "_rejection",
+        "_spent",
+        "_unavailable_calls",
+        "calls",
+        "writes",
+    )
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._available = True
+        self._unavailable_calls = 0
+        self._commit_then_fail = 0
+        self._rejection: Mapping[str, Any] | None = None
+        self._spent: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
+        self.calls: list[ProcedureCall] = []
+        self.writes: list[ProcedureCall] = []
+
+    # --- what the ops API sees -------------------------------------------
+
+    def session(self, demo_id: str) -> "RecordingWriteBackend._Session":
+        """Acquire a session, or refuse the way an unreachable service does."""
+        with self._lock:
+            if not self._available:
+                raise OpsUnavailableError("the recording backend is down")
+        return RecordingWriteBackend._Session(self, demo_id)
+
+    def available(self) -> bool:
+        """Whether a card composed now should say ordering is available."""
+        with self._lock:
+            return self._available
+
+    # --- what a test drives ----------------------------------------------
+
+    def take_down(self) -> None:
+        """Make the write path unreachable, as taking the Functions app down does."""
+        with self._lock:
+            self._available = False
+
+    def bring_up(self) -> None:
+        """Reverse :meth:`take_down`."""
+        with self._lock:
+            self._available = True
+
+    def fail_calls(self, times: int = 1) -> None:
+        """Fail the next ``times`` calls before anything is written."""
+        with self._lock:
+            self._unavailable_calls = times
+
+    def commit_then_fail(self, times: int = 1) -> None:
+        """Write, then lose the connection -- the case the retry key exists for.
+
+        The procedure commits and spends its key; the caller is told nothing.
+        A retry carrying the same key must find the receipt rather than write a
+        second order, which is the whole of acceptance criterion three.
+        """
+        with self._lock:
+            self._commit_then_fail = times
+
+    def reject_next(self, code: str, detail: str = "refused by the catalogue") -> None:
+        """Make the next call return a typed rejection rather than a receipt."""
+        with self._lock:
+            self._rejection = {"ok": False, "rejection": code, "detail": detail}
+
+    def receipts(self) -> tuple[Mapping[str, Any], ...]:
+        """Every receipt written, in order. One per actual write."""
+        with self._lock:
+            return tuple(receipt for _, receipt in self._spent.values())
+
+    # --- the procedure itself, in miniature -------------------------------
+
+    def _call(
+        self, demo_id: str, procedure_name: str, arguments: Sequence[object]
+    ) -> Mapping[str, Any]:
+        call = ProcedureCall(procedure_name, demo_id, arguments)
+        with self._lock:
+            self.calls.append(call)
+            if self._unavailable_calls > 0:
+                self._unavailable_calls -= 1
+                raise OpsUnavailableError("the recording backend dropped the call")
+
+            key = (demo_id, call.retry_key)
+            spent = self._spent.get(key)
+            if spent is not None:
+                action, receipt = spent
+                if action != call.name:
+                    return {
+                        "ok": False,
+                        "rejection": "RETRY_KEY_SPENT_ON_ANOTHER_ACTION",
+                        "detail": f"this retry key was already spent by {action}",
+                    }
+                return {**receipt, "replayed": True}
+
+            if self._rejection is not None:
+                rejection = dict(self._rejection)
+                self._rejection = None
+                return rejection
+
+            self.writes.append(call)
+            receipt = {
+                "ok": True,
+                "action": call.name.upper(),
+                "subject_id": f"{call.name}-{len(self.writes)}",
+                "arguments": list(call.arguments[1:]),
+                "simulation": "Simulated. Nothing was cooked, charged or sent.",
+            }
+            self._spent[key] = (call.name, receipt)
+            if self._commit_then_fail > 0:
+                self._commit_then_fail -= 1
+                raise OpsUnavailableError(
+                    "the recording backend committed and then lost the connection"
+                )
+            return dict(receipt)
+
+    class _Session:
+        """One bound session. Takes no identifier: the visitor is already bound."""
+
+        __slots__ = ("_backend", "_demo_id")
+
+        def __init__(self, backend: "RecordingWriteBackend", demo_id: str) -> None:
+            self._backend = backend
+            self._demo_id = demo_id
+
+        def call(
+            self, procedure_name: str, arguments: Sequence[object]
+        ) -> Mapping[str, Any]:
+            """Call one procedure through this session."""
+            return self._backend._call(self._demo_id, procedure_name, arguments)
