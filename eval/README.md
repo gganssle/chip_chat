@@ -2,7 +2,7 @@
 
 Golden set, labeled photo set, adversarial suite, Arize experiments. Three of
 those ship today, the first two are promoted into one versioned dataset, and the
-dataset is what the trajectory eval scores tool selection against.
+dataset is what the trajectory and grounding evals score against.
 
 **The golden set** — issue [#29](https://github.com/gganssle/chip_chat/issues/29).
 Thirty-four questions across the five lanes, each carrying the lane it should
@@ -119,6 +119,37 @@ python -m chip_chat.eval.trajectory --ceiling    # free, and the one to run
 failure shapes are counted apart, why the wrong-query check is deliberately
 weak, and what a split trace does to every number in the document.
 
+**Groundedness and citation presence** — issue
+[#75](https://github.com/gganssle/chip_chat/issues/75). The other two headline
+metrics, and the ones that make the allergen boundary real rather than
+aspirational: groundedness of food and policy claims at ≥ 0.95, and menu claims
+made without a citation at **zero**. It reads the same span trees the trajectory
+eval does and asks a different question of them — not *which tool*, but *what
+did that tool actually return, and is the answer attached to it*.
+
+```
+chip_chat.eval.grounding
+├── questions   the dataset's rows, and what each one is owed
+├── evidence    the retriever.search spans, as the passages the turn really had
+├── run         the response, the seam it arrives through, and the judge
+├── verdicts    five findings, and the order they are asked in
+├── scoring     one rate, four counts, and a category held to counts alone
+├── coverage    #75's scope, as clauses the rows meet or do not
+├── report      the baseline, as Markdown
+├── slice       the week-one loop, answered and recorded
+└── testing     spans and verdicts by hand, and the ceiling
+```
+
+```bash
+python -m chip_chat.eval.grounding --check      # free
+python -m chip_chat.eval.grounding --ceiling    # free, and the one to run
+```
+
+[`grounding/README.md`](grounding/README.md) is the write-up: why the two
+metrics never share an average, why the allergen and dietary category is held to
+counts rather than to a higher percentage, and why three of its five findings
+report *unmeasured* rather than a number.
+
 All three sets live beside their code — [`golden/`](golden/),
 [`photos/`](photos/) and [`adversarial/`](adversarial/) — each with a
 `README.md` to read before adding an entry and a `BASELINE.md` for what has
@@ -127,8 +158,9 @@ version, and `make dataset` is how the committed build catches up; the
 adversarial suite is not in the dataset, because an attack has no expected
 output for an experiment to be scored against.
 
-[`trajectory/`](trajectory/) is on the same terms and holds no set of its own:
-it scores the dataset's rows, so there is nothing there to add an entry to.
+[`trajectory/`](trajectory/) and [`grounding/`](grounding/) are on the same
+terms and hold no set of their own: both score the dataset's rows, so there is
+nothing in either to add an entry to.
 
 ## Where the line between them is
 
@@ -156,6 +188,23 @@ and only the trajectory eval can say it reached three when one would do, or that
 the query it sent bore no relation to what was asked. It scores the dataset's
 routing rows and no photographs, for the same reason the golden set holds one
 vision case: a frame the photo set runs directly was never routed to.
+
+`eval/grounding` sits across the golden set the same way, and is divided from
+`eval/trajectory` by *which spans it reads*. The trajectory eval reads
+`tool.<tool_name>` and asks which lane the turn entered; this one reads
+`retriever.search` and asks what came back out of it, then holds the response to
+that. So the trajectory eval can say a turn reached `search_menu_knowledge`, and
+only this one can say the search returned nothing and the turn answered anyway.
+They share a span type deliberately — one adapter between a recording and a
+reader, not two — and nothing else.
+
+The golden set already carries `cites` and `grounded` as checks, and that is not
+a duplication either. There they are *checks on a case*, reported unscored
+because no deployment can settle them; here they are the register: `grounded`
+means the published data answers this row, `declines` means it does not, and the
+pair is what makes over-refusal and under-refusal two different findings rather
+than one. The golden set says whether a case passed. This says which way it was
+wrong, in a category where the direction is the whole point.
 
 `eval/adversarial` is divided from both on a different axis. It does not ask
 *what is the right answer* — it asks *what does it take to get a wrong one*, and

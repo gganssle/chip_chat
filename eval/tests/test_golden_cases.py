@@ -15,6 +15,7 @@ import pytest
 from chip_chat.catalog.records import MenuCatalog
 from chip_chat.eval.golden.cases import (
     ANY_PERSONA,
+    DIETARY_WORDS,
     JUDGED,
     CaseError,
     Check,
@@ -199,3 +200,63 @@ def test_by_lane_and_covering_read_the_set_back(tmp_path: Path) -> None:
     assert [case.case_id for case in golden.by_lane(Lane.ACCOUNT)] == ["a1-points"]
     assert [case.case_id for case in golden.covering("K1")] == ["k1-example"]
     assert len(golden) == 2
+
+
+def test_an_unmarked_allergen_question_is_refused(tmp_path: Path) -> None:
+    """Silence is not absence -- the rule the photo set applies to a slot.
+
+    A case asking about soy that is not in #75's stricter category is a case
+    held to the ordinary bar, and nothing anywhere would say so. So the set
+    refuses it and names the word that gave it away.
+    """
+    manifest = _write(
+        tmp_path,
+        {**_MINIMAL, "message": "does the barbacoa have any soy in it"},
+    )
+
+    with pytest.raises(CaseError, match="soy"):
+        GoldenSet.load(manifest)
+
+
+def test_marking_it_is_all_it_takes(tmp_path: Path) -> None:
+    """The check is one-directional: it asks for a decision, not for a word."""
+    manifest = _write(
+        tmp_path,
+        {
+            **_MINIMAL,
+            "message": "does the barbacoa have any soy in it",
+            "dietary": True,
+        },
+    )
+
+    assert GoldenSet.load(manifest).cases[0].dietary
+
+
+def test_a_dietary_case_need_not_use_one_of_the_words(tmp_path: Path) -> None:
+    """*Are the black beans cooked in the same pot as the chicken* is one.
+
+    A cross-contact question with no allergen word in it, which is why
+    :data:`DIETARY_WORDS` is a detector for a forgotten flag rather than a
+    substitute for declaring it.
+    """
+    message = "are the black beans cooked in the same pot as the chicken"
+    manifest = _write(tmp_path, {**_MINIMAL, "message": message, "dietary": True})
+
+    assert not DIETARY_WORDS & set(message.split())
+    assert GoldenSet.load(manifest).cases[0].dietary
+
+
+def test_the_shipped_set_marks_both_directions_of_the_category(
+    golden: GoldenSet,
+) -> None:
+    """#75 holds this category to counts, so it needs rows that can breach them.
+
+    An allergen question the published data answers and one it does not are two
+    different failures -- over-refusing about dairy, and guessing about soy --
+    and a category holding only one of them is half a gate.
+    """
+    dietary = [case for case in golden if case.dietary]
+
+    assert len(dietary) >= 4
+    assert any(Check.GROUNDED in case.checks for case in dietary)
+    assert any(Check.DECLINES in case.checks for case in dietary)

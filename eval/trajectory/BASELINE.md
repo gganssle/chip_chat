@@ -1,7 +1,7 @@
 # Trajectory and tool-selection baseline
 
 - **Traces from** — week-one slice, routing handed to it (routing-oracle)
-- **Dataset** — cilantro-golden-set `6e3b65564aaa`, 34 rows that score routing
+- **Dataset** — cilantro-golden-set `9ba196eb786c`, 34 rows that score routing
 - **Target** — tool-selection accuracy ≥ 95.0% (PRD §05)
 
 > **This is not a score for the agent.** Lane selection was handed to the deployment: `RoutingOracle` calls, for each message, exactly the tool the row expects. Nothing about model quality survives a model that was told the answer.

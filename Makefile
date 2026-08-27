@@ -272,6 +272,49 @@ trajectory-baseline: ## Refresh eval/trajectory/BASELINE.md from that same free 
 #
 #     uv run python -m chip_chat.eval.trajectory --out eval/trajectory/BASELINE.md
 
+# --- Groundedness and citation presence --------------------------------------
+#
+# Issue #75, and the two metrics that make the allergen boundary real rather
+# than aspirational: groundedness of food and policy claims (>= 0.95), and menu
+# claims made without a citation (ZERO). Both targets are free to check and
+# neither target calls a model.
+#
+# `grounding-check` holds the dataset to what #75's report will claim about it,
+# and the clause worth reading twice is the first: `over-refusals: 0` over a set
+# with no answerable question prints exactly like a system that never hedges. So
+# the rows have to carry BOTH directions, in the ordinary category and in the
+# allergen and dietary one. An unmet clause is a build failure, or the gap stays.
+#
+# `grounding` runs those rows through the week-one slice with routing handed to
+# it. Read eval/grounding/BASELINE.md's first paragraph before its tables: three
+# of its five findings are unmeasurable against any deployment in this
+# repository, because `chip_chat.agent.envelope` is imported by no caller (bead
+# cc-bap) and no judge is wired (#76). The report says `unmeasured`, which is
+# neither pass nor fail.
+#
+# What IS gated: a measured gate breach, and a turn that arrived as more than
+# one trace. An unmeasured gate is deliberately not gated -- a build that is red
+# about a missing wire is a build somebody switches the check off in. The one
+# number a free run really produces is `supported`: a turn that made a claim
+# having retrieved nothing at all.
+
+.PHONY: grounding-check grounding grounding-baseline
+
+grounding-check: ## Check the dataset can support #75's numbers, free
+	$(UV) run python -m chip_chat.eval.grounding --check
+
+grounding: ## Score groundedness and citations against the slice, free
+	$(UV) run python -m chip_chat.eval.grounding --ceiling
+
+grounding-baseline: ## Refresh eval/grounding/BASELINE.md from that same free run
+	$(UV) run python -m chip_chat.eval.grounding --ceiling --out eval/grounding/BASELINE.md
+
+# The credentialed run is the same command with neither flag. It needs
+# CHIP_CHAT_FOUNDRY_ENDPOINT and CHIP_CHAT_FOUNDRY_API_KEY and costs at least
+# one model call per row:
+#
+#     uv run python -m chip_chat.eval.grounding --out eval/grounding/BASELINE.md
+
 # --- The versioned dataset --------------------------------------------------
 #
 # Issue #72. Both sets, promoted into one dataset with a content hash for a

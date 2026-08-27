@@ -90,6 +90,7 @@ its PRD requirement id*, and both are columns:
 | `requirements` | The PRD identifiers, as a JSON array. At least one, always. |
 | `checks`, `judged_checks` | What has to be observed, and which of those need a judge. |
 | `persona`, `context`, `confirmed` | The state the question presupposes. |
+| `dietary` | Whether this is an allergen or dietary question. `eval/grounding` groups on it. |
 | `forbidden_tools` | The confusable half of a boundary case. |
 | `menu_terms` | Published terms the entry leans on. |
 | `frame_truth` | A photograph's labeled slots, conditions and provenance, as JSON. |

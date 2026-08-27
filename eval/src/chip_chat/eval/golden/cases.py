@@ -75,6 +75,7 @@ from chip_chat.otel.schema import WRITE_TOOLS, ToolName
 __all__ = [
     "ANY_PERSONA",
     "DEFAULT_MANIFEST",
+    "DIETARY_WORDS",
     "JUDGED",
     "CaseError",
     "Check",
@@ -149,6 +150,44 @@ keyword list.
 """
 
 
+DIETARY_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "allergen",
+        "allergens",
+        "allergic",
+        "allergy",
+        "celiac",
+        "dairy",
+        "gluten",
+        "halal",
+        "kosher",
+        "lactose",
+        "milk",
+        "nut",
+        "nuts",
+        "peanut",
+        "peanuts",
+        "pescatarian",
+        "sesame",
+        "shellfish",
+        "soy",
+        "vegan",
+        "vegetarian",
+        "wheat",
+    }
+)
+"""Words that make a question an allergen or dietary one, for the marker check.
+
+Hand-written and short, and used in exactly one direction: a case whose message
+holds one of these and is *not* marked
+:attr:`~GoldenCase.dietary` is refused at load. See :meth:`GoldenCase.dietary`
+for why the flag is not derived from this list instead -- *"are the black beans
+cooked in the same pot as the chicken"* is a cross-contact question and holds no
+word here, so a derivation would silently drop it out of the category where a
+wrong answer costs the most.
+"""
+
+
 class CaseError(ValueError):
     """A manifest that cannot be believed as a golden set.
 
@@ -197,6 +236,15 @@ class GoldenCase:
             is correct after a confirmation and a launch-gate failure before
             one -- and the same message is right or wrong depending on which
             side of it the turn sits. Never true outside the action lane.
+        dietary: Whether this is an allergen or dietary question. Issue #75
+            scores these as their own category and holds them to a bar that is
+            a count rather than a rate, because a percentage of a safety
+            property is the wrong shape for the thing being promised. Declared
+            rather than derived: the requirement ids cannot settle it (K3
+            covers halal *and* cross-contact, K5 the two allergen ones, and
+            *"what's vegetarian here"* is a K4 case and a dietary question),
+            and a word list cannot either. :data:`DIETARY_WORDS` is the
+            staleness detector for the flag rather than a substitute for it.
         menu_terms: Published menu terms the case leans on, as a person would
             write them. Checked against a built catalogue by
             :meth:`GoldenSet.against`.
@@ -215,6 +263,7 @@ class GoldenCase:
     context: tuple[str, ...] = ()
     forbidden_tools: frozenset[ToolName] = frozenset()
     confirmed: bool = False
+    dietary: bool = False
     menu_terms: tuple[str, ...] = ()
     why: str = ""
 
@@ -373,6 +422,7 @@ def _case(entry: object, index: int) -> GoldenCase:
     context = tuple(str(value) for value in _list(entry, "context"))
     persona = str(entry.get("persona", ANY_PERSONA))
     confirmed = bool(entry.get("confirmed", False))
+    dietary = bool(entry.get("dietary", False))
 
     case = GoldenCase(
         case_id=case_id,
@@ -385,6 +435,7 @@ def _case(entry: object, index: int) -> GoldenCase:
         context=context,
         forbidden_tools=forbidden,
         confirmed=confirmed,
+        dietary=dietary,
         menu_terms=menu_terms,
         why=why,
     )
@@ -426,8 +477,24 @@ def _coherent(case: GoldenCase, where: str) -> None:
         raise CaseError(
             f"{where}: cites_adjacent without cites checks placement of nothing"
         )
+    unmarked = _dietary_words(case.message)
+    if unmarked and not case.dietary:
+        # Silence is not absence, the same rule the photo set applies to a slot
+        # that is neither read nor named unreadable. A case that asks about soy
+        # and is not in the category is a case #75 scores against the ordinary
+        # bar, and nothing anywhere would say so.
+        raise CaseError(
+            f"{where}: the message asks about {', '.join(sorted(unmarked))} but "
+            "the case is not marked `dietary`; see #75's stricter category"
+        )
     if not case.why.strip():
         raise CaseError(f"{where}: a case must say what it is for")
+
+
+def _dietary_words(message: str) -> frozenset[str]:
+    """The allergen and dietary words a message uses. See :data:`DIETARY_WORDS`."""
+    words = _NOT_ALPHANUMERIC.sub(" ", message.lower()).split()
+    return frozenset(word for word in words if word in DIETARY_WORDS)
 
 
 def _tool(value: object, where: str) -> ToolName | None:

@@ -192,6 +192,12 @@ class DatasetEntry:
         context: Prior assistant turns the input presupposes, in order.
         confirmed: Whether the visitor has already pressed Confirm on the draft
             this turn acts on. PRD T2 reads differently on each side of it.
+        dietary: Whether this is an allergen or dietary question. Golden
+            entries only, and false on a photograph. Issue #75 reports these as
+            their own category and holds them to a count rather than a rate;
+            the flag is on the row rather than derived from
+            :attr:`requirements`, for the argument in
+            :attr:`~chip_chat.eval.golden.cases.GoldenCase.dietary`.
         forbidden_tools: Tools that must not be called, sorted. The confusable
             half of a boundary case.
         menu_terms: Published menu terms the entry leans on, in set order.
@@ -211,6 +217,7 @@ class DatasetEntry:
     persona: str = ""
     context: tuple[str, ...] = ()
     confirmed: bool = False
+    dietary: bool = False
     forbidden_tools: tuple[str, ...] = ()
     menu_terms: tuple[str, ...] = ()
     frame: FrameTruth | None = None
@@ -278,6 +285,7 @@ class DatasetEntry:
             "persona": self.persona,
             "context": _canonical(list(self.context)),
             "confirmed": self.confirmed,
+            "dietary": self.dietary,
             "forbidden_tools": _canonical(list(self.forbidden_tools)),
             "menu_terms": _canonical(list(self.menu_terms)),
             "frame_truth": "" if self.frame is None else self.frame.as_json(),
@@ -327,6 +335,7 @@ def _from_case(case: GoldenCase) -> DatasetEntry:
         persona=case.persona,
         context=case.context,
         confirmed=case.confirmed,
+        dietary=case.dietary,
         forbidden_tools=tuple(sorted(tool.value for tool in case.forbidden_tools)),
         menu_terms=case.menu_terms,
         why=case.why,
