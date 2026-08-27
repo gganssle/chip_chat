@@ -102,6 +102,7 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
 
 from chip_chat.agent import ACCOUNT, AzureChatModel, FoundryConfig
 from chip_chat.agent.lanes import NO_LANES, Lanes
@@ -146,6 +147,7 @@ from chip_chat.vision import (
     PhotoIntake,
     UploadRejectedError,
 )
+from chip_chat.vision.reader import read_upload_async
 from chip_chat.web import (
     Persona,
     chat_page,
@@ -896,8 +898,27 @@ def create_app(service: Service | None = None) -> FastAPI:
                 media_type=_STREAM_MEDIA_TYPE,
             )
         else:
-            payload = _run_turn(
-                resolved, conversation, body, message, source_address, admitted
+            # Off the event loop, and this is not a nicety. A turn is a model
+            # call and several seconds of blocking work; run in the handler it
+            # would hold the only loop this process has, and the first thing
+            # that stops being answered is `/healthz` -- so Container Apps
+            # concludes the container is dead and restarts it *in the middle of
+            # the visitor's turn*. That is not a hypothetical: it is what the
+            # first deployment of this route did to every conversation.
+            # `_run_turn`'s own docstring says it is synchronous on the strength
+            # of FastAPI putting a `def` handler on a worker thread -- but this
+            # handler is `async def`, because it has to read the request before
+            # deciding which shape to answer in, so the threadpool has to be
+            # asked for explicitly. The streaming branch above gets it for free:
+            # Starlette iterates a synchronous generator on a worker thread.
+            payload = await run_in_threadpool(
+                _run_turn,
+                resolved,
+                conversation,
+                body,
+                message,
+                source_address,
+                admitted,
             )
             response = JSONResponse(payload.model_dump())
         _set_session_cookie(response, session_id, secure=_is_https(request))
@@ -1048,10 +1069,20 @@ async def _accept_photo(
     if stop is not None:
         return PhotoReply(reply=stop.message)
     try:
-        stored = await intake.accept_stream(
+        # The read is genuinely asynchronous and bounded; the four gates behind
+        # it are not -- stage 3 is an HTTP call to Content Safety and the write
+        # is a blob upload. Both go to a worker thread for the reason the chat
+        # route gives at length: a handler that blocks this loop stops answering
+        # the liveness probe, and the platform's answer to that is a restart.
+        payload = await read_upload_async(
             _RequestBody(request),
-            declared_media_type=request.headers.get("content-type"),
             declared_length=_declared_length(request.headers.get("content-length")),
+            limits=intake.limits,
+        )
+        stored = await run_in_threadpool(
+            intake.accept,
+            payload,
+            declared_media_type=request.headers.get("content-type"),
         )
     except UploadRejectedError as refusal:
         return PhotoReply(reply=str(refusal))
