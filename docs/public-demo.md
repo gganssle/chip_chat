@@ -410,11 +410,35 @@ each says so in its own result. `ask_account_question`, `get_recommendations`
 and `match_meal_from_photo` are not offered at all, because a hardcoded NL→SQL
 answer is exactly the plausible number PRD A4 forbids.
 
-So a visitor assigned the Explorer, whose narrative says *"42 orders across 13
-stores"*, will be told their points balance is the fixture's rather than the
-one in the sentence they just read. That disagreement is real, it is the
-account lane's absence rather than this tier's, and it closes when `cc-lpy4`
-supplies a connection factory — at which point `SnowflakeRoster` replaces the
-shipped roster and the account tool reads the same rows the narrative was
-measured from. It is recorded here rather than discovered by the first person to
-click the second chip.
+**This produces one visible contradiction, and it is the most important known
+defect in the visitor experience.** Observed against the live URL on 27 August
+2026, in one session:
+
+> **Opening message:** Hi Sam. You're a regular at AL Town 1 Mall, 397 points on
+> the card, and 99% of 80 orders the same Steak Burrito with guacamole, white
+> rice, black beans and cheese.
+>
+> **"How many points do I have?"** → You're signed in as the Ballard regular —
+> home store Ballard, 1,340 points, and your usual is a chicken burrito bowl
+> with a side of guac.
+
+Two different stores, two different balances, two different usual orders, one
+conversation. The opening message is reading the assigned persona, which is
+correct; `get_points_balance` is reading `chip_chat.agent.hardcoded.ACCOUNT`,
+which is also correct *for a deployment with no account lane* — the tool says so
+in its own result. They are correct separately and wrong together.
+
+**It is not fixed here on purpose.** The three ways to make the contradiction go
+away from this tier are all worse than the contradiction. Assigning nobody
+brings back the empty account PRD §06 says loses the visitor. Describing
+`ACCOUNT` in the opening message gives every concurrent visitor the same
+customer and fails #66's second criterion. Papering over it with a clause of
+copy about unwired lanes turns the first sentence a stranger reads into an
+apology for a deployment.
+
+The actual fix is `cc-lpy4`: a Snowflake connection factory. The moment one
+exists, `SnowflakeRoster` replaces the shipped roster, the account lane is
+wired, and the tool reads the same rows the narrative was measured from — one
+change closes both halves. Until then this is recorded here, reported by
+`GET /healthz/lanes`, and should be the first thing anybody looks at before the
+link is given to a stranger.
