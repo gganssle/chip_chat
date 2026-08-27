@@ -17,6 +17,8 @@ editing a file.
            them commented, and every visitor-scoped one carrying demo_id
     #43    every visitor-scoped table carries a row access policy, and an
            unbound session reads nothing at all
+    #45    the account lane's semantic view exists, the read role can ask it a
+           question, and it models no visitor identifier
 
 #41's first three are checked here. Its fourth is checked by running
 `make snowflake-rebuild`, which tears the account down and builds it back before
@@ -94,6 +96,14 @@ it on every apply would revoke whoever the operator added. So
 passing on the triggers alone, and the SUSPEND thresholds are what the guardrail
 actually rests on.
 
+#45's checks run beside #42's, before the fixture, and the second of them is the
+one nobody would think to write. ``CREATE OR REPLACE`` drops the grants on the
+object it replaces and a future grant does not re-apply to a replaced object, so
+an apply that lost ``COPY GRANTS`` would leave CHIP_CHAT_READ unable to see the
+semantic view -- and the symptom is an account lane that stopped answering, with
+nothing in any log naming a privilege. It is checked by asking the question as
+the read role and nothing else, which is what the app does.
+
     make snowflake-verify           # everything, about three minutes
     make snowflake-verify-fast      # everything except watching it suspend
 """
@@ -107,7 +117,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from chip_chat.snowflake import account, schema, snow
+from chip_chat.snowflake import account, schema, semantic, snow
 
 __all__ = ["REFUSALS", "Check", "main", "run"]
 
@@ -1159,6 +1169,163 @@ def _check_the_serving_joins_answer() -> list[Check]:
     return checks
 
 
+def _check_semantic_view() -> list[Check]:
+    """Issue #45: the account lane's semantic view is there and is reachable.
+
+    Four things, and the second is the one nobody would think to check. A
+    ``CREATE OR REPLACE`` drops the grants on the object it replaces and a
+    future grant does not re-apply to a replaced object, so an apply without
+    ``COPY GRANTS`` would leave CHIP_CHAT_READ unable to see the view -- and
+    the symptom is an account lane that stopped answering, with nothing in any
+    log naming a privilege. It is checked by asking the question as the read
+    role and nothing else, which is what the app does.
+
+    The demo_id check is #45's fifth criterion asked of the live object rather
+    than of the file. ``DESCRIBE SEMANTIC VIEW`` returns a row per element, and
+    every value of every row is searched: what would be a finding is the column
+    turning up anywhere at all, whatever the shape of the row it is in.
+    """
+    view = semantic.qualified()
+    checks: list[Check] = []
+
+    try:
+        rows = snow.query(
+            f"USE ROLE {account.ADMIN_ROLE};\n"
+            f"SHOW SEMANTIC VIEWS LIKE '{semantic.VIEW_NAME}' "
+            f"IN SCHEMA {account.schema(semantic.VIEW_SCHEMA)};"
+        )[-1]
+    except snow.SnowError as error:
+        return [
+            Check("#45", "the semantic view exists", False, _refusal_line(str(error)))
+        ]
+    checks.append(
+        Check(
+            "#45",
+            "the semantic view exists",
+            passed=bool(rows),
+            detail=(
+                f"{view}, owned by {rows[0].get('owner')}"
+                if rows
+                else f"{view} is not on the account. `make snowflake-apply` creates it"
+            ),
+        )
+    )
+    if not rows:
+        return checks
+
+    probe = f"SELECT * FROM SEMANTIC_VIEW({view} METRICS orders.order_count);"
+    result = _as_role("CHIP_CHAT_READ", account.SERVING_WAREHOUSE, probe)
+    checks.append(
+        Check(
+            "#45",
+            "the read role can ask the semantic view a question",
+            passed=result.ok,
+            detail=(
+                "answered as CHIP_CHAT_READ with no secondary roles"
+                if result.ok
+                else "the read role cannot see the view. COPY GRANTS is what "
+                "carries the grant across a re-apply: " + _refusal_line(result.output)
+            ),
+        )
+    )
+
+    try:
+        described = snow.query(
+            f"USE ROLE {account.ADMIN_ROLE};\nDESCRIBE SEMANTIC VIEW {view};"
+        )[-1]
+    except snow.SnowError as error:
+        checks.append(
+            Check(
+                "#45",
+                "the view models no visitor identifier",
+                False,
+                _refusal_line(str(error)),
+            )
+        )
+        return checks
+
+    # Every row DESCRIBE returns except the two custom instructions, which are
+    # prose addressed to the model rather than anything it can query. They are
+    # the one place demo_id is SUPPOSED to appear -- AI_SQL_GENERATION tells the
+    # model never to filter on it -- and the check below asserts that separately
+    # and in the opposite direction.
+    modelled = [
+        row for row in described if row.get("object_kind") != "CUSTOM_INSTRUCTION"
+    ]
+    mentions = [
+        row
+        for row in modelled
+        if schema.DEMO_ID in " ".join(str(value) for value in row.values()).lower()
+    ]
+    checks.append(
+        Check(
+            "#45",
+            "the view models no visitor identifier",
+            passed=not mentions,
+            detail=(
+                f"{len(modelled)} modelled properties, none naming {schema.DEMO_ID}. "
+                "Isolation is #43's row access policy, and the account lane has "
+                "no identifier to filter on"
+                if not mentions
+                else f"{len(mentions)} of {len(modelled)} rows name {schema.DEMO_ID}: "
+                + ", ".join(
+                    f"{row.get('object_kind')} {row.get('object_name')}"
+                    for row in mentions[:4]
+                )
+            ),
+        )
+    )
+
+    instruction = next(
+        (
+            str(row.get("property_value", ""))
+            for row in described
+            if row.get("property") == "AI_SQL_GENERATION"
+        ),
+        "",
+    )
+    checks.append(
+        Check(
+            "#45",
+            "the model is told never to filter on a visitor identifier",
+            passed=schema.DEMO_ID in instruction.lower(),
+            detail=(
+                "AI_SQL_GENERATION carries the prohibition. The column is not in "
+                "the view, but it IS on the physical tables the verified path "
+                "reaches, so the instruction is the belt to the schema's braces"
+                if schema.DEMO_ID in instruction.lower()
+                else "AI_SQL_GENERATION does not mention the column at all, so "
+                "nothing stops a generated query from inventing a literal for it"
+            ),
+        )
+    )
+
+    try:
+        parameters = snow.query(
+            "USE ROLE ACCOUNTADMIN;\n"
+            "SHOW PARAMETERS LIKE 'CORTEX_ENABLED_CROSS_REGION' IN ACCOUNT;"
+        )[-1]
+        setting = parameters[0].get("value") if parameters else None
+    except snow.SnowError:
+        setting = None
+    checks.append(
+        Check(
+            "#45",
+            "cross-region inference is enabled for Cortex Analyst",
+            passed=bool(setting) and setting != "DISABLED",
+            detail=(
+                f"CORTEX_ENABLED_CROSS_REGION = {setting}, on an account in "
+                f"{account.REGION}, where Cortex Analyst is not native"
+                if setting and setting != "DISABLED"
+                else "CORTEX_ENABLED_CROSS_REGION is DISABLED or unreadable, and "
+                "Cortex Analyst is not native in this region -- the account lane "
+                "cannot answer at all until it is set"
+            ),
+        )
+    )
+    return checks
+
+
 # ---------------------------------------------------------------------------
 # #43 -- the isolation mechanism. RFC-001 §05, and one of the two launch gates
 # ---------------------------------------------------------------------------
@@ -1714,6 +1881,7 @@ def run(*, watch_suspend: bool = True) -> list[Check]:
     checks += _check_default_deny_on_the_real_tables()
     checks += _check_the_roster_inversion()
     checks += _check_the_serving_joins_answer()
+    checks += _check_semantic_view()
     _build_isolation_fixture()
     try:
         checks += _check_isolation()
@@ -1741,7 +1909,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m chip_chat.snowflake.verify",
         description=(
-            "Check the live Snowflake account against issues #41, #42, #43 and #88."
+            "Check the live Snowflake account against issues #41 through #45, and #88."
         ),
     )
     parser.add_argument(

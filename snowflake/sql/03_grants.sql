@@ -73,14 +73,29 @@ GRANT SELECT ON FUTURE TABLES IN SCHEMA CHIP_CHAT.CATALOGUE TO ROLE CHIP_CHAT_RE
 GRANT SELECT ON FUTURE TABLES IN SCHEMA CHIP_CHAT.ACCOUNTS  TO ROLE CHIP_CHAT_READ;
 GRANT SELECT ON FUTURE TABLES IN SCHEMA CHIP_CHAT.MARTS     TO ROLE CHIP_CHAT_READ;
 
--- Views as well as tables: the semantic view Cortex Analyst needs (#45) is a
--- view, and so is anything #42 adds to keep a join out of a generated query.
+-- Views as well as tables: `09_audit.sql` creates two, and #42 may add more to
+-- keep a join out of a generated query.
 GRANT SELECT ON ALL VIEWS IN SCHEMA CHIP_CHAT.CATALOGUE TO ROLE CHIP_CHAT_READ;
 GRANT SELECT ON ALL VIEWS IN SCHEMA CHIP_CHAT.ACCOUNTS  TO ROLE CHIP_CHAT_READ;
 GRANT SELECT ON ALL VIEWS IN SCHEMA CHIP_CHAT.MARTS     TO ROLE CHIP_CHAT_READ;
 GRANT SELECT ON FUTURE VIEWS IN SCHEMA CHIP_CHAT.CATALOGUE TO ROLE CHIP_CHAT_READ;
 GRANT SELECT ON FUTURE VIEWS IN SCHEMA CHIP_CHAT.ACCOUNTS  TO ROLE CHIP_CHAT_READ;
 GRANT SELECT ON FUTURE VIEWS IN SCHEMA CHIP_CHAT.MARTS     TO ROLE CHIP_CHAT_READ;
+
+-- A SEMANTIC VIEW IS NOT A VIEW. It is its own object type with its own
+-- privilege, and the six grants above do not reach #45's ACCOUNT_LANE however
+-- much its name suggests they should. These do -- and they are still not
+-- sufficient on their own: `CREATE OR REPLACE` drops an object's grants and a
+-- future grant does not re-apply to a replaced object, so `10_semantic_view.sql`
+-- carries COPY GRANTS and an explicit grant of its own. All three, because the
+-- failure they prevent is silent: the lane stops answering and nothing logs a
+-- privilege.
+GRANT SELECT ON ALL SEMANTIC VIEWS IN SCHEMA CHIP_CHAT.CATALOGUE TO ROLE CHIP_CHAT_READ;
+GRANT SELECT ON ALL SEMANTIC VIEWS IN SCHEMA CHIP_CHAT.ACCOUNTS  TO ROLE CHIP_CHAT_READ;
+GRANT SELECT ON ALL SEMANTIC VIEWS IN SCHEMA CHIP_CHAT.MARTS     TO ROLE CHIP_CHAT_READ;
+GRANT SELECT ON FUTURE SEMANTIC VIEWS IN SCHEMA CHIP_CHAT.CATALOGUE TO ROLE CHIP_CHAT_READ;
+GRANT SELECT ON FUTURE SEMANTIC VIEWS IN SCHEMA CHIP_CHAT.ACCOUNTS  TO ROLE CHIP_CHAT_READ;
+GRANT SELECT ON FUTURE SEMANTIC VIEWS IN SCHEMA CHIP_CHAT.MARTS     TO ROLE CHIP_CHAT_READ;
 
 -- --------------------------------------------------------------------------
 -- CHIP_CHAT_WRITE -- the ops API, after a visitor has clicked confirm.

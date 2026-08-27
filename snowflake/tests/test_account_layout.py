@@ -179,7 +179,7 @@ def test_every_service_user_gets_one_role_and_no_secondary_roles(
 def _schema_grants(source: str) -> list[tuple[str, str, set[str]]]:
     """Return every schema-scoped GRANT as ``(role, schema, privileges)``."""
     patterns = (
-        r"GRANT (?P<privileges>.+?) ON (?:ALL|FUTURE) \w+ IN SCHEMA "
+        r"GRANT (?P<privileges>.+?) ON (?:ALL|FUTURE) [\w ]+? IN SCHEMA "
         rf"{account.DATABASE}\.(?P<schema>\w+) TO ROLE (?P<role>\w+)",
         rf"GRANT (?P<privileges>.+?) ON SCHEMA {account.DATABASE}\.(?P<schema>\w+) "
         r"TO ROLE (?P<role>\w+)",

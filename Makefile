@@ -498,7 +498,7 @@ snowflake-load: ## Load a harvested and generated landing zone into the serving 
 	$(UV) run python -m chip_chat.snowflake.load \
 		$(LANDING)/catalog $(LANDING)/accounts/synthetic
 
-snowflake-verify: ## Check the live account against issues #41, #42, #43 and #88
+snowflake-verify: ## Check the live account against issues #41 through #45, and #88
 	$(UV) run python -m chip_chat.snowflake.verify
 
 snowflake-verify-fast: ## The same, minus the minute spent watching it suspend

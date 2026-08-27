@@ -23,6 +23,7 @@ contributor — human or agent — has them locally. Read them in this order.
 | [nightly-publish.md](nightly-publish.md) | The seam between the two clocks — the eleven tables that cross from the lakehouse into the serving layer, the one statement that makes a generation live without detaching the row access policy on it, and why `derived_at` is copied rather than stamped |
 | [snowflake-schema.md](snowflake-schema.md) | The fourteen tables in it — the ten columns RFC-001 §04 does not print and why each is unavoidable, the view that refuses to let a visitor-scoped table forget `demo_id`, and why nothing is clustered |
 | [snowflake-isolation.md](snowflake-isolation.md) | The mechanism that keeps one visitor out of another's rows — two row access policies keyed to a session variable, why default deny is written out rather than inherited, the one table whose policy is open while nothing is bound and why that is narrower than leaving it unprotected, and the three places the coverage question is asked so the guarantee cannot decay quietly |
+| [snowflake-semantic-view.md](snowflake-semantic-view.md) | The account lane's semantic view — five of those fourteen tables and two of `menu_items`' nine columns, the nine tables left out and the argument for each, why a semantic view is not a view and `COPY GRANTS` is load-bearing, and the measured latency the PRD's turn targets are being re-baselined against |
 | [deployment.md](deployment.md) | Getting the chat app onto the public URL — the procedure, and the ten things that surprised the first person to do it |
 | [chipotle-nutrition-spot-check.md](chipotle-nutrition-spot-check.md) | What the harvested nutrition and allergen data was checked against by hand, and when |
 | [chipotle-policy-spot-check.md](chipotle-policy-spot-check.md) | The same, for the harvested rewards, FAQ, catering and store data |
@@ -85,6 +86,12 @@ be true of two accounts at once: it argues the atomicity of a swap that must not
 take a row access policy with it, and the one projection rule — copy the
 timestamp, never compute it — that makes RFC-001 §10's "stale, with its
 `derived_at`, never stale as fresh" a property of the code rather than a promise.
+The semantic-view guide is the serving side's answer to the recommender guide:
+the account lane's model is a *curation* rather than a schema, and almost all of
+the curation is subtraction, so most of that document is the argument for each
+of the nine tables and fifteen columns it leaves out — plus the seventeen
+questions that were put through the live service to find out whether leaving
+them out actually produces a refusal.
 
 The texture report is evidence of a different kind again, and the only document here
 that is *generated*. Issue #28 asks that "the data is interesting" become visible rather

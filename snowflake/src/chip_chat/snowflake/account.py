@@ -39,12 +39,14 @@ __all__ = [
     "ADMIN_ROLE",
     "ALL_SCHEMAS",
     "AUTO_SUSPEND_SECONDS",
+    "CORTEX_CROSS_REGION",
     "DATABASE",
     "GRANTS",
     "LANE_ROLES",
     "MONITORS",
     "PUBLISHED_ACCOUNT_TABLES",
     "PUBLISH_WAREHOUSE",
+    "REGION",
     "SCHEMAS",
     "SERVING_WAREHOUSE",
     "STAGING_ACCESS",
@@ -143,6 +145,24 @@ PUBLISH_WAREHOUSE: Final = "CHIP_CHAT_PUBLISH_WH"
 
 ADMIN_ROLE: Final = "CHIP_CHAT_ADMIN"
 """Owns the database and everything in it. Not a runtime identity."""
+
+REGION: Final = "AWS_US_EAST_2"
+"""Where the trial lives. Chosen at signup, and not changeable afterwards.
+
+GitHub #104 records the decision to keep it. It matters to exactly one thing in
+this package and it matters a lot: Cortex Analyst is native in nine regions and
+this is not one of them, so #45's account lane runs by cross-region inference.
+"""
+
+CORTEX_CROSS_REGION: Final = "AWS_US"
+"""``CORTEX_ENABLED_CROSS_REGION``, and the narrowest value that works here.
+
+``DISABLED`` is Snowflake's default and leaves the account lane unable to answer
+at all. ``ANY_REGION`` works and sends inference anywhere. This keeps it inside
+AWS US, which is what Snowflake recommends for an AWS US account, and
+`sql/11_semantic_view.sql` sets it -- narrowing, which is the only direction an
+apply is allowed to move a setting.
+"""
 
 
 @dataclass(frozen=True, slots=True)

@@ -138,3 +138,323 @@ def declared_tables(source: str) -> list[Declared]:
             )
         )
     return found
+
+
+# ---------------------------------------------------------------------------
+# The semantic view -- #45's one statement, which is bigger than some files
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticTable:
+    """One logical table of a ``CREATE SEMANTIC VIEW``.
+
+    Attributes:
+        alias: What the view calls it.
+        table: The physical table it stands for, as written.
+        key: The declared ``PRIMARY KEY``.
+        synonyms: The ``WITH SYNONYMS`` list.
+        comment: The ``COMMENT``.
+    """
+
+    alias: str
+    table: str
+    key: tuple[str, ...]
+    synonyms: tuple[str, ...]
+    comment: str
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticElement:
+    """One fact, dimension or metric.
+
+    Attributes:
+        kind: ``FACT``, ``DIMENSION`` or ``METRIC``.
+        table: The logical table alias it hangs off.
+        name: The element name.
+        using: The relationships named in a metric's ``USING`` clause.
+        expression: The SQL after ``AS``, whitespace collapsed.
+        synonyms: The ``WITH SYNONYMS`` list.
+        comment: The ``COMMENT``.
+    """
+
+    kind: str
+    table: str
+    name: str
+    using: tuple[str, ...]
+    expression: str
+    synonyms: tuple[str, ...]
+    comment: str
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticVerifiedQuery:
+    """One entry of ``AI_VERIFIED_QUERIES``.
+
+    Attributes:
+        name: The verified query name.
+        question: Its ``QUESTION``.
+        verified_at: Its ``VERIFIED_AT``, or zero.
+        onboarding: Whether ``ONBOARDING_QUESTION TRUE``.
+        sql: Its ``SQL``, whitespace collapsed and doubled quotes undoubled.
+    """
+
+    name: str
+    question: str
+    verified_at: int
+    onboarding: bool
+    sql: str
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticView:
+    """A whole ``CREATE SEMANTIC VIEW``, parsed.
+
+    Attributes:
+        name: The object name, as written after ``CREATE OR REPLACE``.
+        tables: The ``TABLES`` clause.
+        relationships: ``(name, table, columns, references)`` per relationship.
+        elements: Every fact, dimension and metric, in declaration order.
+        verified: The ``AI_VERIFIED_QUERIES`` clause.
+        comment: The view's own ``COMMENT``.
+        sql_generation: ``AI_SQL_GENERATION``.
+        question_categorization: ``AI_QUESTION_CATEGORIZATION``.
+        copy_grants: Whether the statement ends ``COPY GRANTS``.
+    """
+
+    name: str
+    tables: tuple[SemanticTable, ...]
+    relationships: tuple[tuple[str, str, tuple[str, ...], str], ...]
+    elements: tuple[SemanticElement, ...]
+    verified: tuple[SemanticVerifiedQuery, ...]
+    comment: str
+    sql_generation: str
+    question_categorization: str
+    copy_grants: bool
+
+
+def _split_top_level(body: str) -> list[str]:
+    """Split on the commas that are outside every paren and every string."""
+    parts: list[str] = []
+    current: list[str] = []
+    depth = 0
+    in_string = False
+    for character in body:
+        if character == "'":
+            in_string = not in_string
+        elif not in_string and character in "([":
+            depth += 1
+        elif not in_string and character in ")]":
+            depth -= 1
+        if character == "," and depth == 0 and not in_string:
+            parts.append("".join(current))
+            current = []
+            continue
+        current.append(character)
+    parts.append("".join(current))
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _clause(source: str, keyword: str) -> str:
+    """Return the balanced contents of ``keyword ( ... )``, or the empty string."""
+    match = re.search(rf"\b{keyword}\s*\(", source)
+    if match is None:
+        return ""
+    depth = 0
+    in_string = False
+    start = match.end()
+    for index in range(match.end() - 1, len(source)):
+        character = source[index]
+        if character == "'":
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                return source[start:index]
+    return ""
+
+
+def _quoted_list(text: str) -> tuple[str, ...]:
+    """Return the strings of a ``('a', 'b')`` list, undoubling quotes."""
+    return tuple(
+        value.replace("''", "'") for value in re.findall(r"'((?:[^']|'')*)'", text or "")
+    )
+
+
+def _string_after(source: str, keyword: str) -> str:
+    """Return the single-quoted literal following ``keyword``, undoubled."""
+    match = re.search(rf"\b{keyword}\s+'((?:[^']|'')*)'", source)
+    return match.group(1).replace("''", "'") if match else ""
+
+
+_SEMANTIC_TABLE = re.compile(
+    r"^(?P<alias>\w+)\s+AS\s+(?P<table>[\w.]+)\s+"
+    r"PRIMARY KEY\s*\((?P<key>[^)]*)\)"
+    r"(?:\s+WITH SYNONYMS\s*=\s*\((?P<synonyms>.*?)\))?"
+    r"(?:\s+COMMENT\s*=\s*'(?P<comment>(?:[^']|'')*)')?\s*$",
+    re.DOTALL,
+)
+_SEMANTIC_ELEMENT = re.compile(
+    r"^(?P<table>\w+)\.(?P<name>\w+)"
+    r"(?:\s+USING\s*\((?P<using>[^)]*)\))?"
+    r"\s+AS\s+(?P<expression>.*?)"
+    r"(?:\s+WITH SYNONYMS\s*=\s*\((?P<synonyms>[^)]*)\))?"
+    r"(?:\s+COMMENT\s*=\s*'(?P<comment>(?:[^']|'')*)')?\s*$",
+    re.DOTALL,
+)
+_RELATIONSHIP = re.compile(
+    r"^(?P<name>\w+)\s+AS\s+(?P<table>\w+)\s*\((?P<columns>[^)]*)\)\s*"
+    r"REFERENCES\s+(?P<references>\w+)\s*$",
+    re.DOTALL,
+)
+_VERIFIED = re.compile(r"^(?P<name>\w+)\s+AS\s*\((?P<body>.*)\)\s*$", re.DOTALL)
+
+
+def _first_statement(source: str) -> str:
+    """Return ``source`` up to its first semicolon that is outside a string.
+
+    `statements` splits the same way and the module docstring says why: a
+    ``COMMENT`` in this file reads "Present so that a single order can be
+    quoted; do not sum it", and a naive split ends the semantic view there --
+    after one fact, with every clause below it invisible and every assertion
+    over them vacuously true.
+    """
+    in_string = False
+    for index, character in enumerate(source):
+        if character == "'":
+            in_string = not in_string
+        elif character == ";" and not in_string:
+            return source[:index]
+    return source
+
+
+_CLAUSES = (
+    "TABLES",
+    "RELATIONSHIPS",
+    "FACTS",
+    "DIMENSIONS",
+    "METRICS",
+    "AI_VERIFIED_QUERIES",
+)
+
+
+def _outer(statement: str) -> str:
+    """Return the statement with every clause body blanked out.
+
+    What is left is the view's own ``COMMENT`` and the two ``AI_`` strings,
+    which would otherwise be found by the first logical table's ``COMMENT``.
+    """
+    remaining = statement
+    for keyword in _CLAUSES:
+        body = _clause(remaining, keyword)
+        if body:
+            remaining = remaining.replace(body, " ", 1)
+    return remaining
+
+
+def semantic_view(source: str) -> SemanticView:
+    """Parse the one ``CREATE SEMANTIC VIEW`` in ``source``.
+
+    Comments are stripped first, for the same reason `statements` strips them:
+    the prose above this statement is longer than the statement and contains
+    every word the regexes below look for.
+
+    Raises:
+        ValueError: If the file declares no semantic view, or if an entry in
+            one of its clauses does not parse. Both are failures rather than
+            skips -- a parser that quietly matches nothing turns every
+            assertion built on it into a pass.
+    """
+    body = "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("--")
+    )
+    header = re.search(r"CREATE OR REPLACE SEMANTIC VIEW\s+(\w+)", body)
+    if header is None:
+        raise ValueError("no CREATE OR REPLACE SEMANTIC VIEW in this file")
+
+    statement = _first_statement(body[header.start() :])
+
+    tables = []
+    for entry in _split_top_level(_clause(statement, "TABLES")):
+        match = _SEMANTIC_TABLE.match(entry)
+        if match is None:
+            raise ValueError(f"unparsed logical table: {entry[:80]!r}")
+        tables.append(
+            SemanticTable(
+                alias=match.group("alias"),
+                table=match.group("table"),
+                key=tuple(part.strip() for part in match.group("key").split(",")),
+                synonyms=_quoted_list(match.group("synonyms")),
+                comment=(match.group("comment") or "").replace("''", "'"),
+            )
+        )
+
+    relationships = []
+    for entry in _split_top_level(_clause(statement, "RELATIONSHIPS")):
+        match = _RELATIONSHIP.match(re.sub(r"\s+", " ", entry).strip())
+        if match is None:
+            raise ValueError(f"unparsed relationship: {entry[:80]!r}")
+        relationships.append(
+            (
+                match.group("name"),
+                match.group("table"),
+                tuple(part.strip() for part in match.group("columns").split(",")),
+                match.group("references"),
+            )
+        )
+
+    elements = []
+    for kind in ("FACTS", "DIMENSIONS", "METRICS"):
+        for entry in _split_top_level(_clause(statement, kind)):
+            match = _SEMANTIC_ELEMENT.match(entry)
+            if match is None:
+                raise ValueError(f"unparsed {kind[:-1].lower()}: {entry[:80]!r}")
+            using = match.group("using") or ""
+            elements.append(
+                SemanticElement(
+                    kind=kind[:-1],
+                    table=match.group("table"),
+                    name=match.group("name"),
+                    using=tuple(
+                        part.strip() for part in using.split(",") if part.strip()
+                    ),
+                    expression=re.sub(r"\s+", " ", match.group("expression")).strip(),
+                    synonyms=_quoted_list(match.group("synonyms")),
+                    comment=(match.group("comment") or "").replace("''", "'"),
+                )
+            )
+
+    verified = []
+    for entry in _split_top_level(_clause(statement, "AI_VERIFIED_QUERIES")):
+        match = _VERIFIED.match(entry)
+        if match is None:
+            raise ValueError(f"unparsed verified query: {entry[:80]!r}")
+        inner = match.group("body")
+        at = re.search(r"\bVERIFIED_AT\s+(\d+)", inner)
+        verified.append(
+            SemanticVerifiedQuery(
+                name=match.group("name"),
+                question=_string_after(inner, "QUESTION"),
+                verified_at=int(at.group(1)) if at else 0,
+                onboarding=bool(re.search(r"\bONBOARDING_QUESTION\s+TRUE\b", inner)),
+                sql=re.sub(r"\s+", " ", _string_after(inner, "SQL")).strip(),
+            )
+        )
+
+    outer = _outer(statement)
+    return SemanticView(
+        name=header.group(1),
+        tables=tuple(tables),
+        relationships=tuple(relationships),
+        elements=tuple(elements),
+        verified=tuple(verified),
+        comment=_string_after(outer, "COMMENT ="),
+        sql_generation=_string_after(outer, "AI_SQL_GENERATION"),
+        question_categorization=_string_after(outer, "AI_QUESTION_CATEGORIZATION"),
+        copy_grants="COPY GRANTS" in outer,
+    )
