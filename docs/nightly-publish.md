@@ -171,6 +171,22 @@ mechanism meant to prevent it. `publish.CARRIED_ONLY` is the rule as data and
 `test_publish.py` holds every projection to it; `publish_verify.py` compares the
 published `derived_at` against the gold mart's own.
 
+Observed, after the 2026-08-27 run. Every row of all three visitor-scoped marts
+carries a non-null `derived_at`, one distinct value per mart, and the value is
+**18:54:51 UTC** — the minute `chip-chat-gold-marts` computed them. The publish
+ran between 19:22 and 19:25. Half an hour separates the two timestamps, which is
+the whole check: the column says when the numbers were *worked out*, not when
+they were *moved*, and a serving layer answering "as of" from it is answering
+about the computation.
+
+```sql
+-- as CHIP_CHAT_ADMIN, with ALL_VISITORS set: the row access policy applies to
+-- every role, so counting a mart is itself a maintenance action.
+SELECT MIN(derived_at), MAX(derived_at), COUNT(*), COUNT_IF(derived_at IS NULL)
+FROM CHIP_CHAT.MARTS.USUAL_ORDER;
+-- 2026-08-27 18:54:51.019911 | same | 500 | 0
+```
+
 **Alert** is `email_notifications.on_failure` on the job, not a line in the
 notebook — a run that dies before reaching any line of `snowflake_publish.py` (a
 cluster that would not start, a task killed at its timeout) is exactly the run

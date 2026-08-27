@@ -252,6 +252,67 @@ than gated — a real menu has items nobody should be pushed toward),
 `visitors_scored` so the denominator is never implicit, `pairs_kept`, and
 `item_affinity_agreement` from §2.
 
+### The first run, and what it actually scored
+
+Version 1, 2026-08-27, over the live silver layer. The numbers are more
+interesting than a pass would have been.
+
+| Metric | Value |
+| --- | --- |
+| `hit_rate_at_k` | 0.107798 |
+| `novel_hit_rate_at_k` | **0.107798** |
+| `baseline_hit_rate_at_k` | 1.0 |
+| `baseline_novel_hit_rate_at_k` | **0.107798** |
+| `catalogue_coverage` | 0.4 |
+| `visitors_scored` | 436 |
+| `pairs_kept` | 12 |
+| `item_affinity_agreement` | **1.0** |
+
+Three things to read out of that.
+
+**`item_affinity_agreement` is 1.0**, which is §2's whole argument settled: the
+model's full-history refit reproduces `gold_synthetic.item_affinity` pair for
+pair, so the mart and the model are two computations of one definition rather
+than two definitions.
+
+**`hit_rate_at_k` and `novel_hit_rate_at_k` are the same number**, and that is
+the design's central property observed rather than asserted: *every* hit this
+model scored was on an item that visitor had never ordered, because it cannot
+recommend anything else. Popularity, by contrast, hits every visitor — 1.0 —
+and almost all of those hits are staples they already buy.
+
+**And the two novel rates are identical to six places**, which is the finding.
+On this catalogue the discriminator PRD P2 asks for cannot discriminate. Ten
+menu items and twelve pairs above the support floor leave each visitor a very
+small set of things they have not tried, and affinity and popularity pick the
+same ones out of it. That is a property of the **trimmed harvest**, not of the
+model: the real menu is hundreds of items and `catalogue_coverage` of 0.4 means
+four items were ever suggested to anybody. The metric is right, the gate is
+right, and there is not enough menu here for either to say anything.
+
+Which is exactly why the promotion rule was not loosened to make this pass. See
+below.
+
+### The first version has nothing to beat
+
+`beats_baseline` compares a run against the incumbent's yardstick, and on the
+first run there is no incumbent. Version 1 tied the baseline, did not clear
+`MINIMUM_MARGIN`, did not take the alias — and the `publish` task then failed
+with `RESOURCE_DOES_NOT_EXIST: Registered Model Alias 'champion' does not
+exist`, a message about a missing alias rather than about the situation.
+
+The gate exists to stop a run **replacing** a good champion with a popularity
+list wearing a hat. With no champion, what it protects instead is an empty
+serving table. So `recommender.takes_the_alias` is `beats_baseline` plus that
+one case: **the first version takes the alias on the strength of being the only
+one**, and every version after it is held to the margin.
+
+The alternative — lowering `MINIMUM_MARGIN` until version 1 passed — would have
+made the gate say something false about a model that genuinely tied. This way
+the metrics above stay on the record, the rule stays where it was, and the
+reason the first version is serving is written down rather than implied by a
+threshold somebody quietly moved.
+
 ### The model is fitted twice
 
 The training-window fit is what the holdout can honestly judge. The
