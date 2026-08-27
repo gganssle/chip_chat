@@ -821,5 +821,7 @@ def test_an_empty_credential_fails_here_rather_than_inside_the_driver() -> None:
 def test_the_notebook_normalises_the_key_it_reads() -> None:
     """And reads it from the secret scope rather than from anywhere else."""
     source = code(NOTEBOOK.read_text())
-    assert "publish.pem_body(dbutils.secrets.get(" in source
+    # Whitespace-insensitive: `ruff format` wraps this call across three lines.
+    flat = re.sub(r"\s+", "", source)
+    assert "publish.pem_body(dbutils.secrets.get(" in flat
     assert "publish.PRIVATE_KEY_SECRET" in source
