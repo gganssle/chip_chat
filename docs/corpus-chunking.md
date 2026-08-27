@@ -23,17 +23,26 @@ both, and the thing it would span is the boundary RFC-001 §04 is least willing
 to see blurred: an invented order that reached the retrieval index would be a
 fabricated fact with a real-looking citation on it. See §8.
 
-> **Status.** The code, the declarations and the Terraform are here and
-> `make ci` is green over them — including the chunker itself, which is run
-> over the recorded nutrition sheet and the recorded catalogue rather than
-> described, and including the fixed-window chunker in `test_gold_chunks.py`
-> that the same assertions are run over and required to **fail**. The pipeline has
-> **not** been run against `dbw-chip-chat` yet — doing so needs a
-> `terraform apply` and a populated silver layer, which
-> [#34](https://github.com/gganssle/chip_chat/issues/34) has also not had. §7
-> says exactly what the live run has to show. §6 is the hand review the third
-> acceptance criterion asks for, done against the recorded fixtures, and it is
-> the one part of this that has to be redone against the live corpus.
+> **Status.** Run. `chip-chat-gold-chunk` completed against `dbw-chip-chat` on
+> 2026-08-27 and `chip-chat-gold-chunk-verify` returned SUCCESS over it, which
+> is what §7 asks for and the whole of the live half. `make ci` is green over
+> the rest — including the chunker itself, which is run over the recorded
+> nutrition sheet and the recorded catalogue rather than described, and
+> including the fixed-window chunker in `test_gold_chunks.py` that the same
+> assertions are run over and required to **fail**. §6 is the hand review the
+> third acceptance criterion asks for; §6.1 reconciles it against the corpus
+> the live run actually produced.
+>
+> The first update failed, and the failure is worth keeping. `gold_chunk.py`
+> closed a UDF over an imported module, which is the trap `silver_conform.py`
+> documents at length one layer down and dated the day before this ran:
+> cloudpickle serializes a module global by name, the Python worker cannot
+> satisfy the import, and the flow dies at the first row with
+> `ModuleNotFoundError: No module named 'gold_chunks'` inside a
+> `SerializationError` — after the graph has validated. The note did not travel
+> from silver to this file when the chunker was written, because there was
+> nothing to run it against. `lib()` in `gold_chunk.py` is silver's, moved up a
+> layer.
 >
 > **This landed after #36 and after #48.** An earlier attempt at this issue put
 > the chunk renderers in a module called `gold.py`, which #36's marts had
@@ -277,9 +286,10 @@ is about without needing the chunk either side of it.
 > renderers over `catalog/tests/fixtures/catalog/` and
 > `harvest/tests/fixtures/chipotle/nutrition-sheet-layout.json` — recordings of
 > the real endpoints, trimmed. They are real published text and real published
-> figures. They are **not** the live corpus, which does not exist yet. When the
-> pipeline runs, `gold_chunk_verify.py` prints a deterministic twenty and this section
-> gets redone against them.
+> figures. They were **not** the live corpus when this was written, because
+> there was not one. There is now, and §6.1 puts the two side by side: the
+> three kinds sampled here are the same size live, chunk for chunk, because the
+> fixtures are recordings of these endpoints rather than a reduction of them.
 
 ### `MENU_ITEM` — ten of ten
 
@@ -347,6 +357,51 @@ Two findings, both fixed in this issue, both now tests:
   tables will fill it.
 - **The live corpus.** Twenty fixture chunks are twenty real sentences and are
   not the two hundred documents the weekly harvest will produce.
+
+### 6.1 The same twenty, against the corpus that was built
+
+The caveat above says this section gets redone when the pipeline runs. It ran,
+and the honest answer is that there was almost nothing to redo, for a reason
+worth writing down rather than celebrating.
+
+`chip-chat-gold-chunk-verify` counted the published corpus at **51 chunks**:
+
+| Kind | Live | In §6's review |
+| --- | --- | --- |
+| `MENU_ITEM` | 10 | 10 of 10 |
+| `NUTRITION_ROW` | 7 | 7 of 7 |
+| `ALLERGEN_CAVEAT` | 5 | 3 of 5 |
+| `POLICY_SECTION` | 10 | — |
+| `FAQ_ENTRY` | 11 | — |
+| `DOCUMENT_BLOCK` | 8 | — |
+
+The three kinds §6 sampled are the same size live as they were in the fixtures,
+because the fixtures **are** recordings of these endpoints rather than a
+reduction of them: ten menu items is what the trimmed catalogue holds, and seven
+nutrition rows is what the recorded sheet publishes. So the twenty chunks read
+by hand are the live twenty, item for item, and the two findings §6 records were
+already fixed in the renderers that produced these.
+
+What is new is the three kinds §6 did not sample — `POLICY_SECTION`,
+`FAQ_ENTRY` and `DOCUMENT_BLOCK`, 29 of the 51 — and they are the half a hand
+review cannot reach from here: the chunk table is readable by the jobs and
+readonly service principals and by nobody else, which is `databricks_catalog.tf`
+working as designed and is also why the twenty below could not simply be
+selected out of it. The verify job prints them; a person reading the run output
+is the review, and extending §6 over those three kinds is filed rather than
+claimed.
+
+The count that matters most is the one that is zero: **no chunk exceeds
+`EMBEDDING_CHARACTER_BUDGET`**. §5 argues that the budget is reported and never
+acted on, and the argument would have been harder to hold if the live corpus had
+produced a chunk that overran it. It did not.
+
+Every other assertion in §7 passed, which is what SUCCESS means for that job: the
+six kinds present, the columns exactly `gold_chunks.FIELDS` in order, every
+`chunk_id` distinct, `carries_its_citation` and `keeps_the_row_whole` re-run as
+filters and matching nothing, and — the check no per-row constraint can make —
+every extracted table row, every deduplicated prose block and every menu item
+becoming exactly one chunk: 7, 8 and 10 in, 7, 8 and 10 out.
 
 ## 7. What the live run has to show
 
@@ -439,12 +494,11 @@ the two fails `make ci`.
 
 ## 10. What this does not do
 
-- **It has not been run.** See the status note at the top. Two of the three
-  acceptance criteria are already tests and `make ci` is green over them; the
-  third is §6, done against recorded fixtures. Until `gold_chunk_verify` has returned
-  SUCCESS against `dbw-chip-chat` the live half is a claim about an unrun
-  pipeline — and #34's silver pipeline has not been run either, so there is
-  nothing yet for this one to read.
+- **The hand review does not cover three of the six kinds.** §6.1 says which and
+  why. Twenty chunks is what the criterion asks for and twenty is what was read;
+  `POLICY_SECTION`, `FAQ_ENTRY` and `DOCUMENT_BLOCK` are 29 of the 51 chunks
+  the live run produced and none of them was read one by one. They are printed
+  by `gold_chunk_verify`, so the material is there.
 - **No nutrient detail beyond calories.** `silver-conformance.md` §7 leaves this
   open and it stays open. The catalogue lands `calories` and the allergen marks;
   the per-nutrient figures in `parsed/chipotle/nutrition/item_nutrition` are not
