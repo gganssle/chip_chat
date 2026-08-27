@@ -31,6 +31,7 @@ What none of these can check is the live model and Spark's own reading of the
 SQL, and that is what `databricks/notebooks/recommender_verify.py` is for.
 """
 
+import json
 import random
 import re
 from decimal import Decimal
@@ -1066,3 +1067,52 @@ def test_the_jobs_and_the_model_are_reachable_from_the_outputs() -> None:
     assert 'output "databricks_recommender_job_id"' in body
     assert 'output "databricks_recommender_verify_job_id"' in body
     assert 'output "databricks_recommender_model"' in body
+
+
+# --- The artifact round trip --------------------------------------------------
+
+
+def test_a_fitted_pair_survives_the_round_trip_the_artifact_makes() -> None:
+    """`as_row` out, `Affinity(**row)` back, and the same pair either side.
+
+    That round trip is the logged artifact's whole contract:
+    `recommender_model.Recommender.load_context` reads the JSON back with
+    `Affinity(**row)`, so a renamed key would break at model load rather than at
+    the point of writing.
+    """
+    pair = recommender.Affinity(
+        item_id="CMG-1001",
+        related_item_id="CMG-1002",
+        co_orders=40,
+        orders_with_item=120,
+        orders_with_related=90,
+        orders=500,
+    )
+    row = pair.as_row()
+    assert set(row) == {
+        "item_id",
+        "related_item_id",
+        "co_orders",
+        "orders_with_item",
+        "orders_with_related",
+        "orders",
+    }
+    assert recommender.Affinity(**row) == pair  # type: ignore[arg-type]
+    assert json.loads(json.dumps(row)) == row
+
+
+def test_the_fitted_pair_has_no_dict_to_take_the_easy_way_out_of() -> None:
+    """The training run died on `vars(pair)`, after both hit-rate evaluations.
+
+    `Affinity` is `slots=True`, so it has no `__dict__` and `vars()` raises
+    `TypeError: vars() argument must have __dict__ attribute` -- six minutes of
+    cluster time to find out that a builtin does not apply. The slots are worth
+    keeping: this is the one object a fit holds thousands of. So the check is
+    that no notebook reaches for `vars` rather than that the class tolerates it.
+    """
+    pair = recommender.Affinity("a", "b", 1, 2, 3, 4)
+    with pytest.raises(TypeError):
+        vars(pair)
+    for notebook in NOTEBOOKS:
+        source = notebook.read_text(encoding="utf-8")
+        assert "vars(" not in source, notebook.name

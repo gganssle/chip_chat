@@ -895,6 +895,24 @@ class Affinity:
         exact = Decimal(self.co_orders) * Decimal(self.orders) / denominator
         return exact.quantize(_SCALE, rounding=ROUND_HALF_UP)
 
+    def as_row(self) -> dict[str, object]:
+        """Return the pair as the logged artifact holds it: field name to value.
+
+        The keys are :class:`Affinity`'s own field names, because
+        ``recommender_model.Recommender.load_context`` reads the artifact back
+        with ``Affinity(**row)`` -- the round trip is the artifact's whole
+        contract and a renamed key would break it at model load rather than
+        here.
+
+        This exists as a method rather than a ``vars()`` at the call site, and
+        the training run is where that mattered: this dataclass is
+        ``slots=True``, so it has no ``__dict__`` and ``vars()`` raises
+        ``TypeError: vars() argument must have __dict__ attribute`` -- after the
+        fit, after both hit-rate evaluations, at the point of logging the model.
+        Six minutes of cluster time to find out that a builtin does not apply.
+        """
+        return {field: getattr(self, field) for field in self.__slots__}
+
 
 @dataclass(frozen=True, slots=True)
 class Recommendation:

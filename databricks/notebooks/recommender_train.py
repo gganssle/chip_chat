@@ -353,7 +353,7 @@ with mlflow.start_run() as run:
         json.dumps(
             {
                 "entrees": sorted(entrees),
-                "pairs": [vars(pair) for pair in refit],
+                "pairs": [pair.as_row() for pair in refit],
             },
             sort_keys=True,
         ),
