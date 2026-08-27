@@ -107,9 +107,7 @@ def test_the_required_columns_are_the_ones_declared_not_null(
     through a swap with a message naming neither the table nor the column.
     """
     declared = tuple(
-        column.name
-        for column in schema.table(candidate.table).columns
-        if column.required
+        column.name for column in schema.table(candidate.table).columns if column.required
     )
     assert publish.required_columns(candidate) == declared
 
@@ -546,14 +544,18 @@ def test_a_publish_shorter_than_the_minimum_is_billed_the_minimum() -> None:
     """Snowflake bills at least sixty seconds per warehouse resume, and an
     eleven-table publish can finish inside that. An estimate without the floor
     would report less than the account is charged."""
-    assert publish.credits(1) == publish.credits(publish.WAREHOUSE_MINIMUM_SECONDS)
-    assert publish.credits(3600) == pytest.approx(publish.WAREHOUSE_CREDITS_PER_HOUR)
-    assert publish.credits(7200) > publish.credits(3600)
+    assert publish.warehouse_credits(1) == publish.warehouse_credits(
+        publish.WAREHOUSE_MINIMUM_SECONDS
+    )
+    assert publish.warehouse_credits(3600) == pytest.approx(
+        publish.WAREHOUSE_CREDITS_PER_HOUR
+    )
+    assert publish.warehouse_credits(7200) > publish.warehouse_credits(3600)
 
 
 def test_a_negative_run_is_refused() -> None:
     with pytest.raises(ValueError, match="cannot be awake"):
-        publish.credits(-1)
+        publish.warehouse_credits(-1)
 
 
 # --- The notebooks ------------------------------------------------------------
@@ -640,7 +642,7 @@ def test_the_publish_job_is_scheduled_and_ships_paused() -> None:
     turns it on. `databricks_recommender.tf` argues the arrangement in full."""
     source = TERRAFORM.read_text()
     assert "quartz_cron_expression = var.databricks_publish_cron" in source
-    assert "databricks_publish_schedule_enabled ? \"UNPAUSED\" : \"PAUSED\"" in source
+    assert 'databricks_publish_schedule_enabled ? "UNPAUSED" : "PAUSED"' in source
 
 
 def test_the_job_alerts_a_human_when_a_run_fails() -> None:
@@ -699,8 +701,8 @@ def test_the_three_account_tables_are_granted_by_name() -> None:
     """And the other three are not granted at all."""
     granted = GRANTS.read_text()
     for table_name in publish.ACCOUNT_TABLES:
-        assert (
-            f"ON TABLE CHIP_CHAT.ACCOUNTS.{table_name}" in granted
-        ), f"nothing grants the publisher {table_name}"
+        assert f"ON TABLE CHIP_CHAT.ACCOUNTS.{table_name}" in granted, (
+            f"nothing grants the publisher {table_name}"
+        )
     for table_name in ("demo_visitors", "personas", "persona_fixtures"):
         assert f"ON TABLE CHIP_CHAT.ACCOUNTS.{table_name}" not in granted

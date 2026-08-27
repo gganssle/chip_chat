@@ -202,10 +202,11 @@ leftover = [
         f"WHERE table_schema = '{publish.STAGING_SCHEMA}'"
     )
 ]
+unfinished = f" -- found {sorted(leftover)}, from a run that did not finish"
 check(
     not leftover,
     f"{publish.DATABASE}.{publish.STAGING_SCHEMA} is empty"
-    + (f" -- found {sorted(leftover)}, from a run that did not finish" if leftover else ""),
+    + (unfinished if leftover else ""),
 )
 
 # COMMAND ----------
@@ -253,9 +254,7 @@ check(
 
 for target in publish.targets_in("MARTS"):
     source = catalog.table(target.layer, target.stream, target.table)
-    nulls = scalar(
-        f"SELECT COUNT(*) FROM {target.qualified} WHERE derived_at IS NULL"
-    )
+    nulls = scalar(f"SELECT COUNT(*) FROM {target.qualified} WHERE derived_at IS NULL")
     check(nulls == 0, f"{target.qualified} carries derived_at on every row")
 
     published_at = scalar(
@@ -288,4 +287,6 @@ if failures:
         "the live serving layer:\n  " + "\n  ".join(failures)
     )
 
-dbutils.notebook.exit(json.dumps({"checked": len(counts), "rows": counts}, sort_keys=True))
+dbutils.notebook.exit(
+    json.dumps({"checked": len(counts), "rows": counts}, sort_keys=True)
+)

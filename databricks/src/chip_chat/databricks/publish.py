@@ -157,7 +157,6 @@ __all__ = [
     "Column",
     "Target",
     "column_names",
-    "credits",
     "drop_staging",
     "options",
     "required_columns",
@@ -166,6 +165,7 @@ __all__ = [
     "swap",
     "target",
     "targets_in",
+    "warehouse_credits",
 ]
 
 # --- The two accounts, named once ---------------------------------------------
@@ -608,9 +608,7 @@ def _spark_expression(column: Column) -> str:
     if column.transport == JSON_ARRAY:
         return f"to_json({column.name}) AS {column.name}"
     if column.transport == UTC_TIMESTAMP:
-        return (
-            f"date_format({column.name}, '{SPARK_TIMESTAMP_FORMAT}') AS {column.name}"
-        )
+        return f"date_format({column.name}, '{SPARK_TIMESTAMP_FORMAT}') AS {column.name}"
     raise ValueError(
         f"{column.name} declares transport {column.transport!r}; "
         f"expected one of {TRANSPORTS}"
@@ -655,9 +653,7 @@ def select(candidate: Target, resolve: Callable[[str, str, str], str]) -> str:
         order, in their transport shape.
     """
     source = resolve(candidate.layer, candidate.stream, candidate.table)
-    projection = ",\n    ".join(
-        _spark_expression(column) for column in candidate.columns
-    )
+    projection = ",\n    ".join(_spark_expression(column) for column in candidate.columns)
     return f"SELECT\n    {projection}\nFROM {source}"
 
 
@@ -739,7 +735,7 @@ def options(url: str, user: str, schema_name: str) -> dict[str, str]:
 # --- What a run cost ----------------------------------------------------------
 
 
-def credits(active_seconds: float) -> float:
+def warehouse_credits(active_seconds: float) -> float:
     """Return what ``active_seconds`` of publish warehouse costs, in credits.
 
     Issue #39's fifth acceptance criterion asks for one full publish's cost

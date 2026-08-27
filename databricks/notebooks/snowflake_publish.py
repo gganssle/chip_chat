@@ -278,7 +278,7 @@ active_seconds = time.monotonic() - started
 
 # COMMAND ----------
 
-estimated_credits = publish.credits(active_seconds)
+estimated_credits = publish.warehouse_credits(active_seconds)
 rows = sum(item["rows"] for item in published)
 
 print(f"  {len(published)} tables, {rows} rows")
