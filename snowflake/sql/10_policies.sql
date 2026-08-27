@@ -1,4 +1,4 @@
--- The isolation mechanism. Two row access policies, and the eight tables they
+-- The isolation mechanism. Two row access policies, and the nine tables they
 -- are attached to. RFC-001 §05 is the section this file implements, and it is
 -- the section to read first.
 --
@@ -156,6 +156,7 @@ DECLARE
                 ('ACCOUNTS', 'ORDERS',           'CHIP_CHAT.ACCOUNTS.VISITOR_ISOLATION'),
                 ('ACCOUNTS', 'ORDER_ITEMS',      'CHIP_CHAT.ACCOUNTS.VISITOR_ISOLATION'),
                 ('ACCOUNTS', 'LOYALTY_LEDGER',   'CHIP_CHAT.ACCOUNTS.VISITOR_ISOLATION'),
+                ('ACCOUNTS', 'ACTION_RECEIPTS',  'CHIP_CHAT.ACCOUNTS.VISITOR_ISOLATION'),
                 ('MARTS',    'CUSTOMER_360',     'CHIP_CHAT.ACCOUNTS.VISITOR_ISOLATION'),
                 ('MARTS',    'USUAL_ORDER',      'CHIP_CHAT.ACCOUNTS.VISITOR_ISOLATION'),
                 ('MARTS',    'SPEND_SUMMARY',    'CHIP_CHAT.ACCOUNTS.VISITOR_ISOLATION')

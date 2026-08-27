@@ -213,6 +213,34 @@ WITHHELD_TABLES: Final[dict[tuple[SchemaName, str], str]] = {
         "system handed an array column will eventually FLATTEN it into a join "
         "nobody wanted"
     ),
+    ("CATALOGUE", "rewards"): (
+        "the published rewards and their point costs, added by #46 so that "
+        "redeem_points can validate a redemption against a catalogue rather "
+        "than against a card. Withheld rather than modelled, and the reason is "
+        "timing rather than principle: nothing publishes the table yet "
+        "(cc-99cn), and a semantic view over an empty table does not decline "
+        "to answer -- it answers that the visitor can redeem nothing, which is "
+        "a confident wrong answer about the one thing they have points for. "
+        "Worth reopening when the publish lands; 'what can I get for my "
+        "points' is an account-lane question and this is the table that "
+        "answers it"
+    ),
+    ("CATALOGUE", "rewards_terms"): (
+        "four numbers: the earn rate, two expiry windows and the daily "
+        "earning cap. Published prose that the knowledge lane already answers "
+        "from, with a citation, which is the lane that should -- a rate "
+        "surfaced here would be a number with no source_url attached to it in "
+        "the sentence the visitor reads. place_order reads it as arithmetic; "
+        "nobody should be able to ask it as a question here"
+    ),
+    ("ACCOUNTS", "action_receipts"): (
+        "the retry keys the write path has spent, and the receipts it returned "
+        "for them. Write-path bookkeeping about the mechanism rather than "
+        "about the visitor's account, and the receipt column is a VARIANT "
+        "holding a whole prior receipt -- a generated query that reached it "
+        "would surface an answer nobody composed, dated whenever it happened. "
+        "'What did I order' is orders and order_items, which are modelled"
+    ),
     ("ACCOUNTS", "personas"): (
         "a kind of person rather than a person. Seven archetypes shared by "
         "five hundred customers is not a fact about the visitor in front of you"

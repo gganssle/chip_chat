@@ -113,17 +113,44 @@ def test_the_required_columns_are_the_ones_declared_not_null(
 
 
 def test_every_serving_table_is_published_or_argued_for() -> None:
-    """Fourteen tables exist and eleven are published. The three are the point.
+    """Seventeen tables exist and eleven are published. The six are the point.
 
     `demo_visitors` holds all three columns a visitor may edit and is the one
     account table a visitor writes to, so a nightly overwrite would delete every
     edit made that day; `personas` and `persona_fixtures` are reference rows the
     generator emits once. All three reach Snowflake through
     `chip_chat.snowflake.load`, run as CHIP_CHAT_ADMIN.
+
+    Three more arrived with #46's write path and each is unpublished for its own
+    reason:
+
+    `action_receipts` is the retry-key store, written live by the four write
+    procedures and by nothing else. It is `demo_visitors`' argument in its
+    strongest form -- an overnight overwrite would forget which keys a visitor
+    had already spent, and the next retry of a call made before the job ran
+    would place a second real order. Nothing in the lakehouse could produce its
+    rows in any case: they are a record of what the serving layer did.
+
+    `rewards` and `rewards_terms` are harvested catalogue data and *should*
+    cross this seam eventually, which is cc-99cn. They are not `Target`s yet
+    because a target names a silver table to read: the harvest produces the
+    rewards line-up, and the four published numbers in `rewards_terms` are
+    parsed out of the terms text by `chip_chat.data_gen.rewards` rather than
+    conformed into a silver table anybody could select from. A target pointing
+    at a table that does not exist is a nightly job that fails, which is worse
+    than a table that is honestly empty -- and `place_order` refuses to accrue
+    while it is empty rather than guessing, so the emptiness is loud.
     """
     published = {candidate.table for candidate in publish.TARGETS}
     unpublished = {table.name for table in schema.TABLES} - published
-    assert unpublished == {"demo_visitors", "personas", "persona_fixtures"}
+    assert unpublished == {
+        "demo_visitors",
+        "personas",
+        "persona_fixtures",
+        "action_receipts",
+        "rewards",
+        "rewards_terms",
+    }
 
 
 def test_the_account_tables_are_the_tables_the_marts_came_from() -> None:

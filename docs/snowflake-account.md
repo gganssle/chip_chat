@@ -477,14 +477,21 @@ adding it to the `ALTER` in good faith.
 ## 9. What this deliberately does not do
 
 - **~~No tables.~~** [#42] added them — fourteen, into the schemas and the
-  grants that already existed. `SELECT` on `FUTURE TABLES` was granted in every
-  schema, so it did not also mean re-running a grants file nobody remembers is
-  required, and it did not. See
+  grants that already existed, and [#46] added three more for the same reason
+  it added the procedures. `SELECT` on `FUTURE TABLES` was granted in every
+  schema, so neither also meant re-running a grants file nobody remembers is
+  required, and neither did. See
   [docs/snowflake-schema.md](snowflake-schema.md).
 - **No row access policies on real tables.** [#43]. The throwaway one in
   `verify` proves a fact about the roles and is dropped in the same run.
-- **No stored procedures.** [#46]. `USAGE ON FUTURE PROCEDURES IN SCHEMA
-  CHIP_CHAT.ACCOUNTS` is already granted to `CHIP_CHAT_WRITE`.
+- **~~No stored procedures.~~** [#46] added four, in
+  `CHIP_CHAT.ACCOUNTS`, all `EXECUTE AS CALLER`. `USAGE ON FUTURE PROCEDURES IN
+  SCHEMA CHIP_CHAT.ACCOUNTS` had already been granted to `CHIP_CHAT_WRITE`
+  ahead of them existing, which is why landing them did not also mean
+  re-running the grants. What it *did* need was the one grant nobody had
+  anticipated — `USAGE ON SEQUENCES`, because caller's rights means the caller
+  needs every privilege the body uses, and an owner's-rights procedure would
+  have hidden that by needing none of them.
 - **No `SNOWFLAKE.CORTEX_USER` grant.** The Cortex Analyst semantic view is
   [#45]'s, and the read role's grant list is the security artefact of this issue
   — every line in it should be one that something already built needs.

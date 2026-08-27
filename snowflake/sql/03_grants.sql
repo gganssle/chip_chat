@@ -125,6 +125,16 @@ GRANT SELECT ON FUTURE VIEWS IN SCHEMA CHIP_CHAT.ACCOUNTS TO ROLE CHIP_CHAT_WRIT
 GRANT USAGE ON ALL PROCEDURES    IN SCHEMA CHIP_CHAT.ACCOUNTS TO ROLE CHIP_CHAT_WRITE;
 GRANT USAGE ON FUTURE PROCEDURES IN SCHEMA CHIP_CHAT.ACCOUNTS TO ROLE CHIP_CHAT_WRITE;
 
+-- And the sequences those procedures mint order and ledger identifiers from.
+-- They are granted to the WRITE role rather than held by the procedures'
+-- owner because #46's procedures run EXECUTE AS CALLER -- an owner's-rights
+-- procedure would read GETVARIABLE('DEMO_ID') as the owner's session and be
+-- filtered by #43's policies as the owner, which is the isolation guarantee
+-- undone from inside the write path. Caller's rights means the caller needs
+-- every privilege the body uses, and USAGE on a sequence is one of them.
+GRANT USAGE ON ALL SEQUENCES    IN SCHEMA CHIP_CHAT.ACCOUNTS TO ROLE CHIP_CHAT_WRITE;
+GRANT USAGE ON FUTURE SEQUENCES IN SCHEMA CHIP_CHAT.ACCOUNTS TO ROLE CHIP_CHAT_WRITE;
+
 -- --------------------------------------------------------------------------
 -- CHIP_CHAT_PUBLISH -- the nightly job out of Databricks (#39).
 --

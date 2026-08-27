@@ -18,33 +18,38 @@ sql/02_database.sql       CHIP_CHAT, four managed-access schemas, PUBLIC dropped
 sql/03_grants.sql         the security boundary. Read this one first
 sql/04_users.sql          three service users, no credentials
 sql/05_resource_monitors  a daily credit ceiling per warehouse, and why they differ
-sql/06_catalogue.sql      the real half: menu_items, item_prices, modifiers, stores
+sql/06_catalogue.sql      the real half: menu_items, item_prices, modifiers,
+                          stores, and the published rewards #46 reads
 sql/07_accounts.sql       the synthetic half. Every table here carries demo_id
 sql/08_marts.sql          the four marts Databricks publishes overnight
 sql/09_audit.sql          the demo_id rule, as a view that must return no rows
 sql/10_policies.sql       the isolation mechanism. Two row access policies and
-                          the eight tables they are attached to
-sql/11_semantic_view.sql  the account lane, five tables out of fourteen
+                          the nine tables they are attached to
+sql/11_semantic_view.sql  the account lane, five tables out of seventeen
+sql/12_procedures.sql     the write path: place_order, redeem_points,
+                          update_preferences
+sql/13_cancel_order.sql   cancel_order, alone, and why it is alone
 sql/optional/             never run by an apply: reset.sql, network_policy.sql,
                           trial_credit_cap.sql
 
-src/chip_chat/snowflake/account.py   the layout as data. Creates nothing
-src/chip_chat/snowflake/schema.py    the tables as data. Also creates nothing
-src/chip_chat/snowflake/semantic.py  the semantic view as data, and the nine
-                                     tables it deliberately does not model
-src/chip_chat/snowflake/analyst.py   answer, or say so. No network call
-src/chip_chat/snowflake/snow.py      the `snow` CLI, wrapped
-src/chip_chat/snowflake/apply.py     `make snowflake-apply`
-src/chip_chat/snowflake/load.py      `make snowflake-load-sample`
-src/chip_chat/snowflake/verify.py    `make snowflake-verify`
+src/chip_chat/snowflake/account.py     the layout as data. Creates nothing
+src/chip_chat/snowflake/schema.py      the tables as data. Also creates nothing
+src/chip_chat/snowflake/semantic.py    the semantic view as data, and the tables
+                                       it deliberately does not model
+src/chip_chat/snowflake/procedures.py  the write path as data. Same bargain
+src/chip_chat/snowflake/analyst.py     answer, or say so. No network call
+src/chip_chat/snowflake/snow.py        the `snow` CLI, wrapped
+src/chip_chat/snowflake/apply.py       `make snowflake-apply`
+src/chip_chat/snowflake/load.py        `make snowflake-load-sample`
+src/chip_chat/snowflake/verify.py      `make snowflake-verify`
 ```
 
 ```bash
 make snowflake-apply         # create or re-assert every object. Safe to repeat
 make snowflake-cap QUOTA=60  # cap the whole trial. The one number nothing here knows
 make snowflake-load-sample   # the committed catalogue fixture, 60 rows
-make snowflake-verify        # 80 checks against the live account, ~3 minutes
-make snowflake-verify-fast   # 79 of them, skipping the minute of watching
+make snowflake-verify        # 99 checks against the live account, ~5 minutes
+make snowflake-verify-fast   # 98 of them, skipping the minute of watching
 make snowflake-rebuild       # drop it all, build it back, verify
 ```
 
@@ -195,6 +200,63 @@ whole-turn target on its own, because Cortex Analyst is not native in this
 region. [docs/snowflake-semantic-view.md](../docs/snowflake-semantic-view.md)
 has the numbers, the six findings behind the file, and what was not measured.
 
+## The write path, and the one word holding it up
+
+Four procedures in `CHIP_CHAT.ACCOUNTS`, one per write tool, and the ops API
+reaches the database through nothing else. The word is **`EXECUTE AS CALLER`**,
+on all four.
+
+Snowflake's default is owner's rights, and an owner's-rights procedure executes
+as `CHIP_CHAT_ADMIN`: `GETVARIABLE('DEMO_ID')` reads the *owner's* session rather
+than the caller's, and [#43]'s row access policies are evaluated against the
+owner. A write path built that way would make every visitor look like the same
+one and would pass every test that opens a single session.
+`test_procedure_layout.py` fails on the missing word, and `snowflake-verify`
+asks the live account with `DESC PROCEDURE`.
+
+The second thing to know is that **row access policies do not filter `INSERT`**.
+They filter `SELECT`, `UPDATE` and `DELETE`, so isolation looks correct in every
+read path and in review, and a procedure that accepted a visitor identifier
+could still attribute a row to somebody else. None of them does: `demo_id` is
+read from the session into one local variable and every write uses that
+variable, which a test asserts statement by statement. The caller cannot express
+the wrong thing rather than being trusted not to.
+
+| | takes | writes | invented |
+| --- | --- | --- | --- |
+| `place_order` | retry key, store, channel, lines | `orders`, `order_items`, `loyalty_ledger` | — |
+| `redeem_points` | retry key, reward, quoted cost | `loyalty_ledger` | the reward ids |
+| `update_preferences` | retry key, a partial object | `demo_visitors` | the two ceilings |
+| `cancel_order` | retry key, order | `orders`, `loyalty_ledger` | **the action itself** |
+
+All four also write `action_receipts`, which is what makes them idempotent: each
+claims its retry key with a `MERGE` as the first statement inside its own
+transaction, so a simultaneous retry waits rather than racing past, and a call
+that fails rolls the claim back with everything else. A `SELECT` then `INSERT`
+would read identically in review and would not serialise — Snowflake's `INSERT`
+does not conflict with a concurrent `INSERT` and its `SELECT` takes no lock — and
+the failure it produces is a second real order.
+
+`cancel_order` is in a file of its own because it models an affordance the
+published record **refuses**: *"When you submit an order, it's sent directly to
+our restaurant crew, so we're unable to cancel"*, and a delivery order can only
+be cancelled through Customer Service, possibly for a fee. Both sentences are on
+its receipt. PRD T1 requires the action and PRD T5 says every action is
+simulated, so it exists — and [docs/action-surface.md](../docs/action-surface.md)
+§10 records the exit, which is a PRD change. Keeping it in one file keeps that
+exit a deletion: three deletions, one `DROP PROCEDURE`, and no migration. The
+header of `sql/13_cancel_order.sql` is that list.
+
+**What this tier does not validate** is `procedures.ENFORCED_ELSEWHERE`, and it
+is written down rather than left as an absence. Required modifier slots,
+per-pair portion permissions and the six per-item caps are about columns the
+serving projection of the catalogue does not carry — `CATALOGUE.modifiers` is
+five columns and there is no `portion_options` table — so they are enforced at
+proposal time in `api/drafts.py` against `chip_chat.catalog`. What #46 asks the
+database to make structural is the other thing, and that is here: **no SKU in
+any response that does not exist in the catalogue**, checked at the row that
+would have to exist rather than at the matcher.
+
 ## Two files, two different questions
 
 `tests/` asks whether the **SQL** still says what `account.py` and `schema.py`
@@ -237,3 +299,4 @@ being re-baselined against.
 [#39]: https://github.com/gganssle/chip_chat/issues/39
 [#43]: https://github.com/gganssle/chip_chat/issues/43
 [#45]: https://github.com/gganssle/chip_chat/issues/45
+[#46]: https://github.com/gganssle/chip_chat/issues/46

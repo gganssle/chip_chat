@@ -1,11 +1,11 @@
 # The isolation mechanism
 
-Two row access policies, eight tables, and one session variable. Issue
+Two row access policies, nine tables, and one session variable. Issue
 [#43](https://github.com/gganssle/chip_chat/issues/43), which is one of the two
 launch gates and the piece the rest of the system is only safe because of.
 
 [docs/snowflake-schema.md](snowflake-schema.md) is the schema this attaches to —
-fourteen tables, and `demo_id` on every one of the eight that belongs to a
+seventeen tables, and `demo_id` on every one of the nine that belongs to a
 visitor. That document ends with "no row access policies, [#43], and it is the
 launch gate". This is that ticket.
 
@@ -244,9 +244,17 @@ checked the same way and for the same reason.
 rows an `UPDATE`, `DELETE` or `MERGE` can see. Nothing in these policies stops
 the ops API writing a row that carries another visitor's `demo_id` — isolation
 covers reading somebody else's history and covers editing it, and does not cover
-fabricating it. That is [#46]'s to close, by taking `demo_id` from the session
-variable inside the stored procedure rather than from an argument, and it is
-filed rather than assumed.
+fabricating it.
+
+> **Closed by [#46].** The four write procedures are the only path that writes,
+> none of them takes a visitor identifier, and each reads `demo_id` from
+> `GETVARIABLE('DEMO_ID')` into one local variable that every `INSERT`, `UPDATE`
+> and `MERGE` in the body then uses.
+> `snowflake/tests/test_procedure_layout.py` walks every write statement in
+> every body to assert it, so the caller cannot express the wrong thing rather
+> than being trusted not to. `action_receipts`, the ninth table on the list
+> above, arrived with the same ticket and carries `visitor_isolation` for the
+> ordinary reason: a spent retry key is a fact about one visitor's attempt.
 
 **`CREATE OR REPLACE TABLE` takes the policy with it.** `CHIP_CHAT_PUBLISH`
 holds `CREATE TABLE` on `MARTS`, and a publish that replaces a mart wholesale
@@ -289,7 +297,7 @@ a lane role reports three unprotected marts as protected by not looking at them.
 ## 10. Running it
 
 ```bash
-make snowflake-apply         # create both policies and attach all eight tables
+make snowflake-apply         # create both policies and attach all nine tables
 make snowflake-verify-fast   # #41, #42, #43 and #88, without the minute of watching
 make ci                      # the coverage test, free and offline
 ```

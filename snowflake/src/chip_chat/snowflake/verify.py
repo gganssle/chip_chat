@@ -13,12 +13,14 @@ editing a file.
     #41.2  the read role cannot write
     #41.3  the write role cannot read another visitor's rows either
     #41.4  the account is rebuildable from snowflake/ in one run
-    #42    the schema is the fourteen tables the DDL declares, every one of
-           them commented, and every visitor-scoped one carrying demo_id
+    #42    the schema is the tables the DDL declares, every one of them
+           commented, and every visitor-scoped one carrying demo_id
     #43    every visitor-scoped table carries a row access policy, and an
            unbound session reads nothing at all
     #45    the account lane's semantic view exists, the read role can ask it a
            question, and it models no visitor identifier
+    #46    the four write procedures exist, run as their caller, and hold
+           their five acceptance criteria against a seeded account
 
 #41's first three are checked here. Its fourth is checked by running
 `make snowflake-rebuild`, which tears the account down and builds it back before
@@ -35,6 +37,13 @@ resource monitors are checked here too, including the one an apply deliberately
 does not create. That check fails on a freshly rebuilt account, on purpose --
 `optional/trial_credit_cap.sql` needs a number read off the remaining balance,
 and an uncapped trial should be a named failure rather than a quiet gap.
+
+#46's checks are the only ones here that WRITE. That is not avoidable -- "a
+forced mid-procedure failure leaves no partial state" is a claim about rows --
+so everything they write is carried by one throwaway demo_id and removed in a
+``finally``. The forced failure is produced by a narrowed role rather than by a
+debug argument: a flag that made a procedure fail on purpose would be a way to
+make a procedure fail on purpose, shipped to production.
 
 #41's criterion 3 needs a row access policy to exist, and it builds a throwaway
 one on a throwaway table rather than borrowing #43's. That is deliberate: what is
@@ -111,25 +120,35 @@ the read role and nothing else, which is what the app does.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 import time
 from dataclasses import dataclass
 from typing import Any
 
-from chip_chat.snowflake import account, schema, semantic, snow
+from chip_chat.snowflake import account, procedures, schema, semantic, snow
 
 __all__ = ["REFUSALS", "Check", "main", "run"]
 
 REFUSALS = (
     "003001 (42501)",
     "002003 (02000)",
+    "002003 (42S02)",
     "002043 (02000)",
 )
-"""The three Snowflake error codes that mean "you may not".
+"""The Snowflake error codes that mean "you may not".
 
 Nothing else counts. A refusal recognised by its prose rather than its code
 would be one release note away from being recognised by accident.
+
+``002003`` arrives under two SQLSTATEs and both are the same refusal: the
+account returns ``42S02`` when a role names a table it may not see through a
+qualified name, and ``02000`` elsewhere. Only the first was listed here, so
+"the publish role cannot see the demo accounts" reported *failed, but not with a
+permission error -- that is a different bug* for a refusal that was exactly the
+one it was looking for. A security check that misreads a correct refusal as a
+different bug is the check most likely to be waved through.
 """
 
 PROBE_TABLE = account.table("ACCOUNTS", "_VERIFY_PROBE")
@@ -167,6 +186,25 @@ _SCHEMA_LIST = ", ".join(f"'{name}'" for name in account.SCHEMAS)
 # cannot see the other, and cannot change the other's row by naming it.
 MINE = "verify-visitor-mine"
 THEIRS = "verify-visitor-theirs"
+
+# A third, for #46. This one is a real row in demo_visitors rather than a row in
+# a probe table, because the write procedures write to the real tables and there
+# is no honest way to ask whether they work against anything else. Everything it
+# touches is deleted afterwards, by demo_id, in the reverse of the order it was
+# written.
+WRITER = "verify-visitor-writes"
+WRITER_SEED_POINTS = 100
+"""The throwaway visitor's opening balance, and it is deliberately small.
+
+One of #46's acceptance criteria is that a redemption exceeding the balance is
+refused. That is only a check if the balance cannot cover the reward being
+asked for, and a generous opening balance would turn it into a check that
+redemption works -- which passes, says nothing, and looks identical in a report.
+A hundred points is below every published reward but the cheapest, and
+:func:`_check_write_procedures` asks for the costliest and refuses to score the
+check at all if the balance turns out to cover it.
+"""
+WRITER_ROLE = "_VERIFY_PARTIAL_WRITE"
 
 # How long to wait for a suspension that should arrive after AUTO_SUSPEND_SECONDS.
 # Snowflake checks for idle warehouses on its own cadence rather than on a timer
@@ -965,7 +1003,7 @@ def _check_schema() -> list[Check]:
             "nothing is in these schemas that snowflake/sql did not create",
             passed=not unexpected,
             detail=(
-                "only the fourteen declared tables"
+                f"only the {len(schema.TABLES)} declared tables"
                 if not unexpected
                 else "also present: "
                 + ", ".join(f"{s}.{t}" for s, t in sorted(unexpected))
@@ -1806,6 +1844,490 @@ def _drop_isolation_fixture() -> None:
 
 
 # ---------------------------------------------------------------------------
+# #46 -- the write procedures, against a seeded account
+# ---------------------------------------------------------------------------
+
+
+def _current_user() -> str:
+    """Return the user this connection authenticates as."""
+    rows = snow.query("SELECT CURRENT_USER() AS WHO;")[-1]
+    return str(rows[0]["WHO"])
+
+
+def _writable_line() -> dict[str, Any] | None:
+    """Return a store and an orderable item that store actually prices, or None.
+
+    Read out of the catalogue rather than written down, because which rows are
+    loaded depends on which harvest was published, and a check hard-coded to
+    restaurant 0679 would fail on a correct account loaded from a different one.
+    None means the catalogue is empty, which is a different answer from "the
+    procedures are broken" and is reported as one.
+    """
+    rows = snow.query(
+        f"{_preamble(account.ADMIN_ROLE, account.SERVING_WAREHOUSE)}\n"
+        "SELECT p.restaurant_id AS STORE, p.item_id AS ITEM, p.unit_price AS PRICE\n"
+        f"  FROM {account.table('CATALOGUE', 'item_prices')} p\n"
+        f"  JOIN {account.table('CATALOGUE', 'menu_items')} m ON m.item_id = p.item_id\n"
+        f"  JOIN {account.table('CATALOGUE', 'stores')} s\n"
+        "    ON s.store_id = p.restaurant_id\n"
+        " WHERE m.category IS NOT NULL AND p.is_available\n"
+        " ORDER BY p.restaurant_id, p.item_id LIMIT 1;"
+    )[-1]
+    return rows[0] if rows else None
+
+
+def _earn_rate() -> int | None:
+    """Return the published points per dollar, or None if it is not loaded.
+
+    `place_order` refuses to accrue without it, so a None here is the reason
+    every behavioural check below would report a rejection rather than a bug.
+    """
+    rows = snow.query(
+        f"{_preamble(account.ADMIN_ROLE, account.SERVING_WAREHOUSE)}\n"
+        f"SELECT value AS RATE FROM {account.table('CATALOGUE', 'rewards_terms')}\n"
+        " WHERE rule = 'points_per_dollar';"
+    )[-1]
+    return int(rows[0]["RATE"]) if rows else None
+
+
+def _call(sql: str, *, role: str = account.ADMIN_ROLE) -> dict[str, Any]:
+    """Call one procedure as ``role`` with WRITER bound, and return its receipt.
+
+    The session is deliberately left sitting in CATALOGUE rather than in
+    ACCOUNTS, and the calls below are qualified. A SQL procedure resolves an
+    unqualified name in its body against the schema the SESSION is in when it is
+    called, so a body that says ``FROM demo_visitors`` works from a session that
+    happens to have run ``USE SCHEMA CHIP_CHAT.ACCOUNTS`` and fails from one
+    that has not. Calling from the wrong schema on purpose is what keeps that
+    from being a check nobody ever runs.
+
+    The receipt is read out of the returned value rather than out of the CLI's
+    output. `snow sql` echoes the statement it ran, and these statements contain
+    the item ids and reward ids the assertions are about -- a check that searched
+    the output would find them whether or not the procedure returned anything.
+    """
+    statements = snow.query(
+        f"{_preamble(role, account.SERVING_WAREHOUSE)}\n"
+        f"USE SCHEMA {account.schema('CATALOGUE')};\n"
+        f"SET DEMO_ID = '{WRITER}';\n"
+        f"{sql}"
+    )
+    rows = statements[-1] if statements else []
+    if not rows:
+        return {}
+    value = next(iter(rows[0].values()))
+    try:
+        parsed = json.loads(str(value))
+    except json.JSONDecodeError:
+        return {"rejection": "UNPARSEABLE", "detail": str(value)[:200]}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _writer_state() -> tuple[int, int, int]:
+    """Return (live orders, spent retry keys, points balance) for WRITER.
+
+    Asks for every visitor by name, the way `load.py` does. #43's policy denies a
+    cross-visitor read to every role including the owner, and counting rows that
+    belong to a visitor this session has not bound is exactly such a read -- so
+    the maintenance variable is set here rather than the answer being a
+    confident zero. Which is what it would be: a check that reported "no orders"
+    because it could not see them would pass its own emptiness assertions and
+    fail its populated ones for the wrong reason.
+    """
+    rows = snow.query(
+        f"{_preamble(account.ADMIN_ROLE, account.SERVING_WAREHOUSE)}\n"
+        f"SET {schema.MAINTENANCE_VARIABLE} = 'verifying the write path';\n"
+        "SELECT\n"
+        f"  (SELECT COUNT(*) FROM {account.table('ACCOUNTS', 'orders')}"
+        f"     WHERE demo_id = '{WRITER}') AS ORDERS,\n"
+        f"  (SELECT COUNT(*) FROM {account.table('ACCOUNTS', 'action_receipts')}"
+        f"     WHERE demo_id = '{WRITER}') AS KEYS,\n"
+        f"  (SELECT COALESCE(SUM(delta), 0) FROM"
+        f"     {account.table('ACCOUNTS', 'loyalty_ledger')}"
+        f"     WHERE demo_id = '{WRITER}') AS BALANCE;"
+    )[-1]
+    row = rows[0]
+    return int(row["ORDERS"]), int(row["KEYS"]), int(row["BALANCE"])
+
+
+def _check_write_procedures() -> list[Check]:
+    """Issue #46's five acceptance criteria, asked of the live account.
+
+    Everything here writes. That is not avoidable -- "a forced mid-procedure
+    failure leaves no partial state" is a claim about rows -- so it happens under
+    one throwaway demo_id, and :func:`_drop_writer` removes every row that
+    carries it whether these pass or fail.
+
+    The forced failure is produced with privileges rather than with a flag. A
+    debug argument that made a procedure fail on purpose would be a way to make
+    a procedure fail on purpose, shipped to production; a role holding INSERT on
+    `orders` and not on `loyalty_ledger` makes the third write fail for a reason
+    Snowflake produced, in the middle of a transaction, exactly as a revoked
+    grant would in life.
+    """
+    checks: list[Check] = []
+
+    live = snow.query(
+        f"{_preamble(account.ADMIN_ROLE, account.SERVING_WAREHOUSE)}\n"
+        f"SHOW PROCEDURES IN SCHEMA {account.schema('ACCOUNTS')};"
+    )[-1]
+    found = {str(row.get("name", "")).upper() for row in live}
+    for declaration in procedures.PROCEDURES:
+        present = declaration.name.upper() in found
+        rights = ""
+        if present:
+            signature = ", ".join(argument.sql_type for argument in declaration.arguments)
+            described = snow.query(
+                f"{_preamble(account.ADMIN_ROLE, account.SERVING_WAREHOUSE)}\n"
+                f"DESC PROCEDURE {declaration.qualified()}({signature});"
+            )[-1]
+            rights = next(
+                (
+                    str(row.get("value", "")).upper()
+                    for row in described
+                    if str(row.get("property", "")).lower() == "execute as"
+                ),
+                "",
+            )
+        checks.append(
+            Check(
+                "#46",
+                f"{declaration.qualified()} exists and runs as its caller",
+                passed=present and rights == "CALLER",
+                detail=(
+                    "EXECUTE AS CALLER"
+                    if present and rights == "CALLER"
+                    else "not in the account -- run `make snowflake-apply`"
+                    if not present
+                    else f"runs with {rights or 'unknown'} rights. Owner's rights "
+                    "reads the OWNER's DEMO_ID and applies #43's policies to the "
+                    "OWNER, which is the isolation guarantee undone from inside "
+                    "the write path"
+                ),
+            )
+        )
+
+    line = _writable_line()
+    rate = _earn_rate()
+    if line is None:
+        checks.append(
+            Check(
+                "#46",
+                "the behavioural checks have a catalogue to run against",
+                passed=False,
+                detail=(
+                    "no available orderable item is priced at any store, so "
+                    "there is no order to place. `make snowflake-load-sample`"
+                ),
+            )
+        )
+        return checks
+    if rate is None:
+        checks.append(
+            Check(
+                "#46",
+                "the published earn rate is loaded",
+                passed=False,
+                detail=(
+                    "CATALOGUE.rewards_terms has no points_per_dollar row, so "
+                    "place_order refuses every order rather than accruing at a "
+                    "rate nobody published. Nothing publishes this table yet"
+                ),
+            )
+        )
+        return checks
+
+    store = int(line["STORE"])
+    item = str(line["ITEM"])
+    price = float(line["PRICE"])
+    lines = json.dumps([{"item_id": item, "qty": 1}])
+
+    _build_writer()
+    try:
+        placed = _call(
+            f"CALL CHIP_CHAT.ACCOUNTS.place_order('verify-key-1', {store}, 'IN_STORE', "
+            f"PARSE_JSON('{lines}'));"
+        )
+        orders, _, _ = _writer_state()
+        expected_points = int(price * rate)
+        checks.append(
+            Check(
+                "#46",
+                "an order places, priced from the catalogue and accrued at the "
+                "published rate",
+                passed=(
+                    placed.get("ok") is True
+                    and orders == 1
+                    and placed.get("points_earned") == expected_points
+                ),
+                detail=(
+                    f"{placed.get('order_id')} totalled {placed.get('total')} and "
+                    f"earned {placed.get('points_earned')} at {rate} a dollar"
+                    if placed.get("ok")
+                    else f"rejected: {placed.get('rejection')} {placed.get('detail', '')}"
+                ),
+            )
+        )
+
+        replayed = _call(
+            f"CALL CHIP_CHAT.ACCOUNTS.place_order('verify-key-1', {store}, 'IN_STORE', "
+            f"PARSE_JSON('{lines}'));"
+        )
+        orders_after, _, _ = _writer_state()
+        wrote_nothing = orders_after == orders
+        said_so = replayed.get("replayed") is True
+        checks.append(
+            Check(
+                "#46",
+                "double-submitting one retry key produces one order",
+                passed=wrote_nothing and said_so,
+                detail=(
+                    "the second call replayed the stored receipt and wrote nothing"
+                    if wrote_nothing and said_so
+                    else f"{orders_after} orders after the retry, not {orders}. A "
+                    "network retry places a second real order"
+                    if not wrote_nothing
+                    # Both halves are the criterion, and they fail differently.
+                    # One order and no replay marker means the retry was answered
+                    # with something that is not the first call's receipt -- a
+                    # rejection, or a receipt the caller cannot tell from a first
+                    # placement.
+                    else "no second order, but the retry came back as "
+                    f"{replayed.get('rejection') or 'a fresh receipt'} rather "
+                    "than the stored receipt marked replayed"
+                ),
+            )
+        )
+
+        rejected = _call(
+            "CALL CHIP_CHAT.ACCOUNTS.place_order('verify-key-2', "
+            f"{store}, 'IN_STORE', PARSE_JSON('"
+            + json.dumps([{"item_id": "CMG-NOT-A-REAL-SKU", "qty": 1}])
+            + "'));"
+        )
+        checks.append(
+            Check(
+                "#46",
+                "an item id the catalogue does not carry is rejected",
+                passed=rejected.get("rejection") == "ITEM_NOT_ORDERABLE",
+                detail=(
+                    "ITEM_NOT_ORDERABLE. #46 asks for this at the database rather "
+                    "than at the matcher, and this is where it is"
+                    if rejected.get("rejection") == "ITEM_NOT_ORDERABLE"
+                    else f"answered {rejected.get('rejection') or 'ok'} instead. A "
+                    "fabricated SKU reached the write path"
+                ),
+            )
+        )
+
+        _, _, before = _writer_state()
+        # The balance the forced-failure check below compares against. Set here
+        # so that every branch of the redemption check leaves it defined: a
+        # refused redemption must not have moved it, and the two branches that
+        # cannot ask the question do not move it either.
+        after = before
+        costliest = snow.query(
+            f"{_preamble(account.ADMIN_ROLE, account.SERVING_WAREHOUSE)}\n"
+            "SELECT reward_id AS ID, point_cost AS COST FROM "
+            f"{account.table('CATALOGUE', 'rewards')} ORDER BY point_cost DESC "
+            "LIMIT 1;"
+        )[-1]
+        if not costliest:
+            checks.append(
+                Check(
+                    "#46",
+                    "a redemption over the balance is refused",
+                    passed=False,
+                    detail=(
+                        "CATALOGUE.rewards is empty, so there is no reward to "
+                        "try to overspend on"
+                    ),
+                )
+            )
+        elif int(costliest[0]["COST"]) <= before:
+            # The vacuity guard. A balance that covers the reward turns this
+            # into a check that redemption works, which passes and proves
+            # nothing -- and reads identically in the report.
+            checks.append(
+                Check(
+                    "#46",
+                    "a redemption over the balance is refused",
+                    passed=False,
+                    detail=(
+                        f"the seeded balance of {before} covers the costliest "
+                        f"published reward ({costliest[0]['COST']}), so this "
+                        "check could not ask the question. Lower "
+                        "WRITER_SEED_POINTS"
+                    ),
+                )
+            )
+        else:
+            reward_id = costliest[0]["ID"]
+            overspent = _call(
+                "CALL CHIP_CHAT.ACCOUNTS.redeem_points("
+                f"'verify-key-3', '{reward_id}', NULL);"
+            )
+            _, _, after = _writer_state()
+            expected = "INSUFFICIENT_POINTS"
+            refused = overspent.get("rejection") == expected and after == before
+            checks.append(
+                Check(
+                    "#46",
+                    "a redemption over the balance is refused, with the balance "
+                    "unchanged",
+                    passed=refused,
+                    detail=(
+                        f"short by {overspent.get('points_short')}, balance still {after}"
+                        if refused
+                        else f"answered {overspent.get('rejection') or 'ok'} and "
+                        f"the balance moved from {before} to {after}"
+                    ),
+                )
+            )
+
+        partial = _call(
+            f"CALL CHIP_CHAT.ACCOUNTS.place_order('verify-key-4', {store}, 'IN_STORE', "
+            f"PARSE_JSON('{lines}'));",
+            role=WRITER_ROLE,
+        )
+        orders_now, keys_now, balance_now = _writer_state()
+        checks.append(
+            Check(
+                "#46",
+                "a forced mid-procedure failure leaves no partial state",
+                passed=(
+                    partial.get("rejection") == "WRITE_FAILED"
+                    and partial.get("rolled_back") is True
+                    and orders_now == orders_after
+                    and balance_now == after
+                ),
+                detail=(
+                    "the order, its lines, its accrual and its claimed retry key "
+                    "all rolled back together"
+                    if partial.get("rejection") == "WRITE_FAILED"
+                    and orders_now == orders_after
+                    else f"answered {partial.get('rejection') or 'ok'}; "
+                    f"{orders_now - orders_after} orders and "
+                    f"{balance_now - after} points survive"
+                ),
+            )
+        )
+        # The retry key of a failed call has to be spendable again, or a visitor
+        # whose first attempt failed can never place that order at all.
+        retried = _call(
+            f"CALL CHIP_CHAT.ACCOUNTS.place_order('verify-key-4', {store}, 'IN_STORE', "
+            f"PARSE_JSON('{lines}'));"
+        )
+        checks.append(
+            Check(
+                "#46",
+                "the retry key of a failed call is spendable again",
+                passed=retried.get("ok") is True and retried.get("replayed") is None,
+                detail=(
+                    f"placed {retried.get('order_id')} on the second attempt"
+                    if retried.get("ok")
+                    else f"answered {retried.get('rejection')}. A failure that "
+                    "burns the key leaves the visitor unable to place the order"
+                ),
+            )
+        )
+        _, keys_now, _ = _writer_state()
+        checks.append(
+            Check(
+                "#46",
+                "every spent retry key carries the receipt it returned",
+                passed=keys_now >= 2,
+                detail=f"{keys_now} keys spent, each with its receipt stored whole",
+            )
+        )
+    finally:
+        _drop_writer()
+    return checks
+
+
+def _build_writer() -> None:
+    """Create the throwaway visitor, its opening balance, and the narrowed role.
+
+    The role holds INSERT on `orders`, `order_items` and `action_receipts` and
+    NOT on `loyalty_ledger`, which is what makes place_order fail on its third
+    write rather than its first. It is granted to the connection's own user
+    because there is no service credential in a developer's environment; the
+    procedures are the thing under test, not the service user.
+
+    Raises:
+        snow.SnowError: If the fixture cannot be built.
+    """
+    user = _current_user()
+    accounts = account.schema("ACCOUNTS")
+    result = snow.run_statements(
+        f"USE ROLE {account.ADMIN_ROLE};\n"
+        f"USE WAREHOUSE {account.SERVING_WAREHOUSE};\n"
+        # The DELETE below is a cross-visitor write and the policy governs which
+        # rows it can see, so without this it silently removes nothing and a
+        # leftover row from a killed run survives every future build.
+        f"SET {schema.MAINTENANCE_VARIABLE} = 'building the write-path fixture';\n"
+        f"DELETE FROM {account.table('ACCOUNTS', 'demo_visitors')}"
+        f"  WHERE demo_id = '{WRITER}';\n"
+        f"INSERT INTO {account.table('ACCOUNTS', 'demo_visitors')}"
+        "  (demo_id, persona_id, created_at)\n"
+        f"SELECT '{WRITER}', 'verify-persona', SYSDATE();\n"
+        f"INSERT INTO {account.table('ACCOUNTS', 'loyalty_ledger')}"
+        "  (entry_id, demo_id, delta, reason, created_at)\n"
+        f"SELECT 'loy-verify-open', '{WRITER}', {WRITER_SEED_POINTS},"
+        "  'SIGNUP_BONUS', SYSDATE();\n"
+        f"USE ROLE ACCOUNTADMIN;\n"
+        f"CREATE OR REPLACE ROLE {WRITER_ROLE};\n"
+        f"GRANT USAGE ON WAREHOUSE {account.SERVING_WAREHOUSE} TO ROLE {WRITER_ROLE};\n"
+        f'GRANT ROLE {WRITER_ROLE} TO USER "{user}";\n'
+        f"USE ROLE {account.ADMIN_ROLE};\n"
+        f"GRANT USAGE ON DATABASE {account.DATABASE} TO ROLE {WRITER_ROLE};\n"
+        f"GRANT USAGE ON SCHEMA {account.schema('CATALOGUE')} TO ROLE {WRITER_ROLE};\n"
+        f"GRANT USAGE ON SCHEMA {accounts} TO ROLE {WRITER_ROLE};\n"
+        f"GRANT SELECT ON ALL TABLES IN SCHEMA {account.schema('CATALOGUE')}"
+        f"  TO ROLE {WRITER_ROLE};\n"
+        f"GRANT SELECT ON ALL TABLES IN SCHEMA {accounts} TO ROLE {WRITER_ROLE};\n"
+        f"GRANT INSERT, UPDATE ON TABLE {account.table('ACCOUNTS', 'orders')}"
+        f"  TO ROLE {WRITER_ROLE};\n"
+        f"GRANT INSERT ON TABLE {account.table('ACCOUNTS', 'order_items')}"
+        f"  TO ROLE {WRITER_ROLE};\n"
+        f"GRANT INSERT, UPDATE ON TABLE"
+        f"  {account.table('ACCOUNTS', 'action_receipts')} TO ROLE {WRITER_ROLE};\n"
+        f"GRANT USAGE ON ALL SEQUENCES IN SCHEMA {accounts} TO ROLE {WRITER_ROLE};\n"
+        f"GRANT USAGE ON ALL PROCEDURES IN SCHEMA {accounts} TO ROLE {WRITER_ROLE};"
+    )
+    if not result.ok:
+        raise snow.SnowError("could not build the #46 fixture", result.output)
+
+
+def _drop_writer() -> None:
+    """Delete every row carrying WRITER, and the narrowed role.
+
+    In the reverse of the order it was written, so that a partial failure leaves
+    the smaller mess. Nothing here is conditional: a run that failed half way is
+    exactly the run whose rows most need removing.
+    """
+    snow.run_statements(
+        f"USE ROLE {account.ADMIN_ROLE};\n"
+        f"USE WAREHOUSE {account.SERVING_WAREHOUSE};\n"
+        # Every DELETE here is a cross-visitor one -- this session bound nobody
+        # -- so without the maintenance variable the policy hides the rows and
+        # the cleanup removes nothing while reporting success.
+        f"SET {schema.MAINTENANCE_VARIABLE} = 'removing the write-path fixture';\n"
+        f"DELETE FROM {account.table('ACCOUNTS', 'action_receipts')}"
+        f"  WHERE demo_id = '{WRITER}';\n"
+        f"DELETE FROM {account.table('ACCOUNTS', 'order_items')}"
+        f"  WHERE demo_id = '{WRITER}';\n"
+        f"DELETE FROM {account.table('ACCOUNTS', 'orders')}"
+        f"  WHERE demo_id = '{WRITER}';\n"
+        f"DELETE FROM {account.table('ACCOUNTS', 'loyalty_ledger')}"
+        f"  WHERE demo_id = '{WRITER}';\n"
+        f"DELETE FROM {account.table('ACCOUNTS', 'demo_visitors')}"
+        f"  WHERE demo_id = '{WRITER}';"
+    )
+    snow.run_statements(f"USE ROLE ACCOUNTADMIN;\nDROP ROLE IF EXISTS {WRITER_ROLE};")
+
+
+# ---------------------------------------------------------------------------
 # The fixture, and the run
 # ---------------------------------------------------------------------------
 
@@ -1882,6 +2404,11 @@ def run(*, watch_suspend: bool = True) -> list[Check]:
     checks += _check_the_roster_inversion()
     checks += _check_the_serving_joins_answer()
     checks += _check_semantic_view()
+    # Before #43's fixture and before #41's, for the same reason #42's checks
+    # run first: this one writes real rows under its own demo_id, and a probe
+    # table sitting in ACCOUNTS while it does would be one more visitor-scoped
+    # table for it to trip over.
+    checks += _check_write_procedures()
     _build_isolation_fixture()
     try:
         checks += _check_isolation()

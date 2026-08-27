@@ -1,4 +1,9 @@
--- The synthetic half. Six tables, every one of them about a visitor.
+-- The synthetic half. Seven tables, every one of them about a visitor.
+--
+-- Six are RFC-001 §04's and are #42's. `action_receipts` arrived with #46,
+-- which cannot make a write idempotent without somewhere durable to remember
+-- that a retry key has been spent; its own header argues it, and
+-- `chip_chat.snowflake.schema` carries the argument per column.
 --
 -- The rule this file exists to make structural: EVERY VISITOR-SCOPED TABLE
 -- CARRIES demo_id. Not as a convention -- demo_id is the column #43's row
@@ -106,7 +111,7 @@ CREATE OR ALTER TABLE demo_visitors (
     home_store_override NUMBER(10,0)
         COMMENT 'A store the visitor has said they prefer, as a stores.store_id, or null. EDITABLE. Changes where the NEXT order would be priced, not where past orders happened -- so it may legitimately disagree with customer_360.favourite_store, and the serving layer says so out loud rather than reconciling silently.',
     stated_preferences VARCHAR
-        COMMENT 'Free text the visitor has typed about what they like. EDITABLE. Applied as a filter at serving time and never as a mart input. About preference, never about allergy: an allergen answer comes from the published chart with a citation.',
+        COMMENT 'What the visitor has said they like, as a JSON array of {modifier_item_id, stance} written by update_preferences -- NOT free text, and that is the real product''s own argument rather than ours. Asked whether special instructions can be added to an app order Chipotle answers "Unfortunately, there isn''t", because comment boxes caused confusion, and points the customer at modifying ingredients instead. So a preference names a published modifier the grammar can act on or it is not stored. Five stances: always, never, light, extra, side. EDITABLE. Applied as a filter at serving time and never as a mart input. About preference, never about allergy: an allergen answer comes from the published chart with a citation.',
     created_at TIMESTAMP_NTZ NOT NULL
         COMMENT 'When this customer''s history begins, UTC.',
     last_seen TIMESTAMP_NTZ
@@ -181,7 +186,7 @@ CREATE OR ALTER TABLE orders (
     placed_at TIMESTAMP_NTZ NOT NULL
         COMMENT 'When, UTC, inside that restaurant''s published opening hours.',
     status VARCHAR NOT NULL
-        COMMENT 'The order''s outcome. Every mart counts only settled statuses, so a cancelled order is a row that exists and is not spend.',
+        COMMENT 'The order''s outcome: COMPLETED, CANCELLED or REFUNDED in generated history, and PENDING for an order a visitor has just placed through place_order, which is the demo''s own pre-handoff state and the only state cancel_order will act on. Every mart counts only settled statuses, so neither a pending nor a cancelled order is spend.',
     total NUMBER(10,2) NOT NULL
         COMMENT 'The sum of every line, in US dollars. Re-derivable from order_items: qty times unit_price plus every modifier''s own published price.',
     channel VARCHAR NOT NULL
@@ -232,7 +237,7 @@ CREATE OR ALTER TABLE loyalty_ledger (
     delta NUMBER(10,0) NOT NULL
         COMMENT 'Signed points. Positive earns, negative redeems or expires. A balance is the sum of this column, never a stored number -- which is what makes the ledger the system of record for redeem-points.',
     reason VARCHAR NOT NULL
-        COMMENT 'What moved the points: an earn on an order, a redemption, an expiry, or an opening balance. Every rate and every reward price behind these is read off Chipotle''s published terms rather than chosen here.',
+        COMMENT 'What moved the points: ORDER for an earn, REWARD_REDEEMED for a redemption, SIGNUP_BONUS for an opening balance, an expiry, and ORDER_CANCELLED for the reversal cancel_order appends. The reversal is a new negative row rather than an edit to the earn, so the ledger stays append-only and #27''s reconciliation still works; the terms are what make it publishable at all, reserving Chipotle''s right to deduct the points from a purchase that is later voided or cancelled. Every rate and every reward price behind these is read off Chipotle''s published terms rather than chosen here.',
     order_id VARCHAR
         COMMENT 'The order the movement happened on, or null for an opening balance and for an expiry -- the two movements that reference neither an order nor a reward.',
     reward_name VARCHAR
@@ -244,3 +249,85 @@ CREATE OR ALTER TABLE loyalty_ledger (
     CONSTRAINT fk_loyalty_ledger_order FOREIGN KEY (order_id) REFERENCES orders (order_id)
 )
 COMMENT = 'Every movement of loyalty points, and what moved them. Visitor-scoped. Read-only to visitors: a visitor who can mint points makes the whole action lane a toy, and this is the table redeem-points is checked against.';
+
+-- --------------------------------------------------------------------------
+-- action_receipts -- the retry-key store, and the only reason a network
+-- timeout does not place two orders.
+--
+-- Issue #46's second acceptance criterion is "double-submitting the same retry
+-- key produces one order", and that is not a property a procedure can have on
+-- its own: it needs somewhere durable to remember that a key has been spent.
+-- It is here rather than in the ops API for the same reason the procedures are
+-- here at all -- the invariant lives next to the data, so it survives a retry
+-- that arrives at a different replica of the API, or at a replica that has
+-- just restarted.
+--
+-- HOW IT SERIALISES, which is the part worth reading. The claim is a MERGE, not
+-- a SELECT-then-INSERT. Snowflake's INSERT does not conflict with a concurrent
+-- INSERT and its SELECT takes no lock, so read-then-write is a check-then-act
+-- race: two retries of one order both look, both find nothing, and both write.
+-- A MERGE takes a lock on the target table for the rest of the transaction, so
+-- the second transaction waits, and then sees the row the first one committed.
+-- The declared PRIMARY KEY is metadata here as everywhere else in this database
+-- and enforces nothing.
+--
+-- THE CLAIM IS INSIDE THE PROCEDURE'S TRANSACTION, which is what makes a
+-- failure release the key rather than burn it. A call that rejects or throws
+-- rolls back the claim with everything else, so the visitor can press the
+-- button again. A call that commits leaves the receipt, and every later call
+-- with that key replays it verbatim instead of writing anything.
+--
+-- Visitor-scoped, and the key is (demo_id, retry_key) rather than retry_key
+-- alone: a key is a fact about one visitor's attempt, and a global key space
+-- would let one visitor's retry collide with another's -- a cross-visitor
+-- effect in the one table added specifically to make writes safe.
+-- --------------------------------------------------------------------------
+
+CREATE OR ALTER TABLE action_receipts (
+    demo_id VARCHAR NOT NULL
+        COMMENT 'Whose attempt it was. First of the key, and what #43''s row access policy compares against: a retry key presented by another visitor is not found, which is the same answer an unused key gets.',
+    retry_key VARCHAR NOT NULL
+        COMMENT 'The idempotency key the ops API minted for one confirmed action. Opaque here -- this table never parses it. Presented again, it returns the stored receipt and writes nothing, which is what makes a retried network call safe rather than merely unlikely to be repeated.',
+    action VARCHAR NOT NULL
+        COMMENT 'Which procedure spent the key: PLACE_ORDER, CANCEL_ORDER, REDEEM_POINTS or UPDATE_PREFERENCES. A key is spent against one action, so a replay that reaches a different procedure is a rejection rather than a receipt for something the visitor did not ask for.',
+    subject_id VARCHAR
+        COMMENT 'What the call wrote, as an identifier: an orders.order_id, a rewards.reward_id, or null for update_preferences, which changes columns on a row that already existed. Lets a reviewer walk from a spent key to the row it made without opening the receipt.',
+    receipt VARIANT NOT NULL
+        COMMENT 'The receipt the first call returned, stored whole and replayed verbatim on every retry. Whole rather than re-derived: a receipt re-computed on replay would quote today''s prices for an order placed yesterday, and a receipt the visitor was shown is a record of what they were told.',
+    created_at TIMESTAMP_NTZ NOT NULL
+        COMMENT 'When the key was spent, UTC. What the nightly reset (#47) ages a row out on, and the timestamp that says a replay is a replay.',
+    CONSTRAINT pk_action_receipts PRIMARY KEY (demo_id, retry_key)
+)
+COMMENT = 'One row per write action a visitor has actually completed, keyed by the retry key that completed it. Visitor-scoped. This table is what makes the four procedures idempotent: they claim the key with a MERGE inside their own transaction, so a retry either waits and replays the stored receipt or -- if the first attempt failed -- finds the claim rolled back and is free to try again. Nothing here is derived from anything; losing it would not lose an order, it would lose the knowledge that an order had already been placed.';
+
+-- --------------------------------------------------------------------------
+-- The two sequences #46's procedures mint identifiers from.
+--
+-- WHY A SEQUENCE AND NOT A MAX(). The obvious way to number a new order is to
+-- read the largest order_id and add one, and it is wrong twice over here.
+-- Under #43's row access policies that MAX() sees only the CALLING VISITOR'S
+-- orders, so every visitor would mint the same identifiers; and read-then-write
+-- is a race even without a policy. A sequence is outside the policy, outside
+-- the transaction, and monotonic by construction.
+--
+-- WHY THE BAND STARTS AT NINE MILLION. Generated history is spelled ord-0000001
+-- upward and is at most a few tens of thousands of rows, so nothing generated
+-- can reach ord-9000001. That gap is not decoration: an identifier at or above
+-- the band is an order a visitor placed live in the demo, which is a thing a
+-- reviewer reading the table wants to be able to tell without a join. The same
+-- applies to loy-9000001 and the ledger.
+--
+-- IF NOT EXISTS, never CREATE OR REPLACE. Replacing a sequence resets it, and a
+-- reset sequence re-mints identifiers that are already on rows -- the one way
+-- an apply of this file could corrupt data rather than converge it.
+-- --------------------------------------------------------------------------
+
+CREATE SEQUENCE IF NOT EXISTS live_order_seq
+    START = 9000001
+    INCREMENT = 1
+    COMMENT = 'Numbers the orders visitors place live, as ord-9000001 upward. Nine million is above anything data-gen produces, so an order_id in this band is one the demo wrote rather than one it was seeded with.';
+
+CREATE SEQUENCE IF NOT EXISTS live_ledger_seq
+    START = 9000001
+    INCREMENT = 1
+    COMMENT = 'Numbers the loyalty_ledger entries the write procedures append, as loy-9000001 upward. Same band and same argument as live_order_seq: an accrual, a reversal and a redemption written live are distinguishable from eighteen months of generated ledger by their identifier alone.';

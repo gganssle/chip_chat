@@ -1,4 +1,12 @@
--- The real half. Four tables, harvested from Chipotle's published pages.
+-- The real half. Six tables, harvested from Chipotle's published pages.
+--
+-- Four of them are RFC-001 §04's and are #42's. `rewards` and `rewards_terms`
+-- arrived with #46, which cannot write redeem_points without a published
+-- catalogue to validate a reward against, nor place_order without a published
+-- earn rate to accrue at. Their headers argue them where they appear, and
+-- `chip_chat.snowflake.schema` carries the same argument per column, because
+-- a table beyond §04 is exactly the kind of growth this package makes a test
+-- ask about rather than a reviewer.
 --
 -- RFC-001 §04 fixes this schema and issue #42 says to match it exactly, so the
 -- columns below are §04's columns and the two additions are argued where they
@@ -156,3 +164,95 @@ CREATE OR ALTER TABLE stores (
     CONSTRAINT pk_stores PRIMARY KEY (store_id)
 )
 COMMENT = 'The restaurants in the demo, harvested from the published locator. Thirty of them by default. A store is where an order was placed and where a price was quoted; personas.home_store and demo_visitors.home_store_override both point here.';
+
+-- --------------------------------------------------------------------------
+-- rewards -- the published Rewards Exchange, and the one identifier in this
+-- schema that Chipotle does not publish.
+--
+-- #46's redeem_points cannot be written without this table: its first rule is
+-- that the reward still exists in the catalogue at the moment of redeeming,
+-- and its third is that the cost is re-read here rather than taken off the card
+-- the visitor was shown. Both are the rewards terms' own requirements, quoted
+-- in docs/action-surface.md §2.2 -- redemption is "subject to availability" at
+-- redemption time, and Chipotle reserves the right to change what a reward
+-- costs at any time.
+--
+-- reward_id IS OURS AND IS THE ONLY INVENTED COLUMN IN CATALOGUE. The published
+-- tiles carry a name, a point cost and a picture, and no identifier at all;
+-- #21 refused to invent one at harvest time, correctly. V0 mints a stable slug
+-- per published reward, keyed to name and position, and
+-- docs/action-surface.md §10 row 2 records it. Nothing here maps a reward to a
+-- menu item -- that is cc-b5a's question and the published record may not
+-- answer it at all, so this table deliberately has no item_id column to fill in
+-- wrongly.
+-- --------------------------------------------------------------------------
+
+CREATE OR ALTER TABLE rewards (
+    reward_id VARCHAR NOT NULL
+        COMMENT 'A stable slug per published reward, e.g. side-tortilla or entree-and-chips. INVENTED: the published catalogue carries no identifier, and redeem_points has to name a reward somehow. Keyed to the published name and position so that re-harvesting the same line-up mints the same ids. docs/action-surface.md §7.3 and §10 row 2.',
+    position NUMBER(10,0) NOT NULL
+        COMMENT 'Where the reward falls in the published line-up, from zero. Published order is the only ordering the page gives, and it is half of what reward_id is keyed to, so a reward that moves is a reward whose id has to be re-derived rather than assumed.',
+    name VARCHAR NOT NULL
+        COMMENT 'The reward as published, verbatim, e.g. ENTREE AND CHIPS. The mixed casing on the page is kept: a receipt quotes the reward the visitor was offered, and normalising it here is an edit to a published string.',
+    point_cost NUMBER(10,0) NOT NULL
+        COMMENT 'What it costs in points, as published. Re-read at redemption rather than taken from the confirmation card -- the terms let Chipotle change it at any time, so a cost read a minute ago is a quote and not a guarantee, and redeem_points rejects a call priced against a stale one.',
+    image_path VARCHAR
+        COMMENT 'The picture published beside the reward, verbatim, or null. Deliberately NOT resolved into an item_id: half the tiles are marketing art, and the slug behind SIDE TORTILLA points at a $0.00 modifier item rather than the $0.50 side of the same name. cc-b5a decides whether the join can be made at all.',
+    source_url VARCHAR NOT NULL
+        COMMENT 'The page the reward was read from. Half of a citation; harvested_at is the other half.',
+    harvested_at TIMESTAMP_NTZ NOT NULL
+        COMMENT 'When that page was fetched, UTC. A point cost quoted without it is a number with no date on it, and a receipt that cannot date its own price is one RFC-001 §08 does not accept.',
+    CONSTRAINT pk_rewards PRIMARY KEY (reward_id)
+)
+COMMENT = 'The eight rewards Chipotle publishes on its rewards page, with what each costs in points. Real and harvested, except reward_id, which is ours and says so. This is the catalogue redeem_points validates against -- a reward that has left the page since the visitor last looked is a rejection, which is what the terms require of a redemption. It maps to no menu item on purpose: what an ENTREE entitles you to is not published.';
+
+-- --------------------------------------------------------------------------
+-- rewards_terms -- the published numbers the ledger is arithmetic over.
+--
+-- THIS TABLE EXISTS SO THAT NO PROCEDURE HAS TO GUESS A RATE. place_order
+-- accrues points at points_per_dollar, and there is no defensible way for a
+-- stored procedure to hold that number as a literal: data-gen deliberately
+-- took the earn rate out of its own configuration file and reads it off the
+-- harvested terms instead, so a serving layer with 10 typed into a procedure
+-- would be a second, silent opinion about a published figure. If the rate is
+-- not loaded, place_order rejects rather than accruing at a number nobody
+-- published -- an order whose points came from an invented rate is a wrong
+-- balance forever, and the ledger is the system of record for redeem_points.
+--
+-- The rules are the ones data-gen already parses with citations
+-- (data-gen/src/chip_chat/data_gen/rewards.py), plus the reward expiry:
+--
+--   points_per_dollar             10, "you will earn 10 points per $1 spent"
+--   inactivity_expiry_days        365, "points expire after 365 days of
+--                                 account inactivity"
+--   daily_qualifying_purchases    3, "limited to three qualifying purchases
+--                                 per day" -- place_order accrues nothing on
+--                                 the fourth order of a day, which is what the
+--                                 programme does rather than a refusal
+--   reward_expiry_days            60, how long a redeemed reward lives on the
+--                                 account. Quoted in docs/action-surface.md
+--                                 §2.2 and asserted in the agent surface's
+--                                 REDEMPTION_FINALITY; nothing harvests it as
+--                                 a number yet, so redeem_points returns a
+--                                 null expiry and says so rather than dating a
+--                                 reward from a constant.
+--
+-- Deliberately not one column per rule. A rule is a row so that a term Chipotle
+-- adds is a row rather than a migration, and so that every one of them carries
+-- its own source_url and harvested_at -- these are published figures, and a
+-- published figure without a citation is this repository's definition of a
+-- number nobody can check.
+-- --------------------------------------------------------------------------
+
+CREATE OR ALTER TABLE rewards_terms (
+    rule VARCHAR NOT NULL
+        COMMENT 'Which published rule this row states: points_per_dollar, inactivity_expiry_days, daily_qualifying_purchases or reward_expiry_days. The same spellings data-gen''s rewards.py uses, so the generated ledger and the live procedures are arithmetic over one vocabulary rather than two.',
+    value NUMBER(10,0) NOT NULL
+        COMMENT 'The number the terms state. Read off the published document, never chosen here -- place_order multiplies an order total by points_per_dollar and rejects the whole order if this row is missing, because a balance accrued at a guessed rate cannot be un-guessed later.',
+    source_url VARCHAR NOT NULL
+        COMMENT 'The document the rule was read from -- the rewards terms or the FAQ. The page a visitor can be shown when they ask why they earned what they earned.',
+    harvested_at TIMESTAMP_NTZ NOT NULL
+        COMMENT 'When that document was fetched, UTC. A rate can change; a receipt says which harvest priced it.',
+    CONSTRAINT pk_rewards_terms PRIMARY KEY (rule)
+)
+COMMENT = 'Chipotle''s published rewards arithmetic, one row per rule, each with the document it was read from. The table place_order reads its earn rate out of and refuses to proceed without. Four rows when fully loaded and fewer while the publish that fills it is still open -- an absent rule is a named rejection rather than a default, because every number here is one somebody published and none of them is one this repository may invent.';

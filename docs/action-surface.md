@@ -634,6 +634,22 @@ toppings table would make most of this document unenforceable.
 one procedure per write tool, each rejecting rather than repairing, each returning a typed
 rejection code from the lists above.
 
+> **Landed, and where it lands short.** `snowflake/sql/12_procedures.sql` and
+> `snowflake/sql/13_cancel_order.sql`, all four `EXECUTE AS CALLER`, none of them taking a
+> visitor identifier, each idempotent on a retry key. §7.1's rules 1, 2, 3, 4 and 7 and the
+> pricing are enforced at the database, which is what #46 asks for by name. Rules **6, 8 and
+> 9** — required slots, per-pair portions, the six caps — and §7.4's rule 4 are **not**, and
+> cannot be: the serving projection of the catalogue carries none of the columns they are
+> about (`CHIP_CHAT.CATALOGUE.modifiers` is five columns and there is no `portion_options`
+> table). They are enforced at proposal time in `api/drafts.py` against `chip_chat.catalog`,
+> which does carry them. Rules 11 and 12 are the ops API's by design. The gap is recorded as
+> data in `chip_chat.snowflake.procedures.ENFORCED_ELSEWHERE` and tracked as a bead.
+>
+> `cancel_order` is in a file of its own, so that the exit §10 row 1 records stays a
+> deletion: three deletions, one `DROP PROCEDURE`, and no migration. Its receipt carries both
+> published sentences — that Chipotle cannot normally cancel a submitted order, and that the
+> real delivery path is Customer Service and possibly a cancelation fee.
+
 **[#27](https://github.com/gganssle/chip_chat/issues/27) loyalty ledger** gains two writers
 from this document: `redeem_points` (negative delta, reason names the reward) and
 `cancel_order` (negative delta reversing an order's earnings, per the terms). Both append.

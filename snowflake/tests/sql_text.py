@@ -16,12 +16,33 @@ it.
 Apostrophes inside a SQL string are doubled, and a doubled quote is two
 consecutive quote characters rather than an escape, so a state machine that
 simply flips on every quote gets it right without a special case.
+
+``$$`` is the second thing the machine has to know about, and #46 is why. A
+stored procedure body is dollar-quoted and is full of semicolons -- it is a
+program -- so a splitter that only understands ``'`` turns one
+``CREATE PROCEDURE`` into forty fragments, and every assertion about a
+procedure becomes an assertion about a fragment of one. Snowflake's own client
+splits the same way, which is what makes ``snow sql --filename`` able to run
+these files at all; this mirrors that rather than inventing a second rule.
 """
 
 import re
 from dataclasses import dataclass
 
-__all__ = ["Declared", "declared_tables", "flat", "privileges", "statements"]
+__all__ = [
+    "Declared",
+    "DeclaredProcedure",
+    "SemanticElement",
+    "SemanticTable",
+    "SemanticVerifiedQuery",
+    "SemanticView",
+    "declared_procedures",
+    "declared_tables",
+    "flat",
+    "privileges",
+    "semantic_view",
+    "statements",
+]
 
 
 def statements(source: str) -> list[str]:
@@ -38,14 +59,24 @@ def statements(source: str) -> list[str]:
     found: list[str] = []
     current: list[str] = []
     in_string = False
-    for character in uncommented:
-        if character == "'":
+    in_dollars = False
+    index = 0
+    while index < len(uncommented):
+        character = uncommented[index]
+        if not in_string and uncommented[index : index + 2] == "$$":
+            in_dollars = not in_dollars
+            current.append("$$")
+            index += 2
+            continue
+        if character == "'" and not in_dollars:
             in_string = not in_string
-        if character == ";" and not in_string:
+        if character == ";" and not in_string and not in_dollars:
             found.append("".join(current))
             current = []
+            index += 1
             continue
         current.append(character)
+        index += 1
     found.append("".join(current))
     return [
         re.sub(r"\s+", " ", statement).strip() for statement in found if statement.strip()
@@ -458,3 +489,64 @@ def semantic_view(source: str) -> SemanticView:
         question_categorization=_string_after(outer, "AI_QUESTION_CATEGORIZATION"),
         copy_grants="COPY GRANTS" in outer,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class DeclaredProcedure:
+    """One ``CREATE OR REPLACE PROCEDURE`` as #46's DDL wrote it.
+
+    Read off the raw file rather than off :func:`statements`, which strips
+    whole-line ``--`` comments -- and a procedure body's comments are inside the
+    thing under test rather than above it.
+
+    Attributes:
+        name: The procedure name, as written.
+        arguments: ``(name, type)`` per argument, in declaration order.
+        returns: The declared return type.
+        comment: The text of its ``COMMENT =``.
+        rights: ``CALLER`` or ``OWNER`` -- what ``EXECUTE AS`` says, and
+            ``OWNER`` when the clause is absent, because that is Snowflake's
+            default and the default is the dangerous one here.
+        body: Everything between the ``$$`` markers.
+    """
+
+    name: str
+    arguments: tuple[tuple[str, str], ...]
+    returns: str
+    comment: str
+    rights: str
+    body: str
+
+
+_PROCEDURE = re.compile(
+    r"CREATE OR REPLACE PROCEDURE (?P<name>\w+)\((?P<arguments>.*?)\)\n"
+    r"RETURNS (?P<returns>\w+)\n"
+    r"LANGUAGE SQL\n"
+    r"COMMENT = '(?P<comment>.*?)'\n"
+    r"(?:EXECUTE AS (?P<rights>\w+)\n)?"
+    r"AS\n\$\$\n(?P<body>.*?)\n\$\$;",
+    re.DOTALL,
+)
+_ARGUMENT = re.compile(r"^\s*(?P<name>\w+) (?P<type>[A-Z_]+(?:\(\d+(?:,\d+)?\))?)$")
+
+
+def declared_procedures(source: str) -> list[DeclaredProcedure]:
+    """Return every procedure one file declares, in the order it declares them."""
+    found: list[DeclaredProcedure] = []
+    for match in _PROCEDURE.finditer(source):
+        arguments: list[tuple[str, str]] = []
+        for part in match.group("arguments").split(","):
+            argument = _ARGUMENT.match(part.strip("\n"))
+            if argument:
+                arguments.append((argument.group("name"), argument.group("type")))
+        found.append(
+            DeclaredProcedure(
+                name=match.group("name"),
+                arguments=tuple(arguments),
+                returns=match.group("returns"),
+                comment=match.group("comment"),
+                rights=(match.group("rights") or "OWNER").upper(),
+                body=match.group("body"),
+            )
+        )
+    return found

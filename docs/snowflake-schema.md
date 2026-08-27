@@ -1,7 +1,12 @@
 # The Snowflake schema
 
-Fourteen tables, two views, and the column the whole isolation argument hangs
-on. Issue [#42](https://github.com/gganssle/chip_chat/issues/42).
+Seventeen tables, two views, four write procedures, and the column the whole
+isolation argument hangs on. Issue
+[#42](https://github.com/gganssle/chip_chat/issues/42) built fourteen of the
+tables and [#46](https://github.com/gganssle/chip_chat/issues/46) added the
+other three along with the procedures — a write path that cannot be written
+without somewhere to keep a published reward catalogue, a published earn rate,
+and the knowledge that a retry key has been spent.
 
 [docs/snowflake-account.md](snowflake-account.md) is the account this lands
 into — the roles, the grants and the two warehouses, built before there was a
@@ -24,6 +29,9 @@ CHIP_CHAT.CATALOGUE          real, harvested, cited
                     is_available · source_url · harvested_at
   modifiers         modifier_id · item_id · modifier_item_id · name · delta_calories
   stores            store_id · name · city · region · hours[]
+  rewards           reward_id · position · name · point_cost · image_path
+                    source_url · harvested_at                          (#46)
+  rewards_terms     rule · value · source_url · harvested_at           (#46)
 
 CHIP_CHAT.ACCOUNTS           synthetic, visitor-scoped
   personas          persona_id · label · home_store · seed_points · narrative
@@ -36,6 +44,8 @@ CHIP_CHAT.ACCOUNTS           synthetic, visitor-scoped
                     modifiers[] · unit_price · line_total
   loyalty_ledger    entry_id · demo_id · delta · reason · order_id
                     reward_name · created_at
+  action_receipts   demo_id · retry_key · action · subject_id
+                    receipt · created_at                               (#46)
 
 CHIP_CHAT.MARTS              published nightly from Databricks (#39)
   customer_360      demo_id · order_count · lifetime_spend · last_order_at
@@ -47,13 +57,29 @@ CHIP_CHAT.MARTS              published nightly from Databricks (#39)
 CHIP_CHAT.ACCOUNTS           the audit, as two views
   visitor_scoped_tables    every table the demo_id rule applies to
   tables_missing_demo_id   the ones that break it. Must be empty
+
+CHIP_CHAT.ACCOUNTS           the write path, as four procedures (#46)
+  place_order · redeem_points · update_preferences   sql/12_procedures.sql
+  cancel_order                                       sql/13_cancel_order.sql
+  live_order_seq · live_ledger_seq   the ord-9000001 and loy-9000001 bands
 ```
 
-Eight of the fourteen carry `demo_id`. `personas` and `item_affinity` are the
+Nine of the seventeen carry `demo_id`. `personas` and `item_affinity` are the
 two tables in ACCOUNTS and MARTS that do not, and both are exempted by name in
-`sql/09_audit.sql` with the reason beside the exemption. The four catalogue
+`sql/09_audit.sql` with the reason beside the exemption. The six catalogue
 tables are exempt wholesale: the catalogue is the real half and has no visitor
 in it at all.
+
+Three of the seventeen are not RFC-001 §04's and arrived with [#46], which could
+not be written without them: `rewards` and `rewards_terms` in CATALOGUE, because
+`redeem_points` validates a redemption against a published catalogue and
+`place_order` accrues at a published rate, and `action_receipts` in ACCOUNTS,
+because idempotency on a retry key needs somewhere durable to remember that a
+key has been spent. Their `Table.rfc` is empty in `schema.py`, which is the loud
+case rather than the quiet one: every single column of such a table has to carry
+its own written argument, because none of them can point at §04.
+
+[#46]: https://github.com/gganssle/chip_chat/issues/46
 
 ## 2. `demo_id` is a schema requirement, and the audit is a query
 
@@ -303,7 +329,7 @@ match that never matches.
 - **No row access policies.** [#43] landed them in `sql/10_policies.sql` and
   they are documented in
   [docs/snowflake-isolation.md](snowflake-isolation.md). Everything here is
-  what that ticket attached to: `demo_id` on all eight visitor-scoped tables,
+  what that ticket attached to: `demo_id` on all nine visitor-scoped tables,
   `NOT NULL` so no row is undecidable, and `visitor_scoped_tables` as the list
   its coverage check reads.
 - **No stored procedures.** [#46]. `USAGE ON FUTURE PROCEDURES IN SCHEMA
