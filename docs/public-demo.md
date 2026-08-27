@@ -237,6 +237,23 @@ else's upload. So the app remembers what it minted, per session, and a chat
 request naming a reference this session did not upload names no photograph at
 all — the same rule as a draft id, for the same reason.
 
+**Moderation runs inside the turn, and the span schema is what made that
+explicit.** The first real upload against the deployed app came back *"I could
+not take that photo in just then"*, and the container's log named the reason:
+`SpanSchemaError: guard.content_safety must be a child of chat.turn, but was
+opened under the trace root`. RFC-001 §09 puts image moderation under the turn
+it happens on, `chip_chat.otel.spans.content_safety` enforces that by raising
+rather than by asking, and the route had opened no turn. So the upload opens the
+turn it is the first half of — which is the design and not a workaround, because
+handing over a photograph *is* a visitor turn. The turn records `(photo upload)`
+as its input rather than a sentence the visitor did not type.
+
+Verified against the live URL on 27 August 2026: a 400×300 JPEG posted to
+`/api/photo` came back in **3.25 s** with
+`{"photo": "uploads/2026-08-27/c13f0629-….jpg", "retention": "Deleted within 48
+hours."}`, and Application Insights shows one `guard.content_safety` span under
+its `chat.turn`.
+
 The photo *lane* is a separate question. `Lanes.photo` is `None` on every
 deployment today, so `match_meal_from_photo` is not offered and the model will
 say it cannot see the picture. That is `cc-mpd`'s work and not this tier's; what
@@ -252,6 +269,8 @@ newline-delimited frames:
 
 ```
 {"type":"open"}
+{"type":"waiting"}
+{"type":"waiting"}
 {"type":"text","text":"Barbacoa is the spicier of the two, though "}
 {"type":"text","text":"mild by most standards."}
 {"type":"card","card":{...},"receipt":false}
@@ -261,11 +280,19 @@ newline-delimited frames:
 Anything else gets one `ChatReply` object, which is what a test, a `curl` and an
 eval harness want. Both are the same turn and the same fields.
 
+**The streamed shape is load-bearing, not cosmetic.** Container Apps ingress
+closes a response that has sent no bytes for sixty seconds, and p95 turn latency
+on this deployment is 62.7 s — so the object shape of this route was losing
+answers the app had already written and the visitor had already been billed for,
+at exactly 60.19 s, ten times out of ten. The `waiting` heartbeat every ten
+seconds is what stops that. Verified live: an 81-second turn arrived complete
+where the same turn had been cut at 60. `docs/deployment.md` §3.12.
+
 **What is streamed and what is not, said plainly.** The transport is real: the
 generator is synchronous, so Starlette iterates it on a worker thread and the
-event loop is never blocked; the header and the `open` frame reach the browser
-before the turn starts; the card is its own frame the moment the turn produces
-one. The **tokens** are not. `chip_chat.agent.model.ChatModel` has exactly one
+event loop is never blocked; the turn itself runs on a thread of its own so the
+generator can keep the response alive; the card is its own frame the moment the
+turn produces one. The **tokens** are not. `chip_chat.agent.model.ChatModel` has exactly one
 method and it returns a finished reply, so the prose is chunked in `_chunks`
 after the turn rather than forwarded from the provider as it arrives.
 

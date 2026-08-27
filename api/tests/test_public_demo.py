@@ -418,12 +418,13 @@ def test_a_slow_turn_keeps_the_response_alive(limits: SpendLimits) -> None:
     with (
         mock.patch.object(app_module, "_run_turn", slow),
         mock.patch.object(app_module, "_HEARTBEAT_SECONDS", 0.05),
-        TestClient(create_app(build(model, limits))) as visitor,visitor.stream(
-        "POST",
-        "/api/chat",
-        json={"message": "something slow"},
-        headers={"Accept": "application/x-ndjson"},
-    ) as response
+        TestClient(create_app(build(model, limits))) as visitor,
+        visitor.stream(
+            "POST",
+            "/api/chat",
+            json={"message": "something slow"},
+            headers={"Accept": "application/x-ndjson"},
+        ) as response,
     ):
         lines = []
         for line in response.iter_lines():
