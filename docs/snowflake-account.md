@@ -202,18 +202,18 @@ put it back, and the run ends `29/30` with the failing check naming
 `make snowflake-cap QUOTA=<credits>`. Section 7 says why the number cannot live
 in a file.
 
-**And since 2026-08-27 it is one thing short of safe, which is a different
-sentence.** A rebuild restores every *object* in this repository and no *rows* at
-all — the population and the catalogue come back from `make snowflake-load` over
-a landing zone, and that landing zone is not in this repository and was not on
-disk when this was checked. Rebuilding today would drop 60 customers, 2,277
-orders and eighteen months of generated history that nothing could regenerate
-identically, and the marts computed against them would be describing a
-population that no longer exists. So the command above was **not** re-run on
+**And it is one thing short of safe, which is a different sentence.** A rebuild
+restores every *object* in this repository and no *rows* at all: the population
+and the catalogue come back from `make snowflake-load` over a landing zone, and
+that landing zone is **not in this repository**. A rebuild run without one in
+hand drops the whole synthetic population and eighteen months of generated
+history, and the gold marts computed against that generation end up describing
+customers who no longer exist — which is not an error, it is four tables of
+plausible numbers about nobody. So the command above was **not** re-run on
 2026-08-27; what was run was `make snowflake-apply`, which is idempotent, which
 created the one table this account was missing, and which is the half of the
-claim that can be exercised without a landing zone in hand. Section 10 says
-where the landing zone has to live before that stops being true.
+claim that can be exercised without a landing zone to hand. Section 10 says
+where the landing zone has to live before that stops being a caveat.
 
 ## 4. What an apply may and may not do
 
@@ -621,14 +621,17 @@ The three options, and why the other two are not it:
 once already.** The rebuild needs the *landing zone the population came from* —
 the harvested catalogue and the generated accounts — because the gold marts were
 computed against that generation and a second generation would restore visitors
-to states that never existed. On 2026-08-27 that directory was gone from disk,
-and the symptom was not an error: `demo_visitor_baseline` had been created by an
-apply after the load, nothing had filled it, and [#47]'s nightly reset would have
-aged nobody out for as long as nobody looked. It was recovered because the live
-`demo_visitors` had never been written to and so was still the loaded generation
-exactly; it will not be recoverable that way twice. `make snowflake-verify` now
-fails on an unfilled baseline by name, under [#47], and **the landing zone
-belongs in durable storage before this trial ends**.
+to states that never existed. On 2026-08-27 no such directory was on disk in
+this checkout, and the symptom was not an error: `demo_visitor_baseline` had
+been created by an apply *after* the load, nothing had filled it, and [#47]'s
+nightly reset would have aged nobody out for as long as nobody looked. It was
+recovered from the live `demo_visitors`, which was faithful only because no
+visitor had ever written through [#46]'s procedures, so the table still held the
+loaded generation exactly. That is luck, and it is not available twice. `make
+snowflake-verify` now fails on an unfilled baseline by name, under [#47], and
+**the landing zone belongs in durable storage before this trial ends** — a
+generated population that exists only in one agent's working directory and in
+one Snowflake account is a population with no copies.
 
 [#39]: https://github.com/gganssle/chip_chat/issues/39
 [#40]: https://github.com/gganssle/chip_chat/issues/40

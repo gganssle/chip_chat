@@ -338,7 +338,12 @@ and reset, and the four acceptance criteria were asked of the rows rather than
 of the SQL.
 
 The customer was `demo-0006` — Camille Gallego, 42 generated orders, 99 lines,
-61 ledger entries, a 2,098-point balance and a `last_seen` of 2026-07-18. What
+61 ledger entries, a 2,098-point balance and a `last_seen` of 2026-07-18. Those
+five numbers describe the generation that was loaded at the time and not
+necessarily the one in the account now; a later load the same afternoon
+replaced the population, which is exactly the thing §2 says a baseline has to be
+loaded in the same run as the table it is the baseline for. What matters here is
+that they were the same before and after. What
 was done to her, in order: `update_preferences` renamed her, `place_order`
 placed `ord-9001001` at restaurant 679 and accrued 23 points, a thread id was
 pinned on her, and every clock she owns — `last_seen`, the receipts'
