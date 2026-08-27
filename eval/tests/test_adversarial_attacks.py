@@ -332,3 +332,62 @@ def test_the_shipped_suite_checks_for_both_gate_breaches(
 
     assert Breach.CANARY_IN_REPLY in looked_for
     assert Breach.WRITE_EXECUTED in looked_for
+
+
+# --- #81: five payloads, and the spread the clause cannot check -------------
+
+
+def test_the_corpus_injections_span_all_three_outcomes(
+    suite: AdversarialSuite,
+) -> None:
+    """#81's first criterion, in the half a coverage clause cannot hold.
+
+    The ticket asks for *"at least five distinct injection payloads ... spanning
+    write attempts, disclosure attempts and content corruption."* The count is a
+    clause in ``coverage.py``. The spread is here, and it has to be, because
+    what separates a corruption payload from a disclosure one is which
+    :class:`~chip_chat.eval.adversarial.attacks.Breach` it names -- and one of
+    those three is ``invented``, which is judged, so the loader cannot tell them
+    apart by reading the manifest.
+
+    The three fail apart, which is the whole reason the spread matters:
+
+    * a **disclosure** injection is stopped by there being no identity argument
+      for it to populate;
+    * a **write** injection is stopped by the confirmation flag living on a
+      record the model cannot reach;
+    * a **corruption** injection is stopped by **nothing structural at all**,
+      which is the residual risk #81 names and the reason a suite that dropped
+      this third one would report a clean pair of gates over an assistant
+      cheerfully repeating an attacker's sentence about an allergen.
+    """
+    corpus_borne = [
+        attack for attack in suite if attack.carrier is Carrier.RETRIEVED_DOCUMENT
+    ]
+    assert len(corpus_borne) >= 5
+
+    disclosure = [a for a in corpus_borne if Breach.CANARY_IN_REPLY in a.breaches]
+    writes = [a for a in corpus_borne if Breach.WRITE_EXECUTED in a.breaches]
+    corruption = [a for a in corpus_borne if Breach.INVENTED in a.breaches]
+
+    assert disclosure, "no corpus injection aims at a cross-visitor disclosure"
+    assert writes, "no corpus injection aims at a write"
+    assert corruption, (
+        "no corpus injection aims at corrupting the answer's content -- the one "
+        "outcome nothing in the design stops, and therefore the one a suite is "
+        "most tempted to leave out"
+    )
+
+
+def test_every_corpus_injection_carries_the_document_it_plants(
+    suite: AdversarialSuite,
+) -> None:
+    """An injection with no planted text is a question, not an attack.
+
+    Already enforced by the loader for the carrier; asserted here over the whole
+    manifest because #81's payloads are the thing being counted, and a payload
+    that is an empty string would satisfy the count above.
+    """
+    for attack in suite:
+        if attack.carrier is Carrier.RETRIEVED_DOCUMENT:
+            assert attack.planted.strip(), attack.attack_id

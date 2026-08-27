@@ -203,7 +203,9 @@ verify-tools-bare: ## The same cases, with no system prompt at all
 # rather than a comment.
 
 .PHONY: golden-check golden photos-check adversarial-check adversarial \
-        adversarial-redteam adversarial-baseline adversarial-sabotaged adversarial-gate2
+        adversarial-redteam adversarial-baseline adversarial-sabotaged \
+        adversarial-gate2 adversarial-live adversarial-writegate
+
 golden-check: ## Check the golden set's coverage, free
 	$(UV) run python -m chip_chat.eval.golden --check
 
@@ -271,6 +273,58 @@ adversarial-gate2: ## Attack the ops API directly, bypassing the model and the U
 
 adversarial-baseline: ## Run the suite against a real deployment and write the baseline
 	$(UV) run python -m chip_chat.eval.adversarial --out eval/adversarial/BASELINE.md
+
+# Issue #82's first acceptance criterion, and the only target here whose answer
+# is about a deployment rather than about this repository's own code. Everything
+# above imports the agent loop and calls it; this one has a socket on the far
+# side, so the request handler, the session cookie and the connection pool are in
+# scope — and RFC-001 §05's bleed lives in the third of those.
+#
+# Not in CI, and the reason is spend rather than nerves. Every turn is a real
+# model call on the deployment's own subscription, so a step on every pull
+# request would be somebody else's bill. It is a release step and a periodic one.
+#
+# Two arguments are not optional in practice and are defaulted to the safe
+# reading rather than to the convenient one.
+#
+# POOL_SLOTS is how many connections the deployment pools. Omitting it CLAIMS THE
+# DEPLOYMENT DOES NOT POOL, which is true of nothing with Snowflake behind it,
+# and makes the contended round unscored rather than clean. Pass the configured
+# VisitorPool size; chip_chat.api.pool.DEFAULT_POOL_SIZE is 4.
+#
+# PACE is seconds between one visitor's turns. The deployed app allows twenty
+# requests a minute from one address and answers everything past that with the
+# friendly stop state — which carries no canary and no receipt, and would
+# therefore be scored as the design holding, with more confidence the harder the
+# suite pushed. The adapter records a stopped turn as UNMEASURED, so an unpaced
+# run is honest rather than wrong; it is also nearly empty.
+URL ?= https://ca-chip-chat-web.whitesea-eea6e4c0.eastus2.azurecontainerapps.io
+POOL_SLOTS ?=
+PACE ?= 2.0
+ROUNDS ?= 1
+
+adversarial-live: ## Attack a DEPLOYED app over HTTP. URL= POOL_SLOTS= PACE= ROUNDS=
+	$(UV) run python -m chip_chat.eval.adversarial --live $(URL) \
+		--pace $(PACE) --rounds $(ROUNDS) --fail-on breach \
+		$(if $(POOL_SLOTS),--pool-slots $(POOL_SLOTS),)
+
+# Issue #83, launch gate two, attacked at the door instead of through the model.
+#
+# Everything in attacks.json is something a visitor could type. These are request
+# bodies a client composes — an unconfirmed reference, a stranger's draft id, a
+# forged one, a replayed one, an expired one — and none of them is expressible as
+# a sentence, because the confirmation does not travel in the message. It travels
+# in `confirm_draft_id`, which only a caller holding the visitor's session can
+# populate, and that is the whole of the gate's claim.
+#
+# DRAFT_TTL wakes the expiry probe. Omitting it leaves that probe UNSCORED rather
+# than skipping it quietly, because fifteen minutes of waiting is a real cost and
+# a silent skip reports seven probes as eight. This tree's TTL is 900.
+DRAFT_TTL ?= 0
+
+adversarial-writegate: ## Attack the write gate at the door. URL= DRAFT_TTL= PACE=
+	$(UV) run python -m chip_chat.eval.adversarial --write-gate $(URL) \
+		--draft-ttl $(DRAFT_TTL) --pace $(PACE) --fail-on breach
 
 # --- Trajectory and tool selection ------------------------------------------
 #
