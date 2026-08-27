@@ -221,9 +221,19 @@ resource "databricks_registered_model" "recommender" {
 #                        `databricks_catalog.tf` grants it and argues for it.
 #   CREATE_MODEL_VERSION on the model, which is the one this file owes.
 #
-# Neither is implied by the other and neither is implied by MODIFY. The
-# read-only principal gets EXECUTE alone, so a reviewer can load a version and
-# reproduce a recommendation without being able to add one.
+# And **moving the alias needs a third**: MANAGE on the model. Unity Catalog has
+# no narrower privilege for setting an alias, which is a real widening and is
+# worth naming rather than absorbing — MANAGE on a securable also carries the
+# right to grant on it, so the jobs principal can hand out privileges on this
+# model. It cannot do so anywhere else in the catalog, and the alternative was
+# to make it the model's *owner*, which is strictly more. `local.uc_owner` stays
+# the owner, and Terraform stays the thing that creates and grants.
+#
+# Three privileges, on two securables, and none of them implied by another or by
+# MODIFY. Each of the three cost one live run to discover, which is the argument
+# for writing them down here rather than leaving the next reader to find out the
+# same way. The read-only principal gets EXECUTE alone, so a reviewer can load a
+# version and reproduce a recommendation without being able to add one.
 resource "databricks_grants" "recommender_model" {
   count = var.databricks_unity_catalog_enabled ? 1 : 0
 
@@ -231,7 +241,7 @@ resource "databricks_grants" "recommender_model" {
 
   grant {
     principal  = databricks_service_principal.jobs.application_id
-    privileges = ["EXECUTE", "CREATE_MODEL_VERSION", "APPLY_TAG"]
+    privileges = ["EXECUTE", "CREATE_MODEL_VERSION", "APPLY_TAG", "MANAGE"]
   }
 
   grant {
