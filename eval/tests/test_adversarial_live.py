@@ -20,6 +20,8 @@ that fails if it stops being able to see a real breach.
 """
 
 import json
+import threading
+import time
 from collections.abc import Mapping
 from typing import Any
 
@@ -104,6 +106,15 @@ class _FakeTransport(Transport):
         return self._app.handle(self._visitor_id, path, body)
 
 
+_TURN_SECONDS = 0.4
+"""How long a fixture turn takes, for the two concurrency tests.
+
+Long enough that 1.6x plus a tenth of a second is a gap the scheduler cannot
+close by accident, and short enough that two tests spending three turns each is
+under three seconds. See _SERIALISATION_FACTOR in the module under test.
+"""
+
+
 def _reply(text: str, *, card: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
     return {"reply": text, "card": card, "receipt": False, "stopped": False}
 
@@ -159,6 +170,99 @@ def test_one_repeated_identity_sinks_the_whole_claim() -> None:
 def test_an_identity_that_could_not_be_asked_is_not_evidence_of_isolation() -> None:
     """An outage is not a design holding. It is an absence of evidence."""
     assert not _accounts_differ(["unanswered: OSError: connection reset", "Devon"])
+
+
+def test_a_deployment_that_serves_one_turn_at_a_time_does_not_get_concurrency() -> None:
+    """The capability the first draft of this adapter asserted, and was wrong about.
+
+    ``POST /api/chat`` on the deployed app is ``async def`` and runs the turn
+    **synchronously** on the event loop, on one replica with one worker. It
+    therefore serves exactly one chat at a time and every other request queues
+    behind it. Declaring
+    :attr:`~chip_chat.eval.adversarial.attacks.Capability.CONCURRENT_TURNS`
+    against that would run the concurrent attacks, get the answers back one at a
+    time, and report *the round did not happen to overlap* -- when the truth is
+    *this deployment cannot overlap*, and those two want different actions from
+    whoever reads them.
+
+    The fixture serialises on a lock, which is what a blocked event loop is, and
+    the pair of fixtures differ in *exactly* that lock. Both take the same time
+    per turn; only one of them can take two turns at once.
+    """
+    lock = threading.Lock()
+
+    class Serialised(FakeApp):
+        def chat(self, visitor_id: str, message: str) -> Mapping[str, Any]:
+            if "on the menu today" in message.lower():
+                with lock:
+                    time.sleep(_TURN_SECONDS)
+            return super().chat(visitor_id, message)
+
+    target = _target(Serialised())
+    assert Capability.CONCURRENT_TURNS not in target.capabilities
+    assert "one turn at a time" in target.serialised_detail
+
+
+def test_a_deployment_that_serves_two_at_once_does_get_concurrency() -> None:
+    """And the other direction, or the probe is a constant returning False.
+
+    The same fixture without the lock. A turn costs the same; two of them cost
+    the same as one, which is what being served together means and is the only
+    thing a client outside the process can actually observe.
+    """
+
+    class Parallel(FakeApp):
+        def chat(self, visitor_id: str, message: str) -> Mapping[str, Any]:
+            if "on the menu today" in message.lower():
+                time.sleep(_TURN_SECONDS)
+            return super().chat(visitor_id, message)
+
+    assert Capability.CONCURRENT_TURNS in _target(Parallel()).capabilities
+
+
+def test_a_queue_is_not_distinguished_by_whether_client_windows_overlap() -> None:
+    """The probe this module tried first, kept as the reason it was replaced.
+
+    Two turns launched together against a *serialised* server have client-side
+    intervals that overlap almost perfectly: the second request is outstanding
+    from the moment it is sent, and it is outstanding for longer precisely
+    because it is waiting. Intersecting windows are therefore evidence of
+    nothing, and this test states that as an arithmetic fact so that nobody
+    reintroduces the simpler probe.
+    """
+    lock = threading.Lock()
+    windows: list[tuple[float, float]] = []
+
+    def serialised_turn() -> None:
+        started = time.monotonic()
+        with lock:
+            time.sleep(_TURN_SECONDS)
+        windows.append((started, time.monotonic()))
+
+    threads = [threading.Thread(target=serialised_turn) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    (first_start, first_end), (second_start, second_end) = windows
+    overlapped = "a fully serialised pair still produced overlapping client windows"
+    assert first_start < second_end, overlapped
+    assert second_start < first_end, overlapped
+
+
+def test_a_probe_turn_that_never_came_back_is_not_evidence_of_concurrency() -> None:
+    """An outage is not a design property. Conservative on every failure."""
+
+    class HalfBroken(FakeApp):
+        def chat(self, visitor_id: str, message: str) -> Mapping[str, Any]:
+            if "on the menu today" in message.lower() and visitor_id == "v2":
+                raise OSError("connection reset by peer")
+            return super().chat(visitor_id, message)
+
+    target = _target(HalfBroken())
+    assert Capability.CONCURRENT_TURNS not in target.capabilities
+    assert "did not come back" in target.serialised_detail
 
 
 def test_a_deployment_with_no_name_gate_is_attacked_anyway() -> None:
