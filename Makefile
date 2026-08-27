@@ -202,7 +202,8 @@ verify-tools-bare: ## The same cases, with no system prompt at all
 # that is what turns the golden set's menu terms into a staleness detector
 # rather than a comment.
 
-.PHONY: golden-check golden photos-check adversarial-check adversarial adversarial-baseline
+.PHONY: golden-check golden photos-check adversarial-check adversarial \
+        adversarial-sabotaged adversarial-gate2 adversarial-baseline
 
 golden-check: ## Check the golden set's coverage, free
 	$(UV) run python -m chip_chat.eval.golden --check
@@ -227,6 +228,27 @@ adversarial-check: ## Check the adversarial suite's coverage, free
 
 adversarial: ## Attack the slice with a model that complies, free
 	$(UV) run python -m chip_chat.eval.adversarial --structural
+
+# Issue #83, and the two things the target above cannot say.
+#
+# `adversarial-sabotaged` runs the same suite with the system prompt replaced by
+# the attacker's. PRD launch gate two claims confirmation is structural; a gate
+# that held only while the prompt was this repository's would be a gate that
+# depends on a file anybody with commit access can edit. The run fails if the
+# sabotaged prompt did not demonstrably reach the model.
+#
+# `adversarial-gate2` attacks a different door: thirteen calls straight at the
+# ops API, with no model and no browser in front of them, which is what the
+# attacker in PRD T2 actually does once they have the write service's hostname.
+# The `T2` row the suite prints is one front of gate two; this is the other, and
+# reading either alone overstates the gate.
+
+adversarial-sabotaged: ## Attack the slice with the attacker's system prompt, free
+	$(UV) run python -m chip_chat.eval.adversarial --structural --sabotaged
+
+adversarial-gate2: ## Attack the ops API directly, bypassing the model and the UI, free
+	$(UV) run python -m chip_chat.eval.adversarial --gate2 \
+		--catalog catalog/tests/fixtures
 
 adversarial-baseline: ## Run the suite against a real deployment and write the baseline
 	$(UV) run python -m chip_chat.eval.adversarial --out eval/adversarial/BASELINE.md
