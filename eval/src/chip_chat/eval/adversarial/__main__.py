@@ -31,6 +31,23 @@ includes *not measured*, deliberately. PRD section 12 makes both gates blocking
 and a gate nobody could measure blocks in exactly the same way as one that
 failed. A pipeline that went green on an unmeasured gate would be the most
 expensive possible way to discover that later.
+
+``--fail-on breach`` relaxes exactly that, for exactly one caller, and #82's
+fourth acceptance criterion is why it exists: *the suite runs in CI and blocks a
+deploy on any failure*. A **blocking** step cannot use the strict rule today,
+because the first gate is unmeasurable against a deployment serving one hardcoded
+account to everybody -- so the step would be red on every pull request until the
+identity path lands end to end, and a step that is always red is a step somebody
+switches off. Under ``--fail-on breach`` the step is green today, turns red the
+instant anything actually gets out, and prints every unmeasured gate to stderr on
+its way past. The strict rule still runs beside it, non-blocking, where a person
+reads the number. See :data:`_FAIL_ON_GATE`.
+
+``--rounds`` is #82's second criterion: *the concurrency test runs long enough
+and hot enough to genuinely interleave*. One round is the single burst #30
+shipped; :data:`~chip_chat.eval.adversarial.soak.DEFAULT_ROUNDS` is a sustained
+one, and either way the report says how hot it actually got rather than how hot
+it was asked to be.
 """
 
 import argparse
@@ -47,10 +64,31 @@ from chip_chat.eval.adversarial.attacks import (
 from chip_chat.eval.adversarial.coverage import coverage
 from chip_chat.eval.adversarial.report import build_report, render
 from chip_chat.eval.adversarial.run import run_suite
+from chip_chat.eval.adversarial.scoring import Scores
 from chip_chat.eval.adversarial.slice import SliceTarget
+from chip_chat.eval.adversarial.soak import DEFAULT_ROUNDS
 from chip_chat.eval.adversarial.testing import CapitulatingModel
 
 _DEFAULT_VISITORS = 3
+
+_FAIL_ON_GATE = "gate"
+_FAIL_ON_BREACH = "breach"
+"""The two exit rules, and the reason there are two.
+
+``gate`` is the strict one and the default: a run exits non-zero unless both
+launch gates read ``pass``, which includes *not measured*. It is the rule PRD
+section 12 implies and the one a release has to clear.
+
+``breach`` fails only on something that actually got out. It exists for the one
+place the strict rule is unusable: a CI step that must **block** a merge. The
+first gate is unmeasurable against a deployment serving one hardcoded account to
+everybody, so a blocking step under the strict rule would be red on every pull
+request until the identity path lands end to end -- and a step that is always red
+is a step somebody switches off, which is how a suite stops running at exactly
+the moment it starts being able to catch something. Under ``breach`` the step is
+green today, red the instant anything leaks, and the strict rule still runs
+beside it where a human reads the number.
+"""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -79,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     target = SliceTarget(model, visitors=args.visitors, session_prefix=args.session)
-    run = run_suite(suite, target, only=args.only)
+    run = run_suite(suite, target, only=args.only, rounds=args.rounds)
     report = build_report(suite, run)
     document = render(report)
     if args.out is not None:
@@ -87,7 +125,33 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote {args.out}")
     else:
         print(document)
-    return 0 if report.scores.gates_pass else 1
+    return _status(report.scores, args.fail_on)
+
+
+def _status(scores: Scores, rule: str) -> int:
+    """The exit status under one of the two rules. See :data:`_FAIL_ON_GATE`.
+
+    Args:
+        scores: What the run produced.
+        rule: ``gate`` or ``breach``.
+
+    Returns:
+        ``0`` or ``1``. Under ``breach`` the unmeasured gates are reported on
+        stderr rather than swallowed: the step passes, and the reason it could
+        pass without having measured anything stays in the log where the person
+        reading a green tick can see it.
+    """
+    if rule == _FAIL_ON_BREACH:
+        for gate in scores.gates:
+            if gate.passes is None:
+                print(
+                    f"note: {gate.spec.name} was not measured "
+                    f"({gate.unscored} of {gate.total} attempts unscored); this "
+                    "step blocks on a breach, not on an unmeasured gate",
+                    file=sys.stderr,
+                )
+        return 1 if any(gate.breached for gate in scores.gates) else 0
+    return 0 if scores.gates_pass else 1
 
 
 def _check(suite: AdversarialSuite) -> int:
@@ -153,6 +217,24 @@ def _parser() -> argparse.ArgumentParser:
         help=f"how many visitors attack it (default: {_DEFAULT_VISITORS})",
     )
     parser.add_argument("--only", nargs="+", help="run only these attack ids")
+    parser.add_argument(
+        "--rounds",
+        type=int,
+        default=1,
+        help=(
+            "turns per visitor in each concurrent attack's round "
+            f"(default: 1; {DEFAULT_ROUNDS} is the sustained run #82 asks for)"
+        ),
+    )
+    parser.add_argument(
+        "--fail-on",
+        choices=(_FAIL_ON_GATE, _FAIL_ON_BREACH),
+        default=_FAIL_ON_GATE,
+        help=(
+            "what makes this command exit non-zero: any gate short of `pass` "
+            "including not-measured (default), or only something that got out"
+        ),
+    )
     parser.add_argument(
         "--session",
         default="adversarial",

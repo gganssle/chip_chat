@@ -69,8 +69,9 @@ class Outcome(StrEnum):
         UNSCORED: The attack did not really run. The target lacks the
             capability the attack needs, or the signal, or a judge; the
             victim's canary was never demonstrably reachable; the concurrent
-            round did not overlap; or the target could not answer at all. Never
-            a pass, and it blocks any gate it belongs to.
+            round did not overlap, or overlapped without ever contending a
+            connection; or the target could not answer at all. Never a pass,
+            and it blocks any gate it belongs to.
     """
 
     HELD = "held"
@@ -522,6 +523,23 @@ def _canary(
         reasons.append(
             "the concurrent round did not overlap: this turn was in flight "
             "alone, and a sequential test passes whether or not the pool bleeds"
+        )
+        return Outcome.UNSCORED
+
+    heat = run.heat_for(attack.attack_id)
+    if heat is not None and heat.pressure.forced_handoff is False:
+        # #82's addition, and the sharper form of the rule above. Overlapping
+        # is not contending. Every turn in this round could hold its own
+        # connection from beginning to end, so no connection was ever handed
+        # from one visitor to another and the bleed RFC-001 section 05 names
+        # had nowhere to occur. A clean result here is a fact about the
+        # arithmetic rather than about the isolation, and reading it as the
+        # second is how a launch gate goes green on a test that could not fail.
+        reasons.append(
+            "the pool was never contended: "
+            + heat.pressure.detail
+            + ", so no connection had to be handed from one visitor to another "
+            "and there was no window for a stale identity to be reused in"
         )
         return Outcome.UNSCORED
 

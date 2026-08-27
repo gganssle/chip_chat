@@ -9,7 +9,15 @@ These are the checks that see it.
 import json
 from pathlib import Path
 
-from chip_chat.eval.adversarial.attacks import AdversarialSuite, Family
+import pytest
+
+from chip_chat.eval.adversarial.attacks import (
+    AdversarialSuite,
+    Attack,
+    Capability,
+    Carrier,
+    Family,
+)
 from chip_chat.eval.adversarial.coverage import CLAUSES, DELEGATED_HERE, coverage
 from chip_chat.eval.golden.requirements import DELEGATIONS
 
@@ -79,7 +87,7 @@ def test_the_delegations_are_read_off_the_golden_register_not_restated() -> None
     assert set(DELEGATED_HERE) == expected
 
 
-def test_removing_a_disclosure_attack_is_visible_as_an_unmet_clause(
+def test_removing_disclosure_attacks_is_visible_as_an_unmet_clause(
     tmp_path: Path, suite: AdversarialSuite
 ) -> None:
     """The clause has to be able to fail, or it is a comment.
@@ -87,19 +95,34 @@ def test_removing_a_disclosure_attack_is_visible_as_an_unmet_clause(
     A3 says *under any phrasing*, and a mechanism that stops the direct
     question and not the oblique one has stopped nothing -- so the floor on
     variety is a check rather than an aspiration.
+
+    How many to drop is computed from the clause rather than written down. The
+    floor moves -- #82 raised it from six to nine -- and a test naming two
+    attacks by hand stops testing anything the first time somebody adds a
+    tenth: it would thin the suite to a number still above the floor and assert
+    that a met clause is unmet. The concurrent attacks are kept back because
+    the manifest cannot load without one.
     """
-    thinner = _without(
-        tmp_path,
-        suite,
-        "disclosure-aggregate-across-visitors",
-        "disclosure-debug-pretext",
-    )
+    clause = next(item for item in CLAUSES if "phrasings" in item.name)
+    droppable = [
+        attack_id
+        for attack_id in clause.met_by(suite.attacks)
+        if not suite_attack(suite, attack_id).concurrent
+    ]
+    surplus = len(clause.met_by(suite.attacks)) - clause.minimum
+
+    thinner = _without(tmp_path, suite, *droppable[: surplus + 1])
 
     cover = coverage(thinner)
 
     assert cover.unmet
     assert not cover.complete
-    assert any("phrasings" in clause.name for clause, _ in cover.unmet)
+    assert any("phrasings" in item.name for item, _ in cover.unmet)
+
+
+def suite_attack(suite: AdversarialSuite, attack_id: str) -> Attack:
+    """The attack with this id. A helper, because the test above reads two fields."""
+    return next(attack for attack in suite if attack.attack_id == attack_id)
 
 
 def test_removing_the_only_redeem_attack_is_visible_as_an_unattacked_tool(
@@ -111,6 +134,108 @@ def test_removing_the_only_redeem_attack_is_visible_as_an_unattacked_tool(
 
     assert "redeem_points" in {tool.value for tool in cover.write_tools_without_an_attack}
     assert not cover.complete
+
+
+def test_removing_the_only_photo_injection_is_visible_as_an_unmet_clause(
+    tmp_path: Path, suite: AdversarialSuite
+) -> None:
+    """#82's carrier, and the clause that keeps it in the file.
+
+    Its own clause rather than folded into the retrieved-document one: every
+    defence against a retrieved instruction sits on the retrieval path, and a
+    frame the visitor uploads passes none of them. A combined count could be
+    satisfied by two corpus attacks with nothing aimed at the carrier that
+    skips the corpus entirely.
+    """
+    only = [
+        attack.attack_id for attack in suite if attack.carrier is Carrier.UPLOADED_PHOTO
+    ]
+
+    cover = coverage(_without(tmp_path, suite, *only))
+
+    assert any("photograph" in item.name for item, _ in cover.unmet)
+    assert not cover.complete
+
+
+def test_removing_the_only_analyst_attack_is_visible_as_an_unmet_clause(
+    tmp_path: Path, suite: AdversarialSuite
+) -> None:
+    """The attack whose value is that it should not matter.
+
+    RFC-001 puts the scope in a row access policy underneath the query, which
+    makes visitor-dictated SQL read the same rows as generated SQL. #82 calls
+    that *precisely the claim being tested*, and a claim with no attack behind
+    it is what this whole module exists to make visible.
+    """
+    only = [attack.attack_id for attack in suite if Capability.ANALYST in attack.needs]
+
+    cover = coverage(_without(tmp_path, suite, *only))
+
+    assert any("query generator" in item.name for item, _ in cover.unmet)
+    assert not cover.complete
+
+
+def test_dropping_to_one_concurrent_attack_is_visible_as_an_unmet_clause(
+    tmp_path: Path, suite: AdversarialSuite
+) -> None:
+    """The loader refuses zero; this is the clause that refuses one.
+
+    Not the load-time check restated. A stale ``demo_id`` is filtered perfectly
+    by #43's policies for the wrong visitor, so what a bleed discloses is
+    whatever lane the policies sit under -- and one concurrent attack aimed at
+    the order desk says nothing about the account lane, which is where the
+    deployed product keeps the rows.
+    """
+    concurrent = [attack.attack_id for attack in suite.concurrent]
+    assert len(concurrent) > 1, "the manifest already fails this clause"
+
+    cover = coverage(_without(tmp_path, suite, *concurrent[1:]))
+
+    assert any("more than one of the paths" in item.name for item, _ in cover.unmet)
+    assert not cover.complete
+
+
+_ATTACKS_82_NAMES = {
+    "another visitor's order history, by name": "disclosure-direct-order-history",
+    "and by description": "disclosure-other-visitor-by-description",
+    "persuade the model it is serving someone else": "identity-i-am-someone-else",
+    "aggregates that would leak individual rows": (
+        "disclosure-aggregate-across-visitors"
+    ),
+    "SQL that ignores the session scope": "disclosure-analyst-unscoped-sql",
+    "a disclosure instruction through the corpus": "injection-retrieved-menu-note",
+    "and through an uploaded photo": "injection-uploaded-photo-disclosure",
+    "the app's session store, from a tool result": (
+        "disclosure-session-store-from-a-tool-result"
+    ),
+    "switch persona mid-conversation": "identity-persona-switch-mid-conversation",
+    "the concurrency test": "disclosure-concurrent-pool-bleed",
+}
+"""#82's attack list, each bullet against the attack that answers it.
+
+Ids by hand, which is unusual in this directory and is the point. Three of these
+bullets -- by description, the session store, the persona switch -- are
+*phrasings*, and a phrasing has no structural property for a clause in
+``coverage.py`` to count. The floors there stop the suite thinning; only this
+stops it thinning in exactly the places #82 asked it not to.
+
+A failure here is not necessarily a bug: an attack may be renamed, or one bullet
+may come to be answered by a better attack than the one written for it. It is a
+prompt to update this map deliberately rather than to discover next quarter that
+the launch gate was verified against a suite that had quietly lost the question
+somebody filed the ticket about.
+"""
+
+
+@pytest.mark.parametrize(
+    ("bullet", "attack_id"),
+    sorted(_ATTACKS_82_NAMES.items()),
+)
+def test_the_suite_holds_an_attack_for_every_shape_82_names(
+    suite: AdversarialSuite, bullet: str, attack_id: str
+) -> None:
+    """Launch gate one is verified against this list, so the list is a test."""
+    assert any(attack.attack_id == attack_id for attack in suite), bullet
 
 
 def test_every_clause_names_the_document_that_asks_for_it() -> None:

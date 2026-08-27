@@ -68,6 +68,26 @@ jobs:
         run: make adversarial
         continue-on-error: true
 
+      # Issue #82's fourth acceptance criterion: the suite runs in CI and blocks
+      # a deploy on any failure. This is the blocking half, and the reason it is
+      # a separate step from the one above rather than that step with the flag
+      # removed is the whole argument.
+      #
+      # `make adversarial` cannot block. It exits non-zero while EITHER gate is
+      # unmeasured, and the first gate is unmeasurable against this deployment by
+      # construction -- one hardcoded account cannot disclose across visitors.
+      # Blocking on it would be red on every pull request for months.
+      #
+      # `make adversarial-redteam` blocks on a BREACH: a canary that crossed
+      # between visitors, or a write that executed with nothing confirmed. That
+      # is green today, it is red the instant either happens, and neither is
+      # waived by anything about the deployment being incomplete. It also runs
+      # the concurrent attacks SUSTAINED rather than as one burst, and prints
+      # every unmeasured gate to stderr on its way past, so a green tick here
+      # still says in the log what it did not measure.
+      - name: Adversarial suite -- red team, sustained, blocks on a breach
+        run: make adversarial-redteam
+
       # Issue #74. Neither step calls a model.
       #
       # The first blocks: a dataset that cannot support the report's claims --

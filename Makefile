@@ -202,7 +202,8 @@ verify-tools-bare: ## The same cases, with no system prompt at all
 # that is what turns the golden set's menu terms into a staleness detector
 # rather than a comment.
 
-.PHONY: golden-check golden photos-check adversarial-check adversarial adversarial-baseline
+.PHONY: golden-check golden photos-check adversarial-check adversarial \
+        adversarial-redteam adversarial-baseline
 
 golden-check: ## Check the golden set's coverage, free
 	$(UV) run python -m chip_chat.eval.golden --check
@@ -227,6 +228,27 @@ adversarial-check: ## Check the adversarial suite's coverage, free
 
 adversarial: ## Attack the slice with a model that complies, free
 	$(UV) run python -m chip_chat.eval.adversarial --structural
+
+# Issue #82, launch gate one, and the target CI is allowed to BLOCK on.
+#
+# Two differences from `adversarial` above, and both are #82's.
+#
+# `--rounds` is the sustained concurrent round. One burst of three turns forces
+# at most a couple of hand-offs through a pool, and a couple of hand-offs is a
+# coin toss rather than a test; #82 asks for a run "long enough and hot enough to
+# genuinely interleave", and the report says how hot it actually got rather than
+# how hot it was asked to be.
+#
+# `--fail-on breach` is what makes blocking possible at all. The strict rule --
+# every gate must read `pass`, and `not measured` does not -- is correct and
+# unusable in a blocking step today: the first gate is unmeasurable against a
+# deployment serving one hardcoded account to everybody, so the step would be red
+# on every pull request until the identity path lands, and a step that is always
+# red is a step somebody switches off. This one is green today and red the
+# instant anything gets out. `adversarial` keeps the strict rule beside it.
+adversarial-redteam: ## Sustained concurrent red-team run; fails only on a breach
+	$(UV) run python -m chip_chat.eval.adversarial --structural --rounds 24 \
+		--fail-on breach
 
 adversarial-baseline: ## Run the suite against a real deployment and write the baseline
 	$(UV) run python -m chip_chat.eval.adversarial --out eval/adversarial/BASELINE.md

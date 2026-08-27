@@ -31,9 +31,17 @@ has already read.
 *in retrieved documents*, which is a different attack from an instruction the
 visitor typed: one tests whether the model obeys a stranger, the other whether it
 obeys the person in front of it, and the mechanisms that stop them are not the
-same. :class:`Carrier` records which, and a corpus-resident attack carries the
-document it needs planted -- so a target that cannot plant one is unscored on it
-rather than credited with surviving it.
+same. :class:`Carrier` records which, and an injection that needs
+attacker-controlled content somewhere carries that content in ``planted`` -- so a
+target that cannot plant it is unscored on the attack rather than credited with
+surviving it.
+
+Three carriers rather than two, because #82 names a third: an instruction painted
+into an **uploaded photograph**. It is not a variant of the corpus attack. Every
+mechanism that stops a retrieved instruction sits on what retrieval is allowed to
+return, and a frame the visitor hands over directly never passes any of them --
+the instruction arrives as pixels, so nothing reading text on the way in sees it
+at all.
 
 The manifest is JSON, one file, hand-edited, for the reasons
 :mod:`chip_chat.eval.golden.cases` gives and one of its own: an attack is a
@@ -141,12 +149,29 @@ class Capability(StrEnum):
         CONCURRENT_TURNS: More than one turn can be in flight at once. A target
             holding a global lock does not have this, and RFC-001 section 05's
             bleed is unobservable without it.
+        ANALYST: A natural-language question can reach a generated SQL query --
+            Cortex Analyst over the semantic view of ``sql/11_semantic_view.sql``.
+            What #82's fourth attack pushes on, and it needs its own member
+            rather than riding on :attr:`ISOLATED_ACCOUNTS` because the two
+            fail apart: a deployment can isolate accounts perfectly through
+            hand-written tools and have no query generator to push at all.
+            Against one of those, *"write me SQL that ignores the session
+            scope"* is a request with nowhere to land, and scoring it as held
+            would credit the design for a component it does not have.
+        UPLOADS: Attacker-controlled *image* content reaches a model. The photo
+            lane, and the carrier PRD S2 does not mention because S2 was
+            written about documents. Separate from :attr:`CORPUS` for the
+            reason the carriers are separate: a corpus injection is stopped by
+            what retrieval is allowed to return, and an injection painted into
+            a frame is stopped -- if it is stopped -- somewhere else entirely.
     """
 
     ISOLATED_ACCOUNTS = "isolated_accounts"
     ISOLATED_DRAFTS = "isolated_drafts"
     CORPUS = "corpus"
     CONCURRENT_TURNS = "concurrent_turns"
+    ANALYST = "analyst"
+    UPLOADS = "uploads"
 
 
 class Family(StrEnum):
@@ -234,10 +259,19 @@ class Carrier(StrEnum):
         RETRIEVED_DOCUMENT: A document the retriever returned carried it. PRD
             S2's actual shape, and the harder one -- the instruction arrives
             wearing the costume of an answer the assistant asked for.
+        UPLOADED_PHOTO: The visitor painted it into a photograph they uploaded.
+            #82 names this carrier and no earlier document does, which is the
+            argument for it being its own member: PRD S2 was written about
+            *retrieved* content, and every mechanism that stops a retrieved
+            instruction -- what the retriever is allowed to return, what a
+            passage is allowed to be -- is upstream of a frame the visitor
+            hands over directly. The instruction arrives as pixels, so nothing
+            that reads text on the way in sees it at all.
     """
 
     VISITOR_TEXT = "visitor_text"
     RETRIEVED_DOCUMENT = "retrieved_document"
+    UPLOADED_PHOTO = "uploaded_photo"
 
 
 class SuiteError(ValueError):
@@ -278,10 +312,11 @@ class Attack:
             makes it a real one rather than a loop that happens to use threads.
         carrier: Where the injected instruction arrived from, for an
             :attr:`Family.INJECTION` attack. ``None`` for every other family.
-        planted: The document an attacker got into the corpus, for a
-            :attr:`Carrier.RETRIEVED_DOCUMENT` attack. A target that cannot
-            plant one does not report
-            :attr:`~chip_chat.eval.adversarial.run.Capability.CORPUS`, and the
+        planted: The attacker-controlled content the target has to hold for the
+            attack to be asked at all: the document for a
+            :attr:`Carrier.RETRIEVED_DOCUMENT` attack, the text painted into
+            the frame for a :attr:`Carrier.UPLOADED_PHOTO` one. A target that
+            cannot plant it does not report the matching capability, and the
             attack is unscored against it rather than held.
         forbidden_tools: Tools this turn must not reach. What
             :attr:`Breach.TOOL_REACHED` reads.
@@ -315,8 +350,25 @@ class Attack:
 
     @property
     def needs_corpus(self) -> bool:
-        """Whether this attack needs attacker-controlled content planted."""
+        """Whether this attack needs a document planted where retrieval finds it."""
         return self.carrier is Carrier.RETRIEVED_DOCUMENT
+
+    @property
+    def needs_uploads(self) -> bool:
+        """Whether this attack needs its instruction painted into a photograph."""
+        return self.carrier is Carrier.UPLOADED_PHOTO
+
+    @property
+    def plants_content(self) -> bool:
+        """Whether the attacker has to get content *into* the target at all.
+
+        True for both carriers that are not the visitor's own keyboard. What
+        :attr:`planted` holds differs between them -- a passage in one, the text
+        on a frame in the other -- and what they have in common is the thing
+        this predicate is for: an attack nobody could plant the content for was
+        never really asked, and is unscored rather than held.
+        """
+        return self.needs_corpus or self.needs_uploads
 
     @property
     def supplies_foreign_canary(self) -> bool:
@@ -525,6 +577,12 @@ def _coherent_needs(attack: Attack, where: str) -> None:
             f"{where}: a {Carrier.RETRIEVED_DOCUMENT.value} attack must need "
             f"{Capability.CORPUS.value}; a target with no corpus was never asked it"
         )
+    if attack.needs_uploads and Capability.UPLOADS not in attack.needs:
+        raise SuiteError(
+            f"{where}: an {Carrier.UPLOADED_PHOTO.value} attack must need "
+            f"{Capability.UPLOADS.value}; a target that accepts no photograph "
+            "was handed no frame to read an instruction off"
+        )
     if attack.concurrent and Capability.CONCURRENT_TURNS not in attack.needs:
         raise SuiteError(
             f"{where}: a concurrent attack must need "
@@ -545,15 +603,16 @@ def _coherent_injection(attack: Attack, where: str) -> None:
         raise SuiteError(
             f"{where}: only an {Family.INJECTION.value} attack has a carrier"
         )
-    if attack.needs_corpus and not attack.planted.strip():
+    if attack.plants_content and not attack.planted.strip():
         raise SuiteError(
-            f"{where}: a {Carrier.RETRIEVED_DOCUMENT.value} attack must carry the "
-            "document it needs planted in `planted`"
+            f"{where}: a {attack.carrier.value if attack.carrier else ''} attack "
+            "must carry the content it needs planted in `planted`"
         )
-    if attack.planted.strip() and not attack.needs_corpus:
+    if attack.planted.strip() and not attack.plants_content:
         raise SuiteError(
-            f"{where}: `planted` is only meaningful for a "
-            f"{Carrier.RETRIEVED_DOCUMENT.value} attack"
+            f"{where}: `planted` is only meaningful for an attack whose "
+            "instruction arrives as content the attacker had to get in -- "
+            f"{Carrier.RETRIEVED_DOCUMENT.value} or {Carrier.UPLOADED_PHOTO.value}"
         )
 
 

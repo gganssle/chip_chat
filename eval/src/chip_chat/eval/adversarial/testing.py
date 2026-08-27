@@ -7,7 +7,7 @@ evidence that the detectors work is a target that is *known* to fail and a test
 that watches the suite find it. That is what this module is for, and it is the
 reason it is not optional furniture.
 
-Four fixtures, and the first is the one that matters most.
+Five fixtures, and the first is the one that matters most.
 
 :class:`BleedingTarget` leaks **only under concurrency**. It models the failure
 RFC-001 section 05 names: a session variable left set on a pooled connection,
@@ -35,6 +35,14 @@ asks -- a model that has already been persuaded -- and its use is to drive
 is not the model. It is whether the two gates hold *when the model has lost*,
 which is precisely RFC-001's claim about them: structural properties of the
 design rather than behaviours we hope to observe. It costs no tokens.
+
+:class:`UncontendedTarget` is #82's, and it is the odd one out: nothing about it
+is broken. It is a sound target behind a pool with one connection per visitor, so
+no connection is ever handed from one visitor to another and its clean concurrent
+round is a fact about the arithmetic. The suite must score it *unscored* rather
+than held -- see :class:`~chip_chat.eval.adversarial.soak.Pressure` -- because a
+production pool sized generously for a quiet afternoon produces exactly this
+report and bleeds the first time the demo gets busy.
 
 **None of these is a deployment and none of their numbers is a score.** The same
 warning ``chip_chat.eval.photos.testing`` prints about coloured rectangles
@@ -68,6 +76,7 @@ __all__ = [
     "CapitulatingModel",
     "CompliantTarget",
     "ObliviousTarget",
+    "UncontendedTarget",
 ]
 
 _ALL_CAPABILITIES: Final[frozenset[Capability]] = frozenset(Capability)
@@ -148,11 +157,18 @@ class BleedingTarget:
             turns really do overlap, short enough that a suite of forty attacks
             still runs in a test.
         name: What the report calls it.
+        pool_slots: One, which is the truth about this fixture and is what
+            makes its rounds scoreable at all. See
+            :class:`~chip_chat.eval.adversarial.soak.Pooled`: a target that
+            declares nothing is claiming it does not pool, and a bleeding pool
+            that claimed that would have its own disclosures scored against a
+            round the harness believed could not contend.
     """
 
     visitors: int = 3
     dwell: float = 0.05
     name: str = "bleeding fixture"
+    pool_slots: int = 1
     _population: Population | None = field(default=None, init=False, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _holder: str | None = field(default=None, init=False, repr=False)
@@ -249,6 +265,84 @@ class ObliviousTarget:
     def turn(self, probe: Probe) -> Attempt:
         """Say nothing useful, to anybody, about anything."""
         return _attempt(probe, visible="I'm not sure about that.")
+
+
+@dataclass(slots=True)
+class UncontendedTarget:
+    """A pool nobody ever has to share, and the clean round that proves nothing.
+
+    #82's addition to this file, and the fixture for the failure
+    :class:`~chip_chat.eval.adversarial.soak.Pressure` exists to refuse. It
+    keeps one connection per visitor and says so, so however many turns run at
+    the same instant, no connection is ever handed from one visitor to another.
+    It cannot bleed. It also cannot be *shown* not to bleed, and those two
+    sentences are the whole of the point: the round comes back with every
+    visitor holding only their own data, exactly as a sound pool would, and it
+    is evidence about arithmetic rather than about isolation.
+
+    So the suite must score its concurrent attacks **unscored**, not held. A
+    harness that read this fixture as a pass would read a production pool sized
+    generously for a quiet afternoon as a pass too, and that pool bleeds the
+    first time the demo gets busy -- which is the one moment nobody is running
+    the adversarial suite.
+
+    Note what it is not. It is not broken, and it is not
+    :class:`ObliviousTarget` wearing a pool: it answers every visitor fully and
+    correctly, and its control passes. Nothing about the *target* is wrong. What
+    is wrong is the round, and the round is the harness's responsibility.
+
+    Attributes:
+        visitors: How many to mint.
+        dwell: How long a turn takes, so the turns genuinely overlap. They must
+            -- an uncontended round that also failed to overlap would be
+            unscored for the older reason and would demonstrate nothing about
+            this one.
+        name: What the report calls it.
+        pool_slots: One per visitor, and never fewer. Set from
+            :attr:`visitors` in :meth:`__post_init__` rather than defaulted, so
+            a caller raising the population cannot silently turn this fixture
+            into a contended one.
+    """
+
+    visitors: int = 3
+    dwell: float = 0.02
+    name: str = "uncontended fixture"
+    pool_slots: int = 0
+    _population: Population | None = field(default=None, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Keep the pool at least as wide as the population."""
+        self.pool_slots = max(self.pool_slots, self.visitors)
+
+    @property
+    def capabilities(self) -> frozenset[Capability]:
+        """Everything."""
+        return _ALL_CAPABILITIES
+
+    @property
+    def reports(self) -> frozenset[Signal]:
+        """Everything."""
+        return _ALL_SIGNALS
+
+    @property
+    def population(self) -> Population:
+        """The visitors, minted once."""
+        if self._population is None:
+            self._population = population(self.visitors, session_prefix=self.name)
+        return self._population
+
+    def control(self, visitor: Visitor) -> Control:
+        """Hand the visitor their own canary. This fixture is not the broken one."""
+        return Control(
+            visitor_id=visitor.visitor_id,
+            visible=True,
+            detail="the fixture returns each visitor their own canary",
+        )
+
+    def turn(self, probe: Probe) -> Attempt:
+        """Answer correctly, slowly enough that the turns overlap."""
+        time.sleep(self.dwell)
+        return _attempt(probe, visible=f"{_HOLDING_REPLY} {probe.visitor.token}")
 
 
 def _attempt(probe: Probe, *, visible: str, wrote: bool = False) -> Attempt:

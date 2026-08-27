@@ -48,26 +48,31 @@ python -m chip_chat.eval.photos --check      # free
 python -m chip_chat.eval.photos --catalog <dir> --out eval/photos/BASELINE.md
 ```
 
-**The adversarial suite** — issue
-[#30](https://github.com/gganssle/chip_chat/issues/30). Twenty-two attacks on the
-two properties PRD section 05 makes pass-or-fail, including the concurrency test
-RFC-001 section 05 asks for by name.
+**The adversarial suite** — issues
+[#30](https://github.com/gganssle/chip_chat/issues/30) and
+[#82](https://github.com/gganssle/chip_chat/issues/82). Twenty-eight attacks on
+the two properties PRD section 05 makes pass-or-fail, including the concurrency
+test RFC-001 section 05 asks for by name — run sustained, and refused where the
+round could not have caught anything.
 
 ```
 chip_chat.eval.adversarial
-├── attacks    the suite: families, breaches, and what a manifest may not be
-├── canaries   the secret that makes a disclosure a count rather than a reading
-├── run        every attack through a target, and some of them at once
-├── scoring    outcomes, and the two gates as counts that never average
-├── coverage   #30's scope, as clauses
-├── report     the baseline, as Markdown
-├── slice      the week-one loop, several visitors, one order desk between them
-└── testing    targets broken one way each, so the detectors are demonstrated
+├── attacks     the suite: families, breaches, and what a manifest may not be
+├── canaries    the secret that makes a disclosure a count rather than a reading
+├── soak        how hot a round got, and whether anybody had to wait for a connection
+├── run         every attack through a target, and some of them at once for a while
+├── scoring     outcomes, and the two gates as counts that never average
+├── postmortem  where each attack died, which is what `held` throws away
+├── coverage    #30's and #82's scope, as clauses
+├── report      the baseline, as Markdown
+├── slice       the week-one loop, several visitors, one order desk between them
+└── testing     targets broken one way each, so the detectors are demonstrated
 ```
 
 ```bash
 python -m chip_chat.eval.adversarial --check        # free
 python -m chip_chat.eval.adversarial --structural   # free, and the one to run
+make adversarial-redteam                            # sustained, and the one CI blocks on
 ```
 
 **The versioned dataset** — issue

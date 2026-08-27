@@ -31,12 +31,21 @@ nothing, and an attack that is correct and unreachable proves nothing.
 **A concurrent test might not actually overlap.** This is the one RFC-001
 section 05 calls out: *sequential tests will pass regardless*. A loop that
 submits eight turns to a thread pool and gets them back one after another is a
-sequential test wearing threads. So :func:`run_concurrently` starts every turn
-from a :class:`threading.Barrier` *and* records the interval each was in flight,
-and :attr:`Attempt.concurrent_with` names the attempts that genuinely overlapped
-it. An attempt that overlapped nothing is unscored. The barrier makes overlap
+sequential test wearing threads. So :func:`run_sustained` starts every turn from
+a :class:`threading.Barrier` *and* records the interval each was in flight, and
+:attr:`Attempt.concurrent_with` names the attempts that genuinely overlapped it.
+An attempt that overlapped nothing is unscored. The barrier makes overlap
 likely; the windows are what make it *known*, and only the second one is
 evidence.
+
+**A round that overlapped might still not have contended.** #82's addition, and
+the sharper form of the same mistake: three visitors against a pool of four
+overlap perfectly and never hand a connection from one to another, so the bleed
+has no window to happen in and the clean result is a fact about the arithmetic.
+So a round is *sustained* -- each visitor takes many turns back to back, and the
+threads free-run after the barrier rather than re-forming for each one -- and it
+reports a :class:`~chip_chat.eval.adversarial.soak.Heat` saying how hot it got
+and whether a hand-off was ever forced. That module holds the argument.
 
 **One attack's failure is one attack's failure.** A target that raises on the
 eleventh attack must not cost the other forty, so every attempt runs inside its
@@ -48,7 +57,7 @@ import threading
 import time
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Final, Protocol, runtime_checkable
 
 from chip_chat.eval.adversarial.attacks import (
@@ -59,16 +68,27 @@ from chip_chat.eval.adversarial.attacks import (
     Capability,
 )
 from chip_chat.eval.adversarial.canaries import Population, Visitor
+from chip_chat.eval.adversarial.soak import (
+    DEFAULT_ROUNDS,
+    Heat,
+    Pressure,
+    Window,
+    measure,
+    slots_of,
+)
 from chip_chat.eval.golden.run import Signal
 
 __all__ = [
     "BARRIER_TIMEOUT_SECONDS",
+    "DEFAULT_ROUNDS",
     "SIGNAL_OF",
     "Attempt",
     "Capability",
     "Control",
+    "Heat",
     "Judge",
     "Probe",
+    "Round",
     "Run",
     "Signal",
     "Target",
@@ -114,41 +134,12 @@ it leaves that gate unmeasured rather than clean.
 """
 
 
-@dataclass(frozen=True, slots=True)
-class Window:
-    """When one attempt was in flight, on the monotonic clock.
-
-    Monotonic and not wall clock: what is being computed is whether two
-    intervals overlapped, and a wall clock that steps backwards mid-run would
-    manufacture or erase an overlap. The absolute values mean nothing and are
-    never printed.
-
-    Attributes:
-        started: When the turn was handed to the target.
-        finished: When it came back, however it came back.
-    """
-
-    started: float
-    finished: float
-
-    @property
-    def duration(self) -> float:
-        """How long the turn took, in seconds."""
-        return self.finished - self.started
-
-    def overlaps(self, other: "Window") -> bool:
-        """Whether these two intervals were open at the same instant.
-
-        Args:
-            other: The other window.
-
-        Returns:
-            Whether they overlap. Half-open on both ends, so two turns that
-            merely touch -- one finishing exactly as the next starts -- do not
-            count. That is the sequential case, and calling it concurrent is
-            the mistake this whole module is built to avoid.
-        """
-        return self.started < other.finished and other.started < self.finished
+# `Window`, `Heat` and `Pressure` live in `chip_chat.eval.adversarial.soak`,
+# which imports nothing from here. What a round *was* has to be describable
+# without reference to how it was driven -- otherwise a run read back off disk
+# could not be judged -- and that module holds the vocabulary while this one
+# holds the driving. They are re-exported here so an adapter author writing a
+# `Target` imports one module rather than two.
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,21 +245,23 @@ class Attempt:
             A copy carrying them. The runner computes overlap only once every
             window is closed, which is after the attempt exists.
         """
-        return Attempt(
-            attempt_id=self.attempt_id,
-            attack_id=self.attack_id,
-            visitor_id=self.visitor_id,
-            visible=self.visible,
-            tools=self.tools,
-            wrote=self.wrote,
-            confirmed=self.confirmed,
-            card=self.card,
-            window=self.window,
-            concurrent_with=tuple(others),
-            error=self.error,
-            capabilities=self.capabilities,
-            reports=self.reports,
-        )
+        return replace(self, concurrent_with=tuple(others))
+
+    def in_round(self, index: int) -> "Attempt":
+        """This attempt, stamped with which pass of a sustained round it was.
+
+        ``attack:visitor`` is unique in a single round and repeats in a
+        sustained one, and an id that repeats is one a reader cannot chase back
+        to a turn. So the round is appended, from ``#1``.
+
+        Args:
+            index: The round, from zero.
+
+        Returns:
+            A copy under the stamped id. Called before overlaps are computed,
+            so that ``concurrent_with`` names ids that exist.
+        """
+        return replace(self, attempt_id=f"{self.attempt_id}#{index + 1}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -424,6 +417,11 @@ class Run:
             that measured nothing, and this is where that is visible.
         attempts: Every attempt, sequential and concurrent alike, in the order
             they were started.
+        heats: One per concurrent attack: how hot its round got, and whether a
+            connection was ever contended. Empty on a run holding no concurrent
+            attack, and on one read back from a harness that predates #82 --
+            which :meth:`heat_for` reports as ``None`` and the scorer treats as
+            *nothing known about the pressure* rather than as adequate.
     """
 
     target: str
@@ -432,12 +430,20 @@ class Run:
     population: Population
     controls: tuple[Control, ...]
     attempts: tuple[Attempt, ...]
+    heats: tuple[Heat, ...] = ()
 
     def control_for(self, visitor_id: str) -> Control | None:
         """The control for one visitor, or ``None`` where none was run."""
         for control in self.controls:
             if control.visitor_id == visitor_id:
                 return control
+        return None
+
+    def heat_for(self, attack_id: str) -> Heat | None:
+        """How hot ``attack_id``'s round got, or ``None`` where none was recorded."""
+        for heat in self.heats:
+            if heat.attack_id == attack_id:
+                return heat
         return None
 
     @property
@@ -453,11 +459,33 @@ class Run:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class Round:
+    """One concurrent attack, run, and how hot the running of it got.
+
+    The two halves are inseparable and that is why they are one object. Every
+    attempt in :attr:`attempts` is a fact about the target; :attr:`heat` is the
+    fact about the *round* that says whether those facts are worth anything,
+    and a caller handed only the first would have no way to tell a clean result
+    from a round that could not have produced any other.
+
+    Attributes:
+        attempts: Every turn taken, in the order the round produced them, each
+            carrying its window and the siblings it genuinely overlapped.
+        heat: What the round achieved. See
+            :class:`~chip_chat.eval.adversarial.soak.Heat`.
+    """
+
+    attempts: tuple[Attempt, ...]
+    heat: Heat
+
+
 def run_suite(
     suite: AdversarialSuite,
     target: Target,
     *,
     only: Sequence[str] | None = None,
+    rounds: int = 1,
     barrier_timeout: float = BARRIER_TIMEOUT_SECONDS,
 ) -> Run:
     """Run every attack against every visitor, and the concurrent ones together.
@@ -475,10 +503,16 @@ def run_suite(
         suite: The attacks.
         target: What to attack. Its ``population`` is who attacks it.
         only: Attack ids to run, for iterating on one attack. ``None`` runs all.
+        rounds: Turns per visitor in each concurrent attack's round. One is the
+            single burst #30 shipped; more is the *sustained* run #82 asks for,
+            and :data:`~chip_chat.eval.adversarial.soak.DEFAULT_ROUNDS` is the
+            argument for a number. It changes nothing about the sequential
+            attacks, which have no hand-off to force.
         barrier_timeout: How long a concurrent round waits for every visitor.
 
     Returns:
-        The run, controls first.
+        The run, controls first, carrying one
+        :class:`~chip_chat.eval.adversarial.soak.Heat` per concurrent attack.
     """
     wanted = None if only is None else set(only)
     population = target.population
@@ -492,10 +526,15 @@ def run_suite(
             _attempt(target, _probe(attack, population, index))
             for index in range(len(population))
         )
+    heats: list[Heat] = []
     for attack in suite.concurrent:
         if wanted is not None and attack.attack_id not in wanted:
             continue
-        attempts.extend(run_concurrently(attack, target, barrier_timeout=barrier_timeout))
+        round_ = run_sustained(
+            attack, target, rounds=rounds, barrier_timeout=barrier_timeout
+        )
+        attempts.extend(round_.attempts)
+        heats.append(round_.heat)
     return Run(
         target=target.name,
         capabilities=target.capabilities,
@@ -503,6 +542,7 @@ def run_suite(
         population=population,
         controls=controls,
         attempts=tuple(attempts),
+        heats=tuple(heats),
     )
 
 
@@ -514,59 +554,147 @@ def run_concurrently(
 ) -> tuple[Attempt, ...]:
     """Run one attack from every visitor at the same instant, and prove it.
 
-    The test RFC-001 section 05 asks for. Session variables and pooled
-    connections bleed when a connection goes back to the pool with ``demo_id``
-    still set and is handed to the next request before it is reassigned -- and
-    the window in which that is observable is exactly the window in which two
-    requests are in flight together. A test that ran these turns back to back
-    would pass on a pool that bleeds every single time.
-
-    Two mechanisms, and only the second one is evidence:
-
-    * A :class:`threading.Barrier` holds every thread until all of them are
-      ready, so the turns are *handed to the target* as close to simultaneously
-      as the runtime allows. This makes overlap likely.
-    * Each thread stamps the monotonic clock either side of its turn, and the
-      attempts are then told which of their siblings they actually overlapped.
-      This makes overlap *known*. An attempt overlapping nothing is scored
-      unscored by :mod:`chip_chat.eval.adversarial.scoring`, however
-      enthusiastically it was launched.
+    One burst: the single round #30 shipped, kept because it is the smallest
+    thing that can express the question and the shape every test of this
+    machinery is written against. :func:`run_sustained` is the same round held
+    open, and this is that function with ``rounds=1`` and the heat dropped.
 
     Args:
         attack: The attack. Every visitor runs this same one.
         target: What to attack. Its ``population`` is who attacks it.
-        barrier_timeout: How long to wait at the line before giving up. A
-            broken barrier is recorded as an error on every attempt in the
-            round rather than retried; see :data:`BARRIER_TIMEOUT_SECONDS`.
+        barrier_timeout: How long to wait at the line before giving up.
 
     Returns:
         One attempt per visitor, in population order, each carrying its window
         and the siblings it overlapped.
     """
+    return run_sustained(
+        attack, target, rounds=1, barrier_timeout=barrier_timeout
+    ).attempts
+
+
+def run_sustained(
+    attack: Attack,
+    target: Target,
+    *,
+    rounds: int = DEFAULT_ROUNDS,
+    barrier_timeout: float = BARRIER_TIMEOUT_SECONDS,
+) -> Round:
+    """Run one attack from every visitor at once, for as long as it takes to mean it.
+
+    The test RFC-001 section 05 asks for, run the way #82 asks for it. Session
+    variables and pooled connections bleed when a connection goes back to the
+    pool with ``demo_id`` still set and is handed to the next request before it
+    is reassigned -- and the window in which that is observable is exactly the
+    window in which two requests are in flight together. A test that ran these
+    turns back to back would pass on a pool that bleeds every single time.
+
+    Four mechanisms, and the first is the only one #30 had:
+
+    * A :class:`threading.Barrier` holds every visitor's thread until all of
+      them are ready, so the first turns are *handed to the target* as close to
+      simultaneously as the runtime allows. This makes overlap likely.
+    * Each thread stamps the monotonic clock either side of every turn, and the
+      attempts are then told which of their siblings they actually overlapped.
+      This makes overlap *known*. An attempt overlapping nothing is scored
+      unscored by :mod:`chip_chat.eval.adversarial.scoring`, however
+      enthusiastically it was launched.
+    * After the barrier the threads **free-run**, each taking ``rounds`` turns
+      back to back with no further rendezvous. That is deliberate and it is the
+      difference between hot and merely simultaneous: a barrier before every
+      round would have every thread idling at the line for the slowest one, so
+      the pool would drain between rounds and each burst would find it empty.
+      Threads that never re-synchronise drift out of step, which is what keeps
+      checkouts and returns interleaving rather than marching.
+    * The round reports its own :class:`~chip_chat.eval.adversarial.soak.Heat`,
+      including whether more turns were offered at once than the target has
+      connections to serve them. A clean round through a pool nobody had to
+      share is unscored; see :mod:`chip_chat.eval.adversarial.soak`.
+
+    Args:
+        attack: The attack. Every visitor runs this same one, every round.
+        target: What to attack. Its ``population`` is who attacks it, and its
+            declared pool size -- where it declares one -- is what says whether
+            a hand-off was forced.
+        rounds: Turns per visitor, back to back after the barrier. One is the
+            single burst; :data:`~chip_chat.eval.adversarial.soak.DEFAULT_ROUNDS`
+            is the argument for a sustained number.
+        barrier_timeout: How long to wait at the line before giving up. A
+            broken barrier is recorded as an error on every attempt in the
+            round rather than retried; see :data:`BARRIER_TIMEOUT_SECONDS`.
+
+    Returns:
+        The round: every attempt, each carrying its window and the siblings it
+        overlapped, and the heat measured over all of them.
+
+    Raises:
+        ValueError: If ``rounds`` is below one. A round nobody takes is not a
+            gentler test than a round somebody takes; it is no test, and it
+            would report a clean gate.
+    """
+    if rounds < 1:
+        raise ValueError("a concurrent round needs at least one turn per visitor")
     population = target.population
     barrier = threading.Barrier(len(population), timeout=barrier_timeout)
-    probes = [_probe(attack, population, index) for index in range(len(population))]
 
-    def _one(probe: Probe) -> Attempt:
+    def _stamped(attempt: Attempt, number: int) -> Attempt:
+        """The round stamp, and only where there is more than one to tell apart.
+
+        A single burst keeps ``attack:visitor``, which is what #30 shipped and
+        what every other test of this machinery joins on.
+        """
+        return attempt.in_round(number) if rounds > 1 else attempt
+
+    def _visitor(index: int) -> list[Attempt]:
+        probe = _probe(attack, population, index)
         try:
             barrier.wait()
         except threading.BrokenBarrierError:
-            return Attempt(
-                attempt_id=probe.attempt_id,
-                attack_id=probe.attack.attack_id,
-                visitor_id=probe.visitor.visitor_id,
-                error=(
-                    "the concurrent round never started together: not every "
-                    f"visitor reached the barrier within {barrier_timeout}s"
-                ),
-                capabilities=target.capabilities,
-                reports=target.reports,
-            )
-        return _attempt(target, probe, timed=True)
+            stranded = _stranded(probe, target, barrier_timeout)
+            return [_stamped(stranded, number) for number in range(rounds)]
+        return [
+            _stamped(_attempt(target, probe, timed=True), number)
+            for number in range(rounds)
+        ]
 
     with ThreadPoolExecutor(max_workers=len(population)) as pool:
-        attempts = list(pool.map(_one, probes))
-    return _with_overlaps(attempts)
+        by_visitor = list(pool.map(_visitor, range(len(population))))
+
+    # Interleaved rather than concatenated, so the attempts read in the order
+    # the round actually produced them rather than visitor by visitor -- which
+    # is how a reader chasing a disclosure back to what was in flight beside it
+    # wants them, and how the sequential attempts above are already ordered.
+    attempts = [column[number] for number in range(rounds) for column in by_visitor]
+    overlapped = _with_overlaps(attempts)
+    return Round(
+        attempts=overlapped,
+        heat=measure(
+            attack.attack_id,
+            rounds=rounds,
+            windows=[attempt.window for attempt in overlapped],
+            pressure=Pressure(offered=len(population), slots=slots_of(target)),
+        ),
+    )
+
+
+def _stranded(probe: Probe, target: Target, barrier_timeout: float) -> Attempt:
+    """One attempt from a round whose barrier broke.
+
+    Recorded rather than retried. A barrier that broke means the turns did not
+    start together, and a concurrency result from a round that did not start
+    together is the exact thing this module is arranged to refuse to produce.
+    """
+    return Attempt(
+        attempt_id=probe.attempt_id,
+        attack_id=probe.attack.attack_id,
+        visitor_id=probe.visitor.visitor_id,
+        error=(
+            "the concurrent round never started together: not every visitor "
+            f"reached the barrier within {barrier_timeout}s"
+        ),
+        capabilities=target.capabilities,
+        reports=target.reports,
+    )
 
 
 def _probe(attack: Attack, population: Population, index: int) -> Probe:
@@ -645,19 +773,4 @@ def _attempt(target: Target, probe: Probe, *, timed: bool = False) -> Attempt:
         )
     if not timed:
         return attempt
-    finished = time.monotonic()
-    return Attempt(
-        attempt_id=attempt.attempt_id,
-        attack_id=attempt.attack_id,
-        visitor_id=attempt.visitor_id,
-        visible=attempt.visible,
-        tools=attempt.tools,
-        wrote=attempt.wrote,
-        confirmed=attempt.confirmed,
-        card=attempt.card,
-        window=Window(started=started, finished=finished),
-        concurrent_with=attempt.concurrent_with,
-        error=attempt.error,
-        capabilities=attempt.capabilities,
-        reports=attempt.reports,
-    )
+    return replace(attempt, window=Window(started=started, finished=time.monotonic()))

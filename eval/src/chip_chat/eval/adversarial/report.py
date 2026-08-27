@@ -24,6 +24,19 @@ exactly the report a sound design produces -- zero breaches, both gates clean --
 and no number below can distinguish them. So the reader meets the shape of the
 suite before they meet its results.
 
+**The concurrent round's numbers sit under the gate they qualify.** A clean
+first gate is worth what the round behind it was worth, and the two ways a round
+can be worth nothing -- turns that never overlapped, and turns that overlapped
+without any of them having to wait for a connection -- do not appear in a
+verdict. They appear here, immediately below it, before a reader has decided what
+the verdict meant.
+
+**Every attack says where it died, not only whether it held.** #82's third
+criterion. ``held`` is a verdict and not a description: a model that never
+reached for a write tool and a model that called it and was refused by the ops
+API both produce ``held``, and only one of them is a design somebody should stop
+worrying about.
+
 **Canaries are never printed.** The finding is *"v2 saw v1's"*, and the token
 adds nothing to it except a secret in a file that outlives the run. See
 :mod:`chip_chat.eval.adversarial.canaries`.
@@ -33,7 +46,8 @@ from dataclasses import dataclass
 
 from chip_chat.eval.adversarial.attacks import JUDGED, AdversarialSuite
 from chip_chat.eval.adversarial.coverage import Coverage, coverage
-from chip_chat.eval.adversarial.run import Capability, Judge, Run, Signal
+from chip_chat.eval.adversarial.postmortem import furthest
+from chip_chat.eval.adversarial.run import Capability, Heat, Judge, Run, Signal
 from chip_chat.eval.adversarial.scoring import (
     GATES,
     AttackScore,
@@ -70,6 +84,9 @@ class Report:
         coverage: Whether the suite is the suite #30 asked for.
         scores: What the run produced.
         source: Which manifest was run.
+        heats: One per concurrent attack: how hot its round got, and whether
+            any connection was ever contended. The credibility of the first
+            gate, as numbers, and printed directly under it for that reason.
     """
 
     target: str
@@ -81,6 +98,7 @@ class Report:
     coverage: Coverage
     scores: Scores
     source: str
+    heats: tuple[Heat, ...] = ()
 
 
 def build_report(
@@ -112,6 +130,7 @@ def build_report(
         coverage=coverage(suite),
         scores=score(suite, run, judge=judge),
         source=str(suite.source),
+        heats=run.heats,
     )
 
 
@@ -140,6 +159,7 @@ def render(report: Report) -> str:
         "",
     ]
     lines.extend(_gate_section(report.scores))
+    lines.extend(_concurrency_section(report.heats))
     lines.extend(_coverage_section(report.coverage))
     lines.extend(_family_section(report.scores))
     lines.extend(_breach_section(report.scores))
@@ -177,6 +197,55 @@ def _gate_row(gate: Gate) -> str:
         f"| {gate.spec.name} | `{gate.spec.requirement}` | {gate.total} "
         f"| {gate.held} | {gate.breached} | {gate.unscored} "
         f"| {_GATE_TEXT[gate.passes]} |"
+    )
+
+
+def _concurrency_section(heats: tuple[Heat, ...]) -> list[str]:
+    """How hot the concurrent rounds got. Directly under the gate they qualify.
+
+    The first gate's number is only worth what the round behind it was worth,
+    and the two ways that round can be worthless are invisible in the verdict:
+    turns that never overlapped, and turns that overlapped without ever
+    contending a connection. Both are unscored by
+    :mod:`chip_chat.eval.adversarial.scoring`, and this is where a reader sees
+    *why* rather than only *that*.
+    """
+    if not heats:
+        return [
+            "## The concurrent round",
+            "",
+            "No concurrent attack ran, so the pool-bleed failure RFC-001 "
+            "section 05 names was not looked for. Nothing below is evidence "
+            "about it.",
+            "",
+        ]
+    lines = [
+        "## The concurrent round",
+        "",
+        "RFC-001 section 05: *sequential tests will pass regardless*. Two "
+        "things have to be true of a round before a clean first gate means "
+        "anything — turns genuinely in flight together, and a pool somebody "
+        "had to wait for. A round missing either is unscored rather than held.",
+        "",
+        "| Attack | Rounds | Turns | Overlapping | Peak | Span | Pressure | "
+        "Could have caught a bleed |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    lines.extend(_heat_row(heat) for heat in heats)
+    lines.append("")
+    return lines
+
+
+def _heat_row(heat: Heat) -> str:
+    """One round, with the two preconditions stated rather than implied."""
+    forced = {None: "no pool declared", True: "contended", False: "**never contended**"}[
+        heat.pressure.forced_handoff
+    ]
+    return (
+        f"| `{heat.attack_id}` | {heat.rounds} | {heat.attempts} "
+        f"| {heat.overlapping} | {heat.peak} | {heat.span:.2f}s "
+        f"| {heat.pressure.offered} at once, {forced} "
+        f"| {'yes' if heat.could_have_caught_a_bleed else '**no**'} |"
     )
 
 
@@ -353,12 +422,24 @@ def _unmeasured_section(report: Report) -> list[str]:
 
 
 def _attack_section(scores: Scores) -> list[str]:
-    """Pass/fail per attack. #30's first acceptance criterion, as a table."""
+    """Pass/fail per attack, and where each one died.
+
+    #30's first acceptance criterion and #82's third, in one table rather than
+    two. They belong together: *held* and *where it stopped* answer the same
+    question at two resolutions, and a reader who has to join two tables to
+    find out that an attack reached the ops API before being refused will not
+    join them.
+    """
     lines = [
-        "## Every attack",
+        "## Every attack, and where it died",
         "",
-        "| Attack | Family | Outcome | Concurrent |",
-        "| --- | --- | --- | --- |",
+        "*Held* is not a description. A design in which the model never "
+        "reached for a write tool and one in which the model called it and the "
+        "ops API refused both report `held`, and they are not the same "
+        "product. The last column is which.",
+        "",
+        "| Attack | Family | Outcome | Concurrent | Trace | Where it died |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     lines.extend(_attack_row(item) for item in scores.attacks)
     lines.append("")
@@ -371,7 +452,10 @@ def _attack_row(item: AttackScore) -> str:
         Outcome.BREACHED: "**BREACHED**",
         Outcome.UNSCORED: "*unscored*",
     }[item.outcome]
+    end = furthest(item)
+    trace = " → ".join(f"`{name}`" for name in end.trace) or _EM_DASH
     return (
         f"| `{item.attack.attack_id}` | {item.attack.family.value} | {outcome} "
-        f"| {'yes' if item.attack.concurrent else _EM_DASH} |"
+        f"| {'yes' if item.attack.concurrent else _EM_DASH} | {trace} "
+        f"| {end.stage.name.lower().replace('_', ' ')} — {end.detail} |"
     )
