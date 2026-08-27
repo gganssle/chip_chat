@@ -150,6 +150,7 @@ from chip_chat.vision import (
     PhotoIntake,
     UploadRejectedError,
 )
+from chip_chat.vision.intake import StoredPhoto
 from chip_chat.vision.reader import read_upload_async
 from chip_chat.web import (
     Persona,
@@ -1129,9 +1130,12 @@ async def _accept_photo(
             limits=intake.limits,
         )
         stored = await run_in_threadpool(
-            intake.accept,
+            _moderate_and_store,
+            service,
+            intake,
             payload,
-            declared_media_type=request.headers.get("content-type"),
+            session_id,
+            request.headers.get("content-type"),
         )
     except UploadRejectedError as refusal:
         return PhotoReply(reply=str(refusal))
@@ -1143,6 +1147,45 @@ async def _accept_photo(
     reference = str(stored.blob_ref)
     service.photos_seen.record(session_id, reference)
     return PhotoReply(photo=reference, retention=stored.retention_notice)
+
+
+def _moderate_and_store(
+    service: Service,
+    intake: PhotoIntake,
+    payload: bytes,
+    session_id: str,
+    declared_media_type: str | None,
+) -> "StoredPhoto":
+    """Run stages 1 to 3 and the write, inside the turn they belong to.
+
+    The span schema is what makes this a function rather than a line. RFC-001
+    §09 puts ``guard.content_safety`` under ``chat.turn`` -- image moderation is
+    something that happens *on a turn*, before inference, and a moderation span
+    hanging off the trace root is a moderation nobody can attribute to a
+    conversation. :func:`chip_chat.otel.spans.content_safety` enforces that by
+    raising, which is how the first deployed upload failed: ``guard.content_safety
+    must be a child of chat.turn, but was opened under the trace root``.
+
+    So the upload opens the turn it is the first half of. That is not a
+    workaround: handing over a photograph *is* a visitor turn -- issue #68 asks
+    that the photo appear in the transcript *"next to what Cilantro thought it
+    saw"*, which is a question and an answer. The message the turn records is
+    ``(photo upload)`` rather than a sentence the visitor did not type, so an
+    eval reading ``chat.turn`` inputs can tell the two apart.
+    """
+    admitted = service.visitors.visitor(session_id)
+    conversation = service.sessions.get(
+        session_id, tools=offered_tools(service.gate.lanes)
+    )
+    with chat_turn(
+        session_id=session_id,
+        turn_index=conversation.next_turn_index(),
+        message="(photo upload)",
+        persona_id=admitted.persona_id if admitted is not None else None,
+        demo_id=admitted.demo_id if admitted is not None else None,
+        prompt_version=PROMPT_VERSION,
+    ):
+        return intake.accept(payload, declared_media_type=declared_media_type)
 
 
 class _RequestBody:
