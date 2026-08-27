@@ -495,11 +495,61 @@ The verify job is read-only and safe to run at any time. Both exit with a
 machine-readable verdict, so the numbers they asserted on are quotable without
 opening the workspace.
 
+### 9.1 The sentences, read by hand
+
+The second acceptance criterion asks for a sample of personas *reviewed for
+plausibility and for not recommending things they already order constantly*. The
+job asserts the machine-checkable half — **0 rows recommend anything the visitor
+has ever ordered, across all 138 scored visitors**, which is stronger than the
+criterion asks and is the emptiness join §5 argues for — and prints the persona
+fixtures' own rows for the other half. Here they are, and here is the reading.
+
+| Persona | Rationale | Plausible? |
+| --- | --- | --- |
+| `regular` #3 | *You order Chicken Bowl in most of your orders, and people who do tend to add Chips.* | **Yes**, and it is the shape RFC-001 §06 asks for: their habit named, the leap named, one sentence. |
+| `regular` #1 | *You order Steak Burrito in most of your orders, and people who do tend to add Chips.* | **Yes.** Different seed, same suggestion, and the sentence says why they differ. |
+| `lapsed` #3 | *You order Jarritos Guava in most of your orders, and people who do tend to add Chicken Bowl.* | **Yes**, though see the finding below about the seed. |
+| `newcomer` #1 | *You order Jarritos Guava **now and then**, and people who do tend to add Chicken Bowl.* | **Yes**, and this is the phrase band earning its place: a newcomer's seed share is low and the sentence hedges instead of claiming a habit they do not have. |
+| `regular` #2 | *You order Chips now and then, and people who do tend to add Steak Burrito.* | **Yes**, at score 0.0146 — an honest weak suggestion rather than a confident one. |
+
+Three findings, none of them a bug and all of them worth writing down.
+
+**The sentence never overclaims, because the phrase is measured.** `SHARE_PHRASES`
+picks *in most of your orders* or *now and then* from the seed's actual share,
+so the same template reads differently for a Regular and a Newcomer. That is
+`usual_order.confidence`'s argument applied to a different field, and the two
+personas above are it working.
+
+**Jarritos Guava seeds 79 of 160 recommendations**, which is the finding to
+watch. It is the argmax for half the population, so half the sentences open the
+same way. Nothing is wrong — it is the seed with the strongest weighted lift for
+those visitors — but a conversation in which every recommendation begins *you
+order Jarritos Guava* would read as a tic rather than as personalization. On a
+ten-item catalogue there is nowhere else for the argmax to go; on the real menu
+there is. Worth re-reading after the catalogue grows rather than fixed by
+diversifying the seed now.
+
+**Four distinct first-ranked items across 138 visitors** — CMG-2 (57), CMG-101
+(49), CMG-1002 (42), CMG-2022 (12). That clears the not-a-top-sellers-list check
+the notebook makes, and only just: four is more than one, and on a menu of ten it
+is not a wide spread. Same catalogue caveat, same conclusion.
+
+**Eight of twenty-eight fixtures have recommendations at all.** The other twenty
+have tried everything the model has a pair for, which is §5's honest absence
+rather than a gap — and §6's note about 138 of 500 is the same fact at
+population scale.
+
 ## 10. What this does not do
 
-- **It has not been run.** See the status note at the top. Four criteria about a
-  live system are four claims about an unrun job until `recommender-verify` has
-  returned SUCCESS against `dbw-chip-chat`.
+- **It cannot show that it beats popularity on this catalogue.** §6: ten menu
+  items, twelve pairs above the support floor, and the model's novel hit rate
+  equal to the baseline's to six places. PRD P2's discriminator is right and
+  there is not enough menu here for it to say anything. Nothing in this
+  document claims the model is better than a top-sellers list on the live data,
+  because the live data cannot tell.
+- **Half the sentences open on the same seed.** §9.1: Jarritos Guava is the
+  argmax for 79 of 160 recommendations. Not wrong, and not fixed by
+  diversifying the seed on a menu this size.
 - **No model serving endpoint.** The issue is explicit that the serving path
   reads a table, and an endpoint would also be an always-on cost — the trap
   `databricks_compute.tf` exists to close.
