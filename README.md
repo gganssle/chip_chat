@@ -104,6 +104,12 @@ not installed yet.
 
 ## Status
 
+> **⏳ The Snowflake trial expires 2026-09-24.** Started 2026-08-25 on AWS us-east-2, Enterprise,
+> 30 days or roughly $400 of credits — whichever runs out first. The serving layer is the account
+> and action lanes, so the clock is the demo's clock.
+> [`docs/snowflake-account.md`](docs/snowflake-account.md) §10 has the burn against the allowance
+> and the plan for the morning of the 25th.
+
 Phase 0 is done and the **week-one ugly slice is deployed**: one end-to-end path — a menu
 question, an account question, a simulated order — running on a literal three-item menu and one
 hardcoded account, behind the inline spend cap, on the Container Apps default FQDN. Every turn

@@ -17,6 +17,13 @@ Everything below is `snowflake/sql/`. Nothing was clicked in Snowsight, which is
 the fourth acceptance criterion and the reason the other three are commands
 rather than screenshots.
 
+> ## ⏳ The trial expires **2026-09-24**
+>
+> Started 2026-08-25 on **AWS us-east-2**, Enterprise, 30 days or roughly $400
+> of credits, whichever runs out first. Section 10 has the burn against that
+> allowance and the plan for the morning of the 25th, written while it is still
+> a choice. [#40].
+
 ## 1. The shape
 
 ```
@@ -194,6 +201,19 @@ Since [#88] a rebuild is one command short of green, on purpose:
 put it back, and the run ends `29/30` with the failing check naming
 `make snowflake-cap QUOTA=<credits>`. Section 7 says why the number cannot live
 in a file.
+
+**And it is one thing short of safe, which is a different sentence.** A rebuild
+restores every *object* in this repository and no *rows* at all: the population
+and the catalogue come back from `make snowflake-load` over a landing zone, and
+that landing zone is **not in this repository**. A rebuild run without one in
+hand drops the whole synthetic population and eighteen months of generated
+history, and the gold marts computed against that generation end up describing
+customers who no longer exist — which is not an error, it is four tables of
+plausible numbers about nobody. So the command above was **not** re-run on
+2026-08-27; what was run was `make snowflake-apply`, which is idempotent, which
+created the one table this account was missing, and which is the half of the
+claim that can be exercised without a landing zone to hand. Section 10 says
+where the landing zone has to live before that stops being a caveat.
 
 ## 4. What an apply may and may not do
 
@@ -482,8 +502,13 @@ adding it to the `ALTER` in good faith.
   schema, so neither also meant re-running a grants file nobody remembers is
   required, and neither did. See
   [docs/snowflake-schema.md](snowflake-schema.md).
-- **No row access policies on real tables.** [#43]. The throwaway one in
-  `verify` proves a fact about the roles and is dropped in the same run.
+- **~~No row access policies on real tables.~~** [#43] attached two, to ten
+  tables, and `make snowflake-verify` now checks both the coverage and the
+  behaviour against the live account. The throwaway policy in `verify` is still
+  there and still throwaway: it proves a fact about the *roles* — that
+  `CHIP_CHAT_WRITE` holds neither `APPLY ROW ACCESS POLICY` nor ownership of
+  anything — and it is dropped in the same run. See
+  [docs/snowflake-isolation.md](snowflake-isolation.md).
 - **~~No stored procedures.~~** [#46] added four, in
   `CHIP_CHAT.ACCOUNTS`, all `EXECUTE AS CALLER`. `USAGE ON FUTURE PROCEDURES IN
   SCHEMA CHIP_CHAT.ACCOUNTS` had already been granted to `CHIP_CHAT_WRITE`
@@ -492,9 +517,12 @@ adding it to the `ALTER` in good faith.
   anticipated — `USAGE ON SEQUENCES`, because caller's rights means the caller
   needs every privilege the body uses, and an owner's-rights procedure would
   have hidden that by needing none of them.
-- **No `SNOWFLAKE.CORTEX_USER` grant.** The Cortex Analyst semantic view is
-  [#45]'s, and the read role's grant list is the security artefact of this issue
-  — every line in it should be one that something already built needs.
+- **~~No `SNOWFLAKE.CORTEX_USER` grant.~~** [#45] built the semantic view, so
+  `CHIP_CHAT_READ` now holds `USAGE` on the `SNOWFLAKE.CORTEX_USER` database
+  role and `SELECT` on `CHIP_CHAT.ACCOUNTS.ACCOUNT_LANE`. The rule the original
+  sentence was defending still stands and is why the grant waited: the read
+  role's grant list is the security artefact of this issue, and every line in it
+  should be one that something already built needs.
 - **No cap on the whole trial in the numbered apply.** Section 7. The two daily
   monitors are there and every apply creates them; the cap on the account needs a
   quota read off the remaining balance, so it is `make snowflake-cap
@@ -512,10 +540,105 @@ adding it to the `ALTER` in good faith.
   would zero its own counter, and — from [#42] — that every visitor-scoped table
   carries `demo_id` and every column carries a comment.
 
+## 10. The trial clock, the burn against it, and the morning of the 25th
+
+Issue [#40] is the one ticket in this phase that is mostly bookkeeping, and it
+is here rather than in a calendar because a calendar reminder is a thing one
+person has and a repository is a thing everybody reads.
+
+| | |
+| --- | --- |
+| **Started** | **2026-08-25** |
+| **Expires** | **2026-09-24**, or $400 of credits, whichever comes first |
+| Edition | Enterprise |
+| Cloud and region | AWS **us-east-2** (Ohio) — see [`decisions/snowflake-region.md`](decisions/snowflake-region.md) |
+| Account name / locator / org | `GS74649` / `HQ72718` / `LLMPCWE` |
+| Cortex Analyst | **confirmed callable**, by cross-region inference. Seventeen questions answered or refused on 2026-08-27 |
+
+### What has gone, and what one of anything costs
+
+`SNOWFLAKE.ACCOUNT_USAGE.METERING_DAILY_HISTORY` on the afternoon of 2026-08-27,
+three days in: **6.3 credits**, split almost exactly evenly between Cortex
+Analyst and warehouse, plus about 1.1 more for the seventeen questions this
+day's work asked — that view lags by up to two hours and the resource monitors
+do not, which is worth knowing before reconciling two numbers that disagree. At
+Enterprise's roughly $3 a credit the $400 allowance is about **130 credits**, so
+something under 6% is gone and 28 days remain.
+
+The per-unit numbers behind any estimate of the rest, each measured rather than
+quoted:
+
+| | credits | how it was measured |
+| --- | --- | --- |
+| One account-lane question | **0.067** ≈ $0.20 | 47 Analyst requests billed 3.149 credits — `CORTEX_ANALYST_USAGE_HISTORY`, 2026-08-27. That is Snowflake's published 67 credits per 1,000 messages, confirmed |
+| The SQL that question then runs | ~0.00006 | 225 ms of an X-Small, which bills at one credit an hour |
+| One full golden-set run | **~0.7** ≈ $2 | 10 of `eval/golden/cases.json`'s 34 cases route to `ask_account_question` |
+| One `make snowflake-verify` | **~0.5** ≈ $1.50 | `SHOW RESOURCE MONITORS` before and after a full run: serving 1.23 → 1.72, publish 0.35 → 0.37. Real time, unlike `ACCOUNT_USAGE` |
+| One `make snowflake-demo-reset` | negligible | one transaction per aged visitor on the publish warehouse |
+
+**The inference is the bill, not the compute.** An account question costs three
+thousand times what running its answer costs. Every instinct this repository has
+about idleness — sixty-second suspend, no query acceleration, a statement
+timeout per lane — bounds the cheap half. Nothing in section 7 bounds Cortex,
+because a resource monitor does not count serverless (section 7, last
+paragraph), and Cortex Analyst is serverless.
+
+**Which is why the daily monitors do not bound the trial.** The two daily
+quotas add to 6 credits a day; 28 days of them is 168 credits against a
+remaining balance of about 123. The ceilings in section 7 are there to catch a
+loop, and they do. They are not a budget, and `make snowflake-cap QUOTA=<n>` —
+still unrun, still a named failure in `make snowflake-verify` — is.
+
+The honest read on the remaining phases is that the eval work is the spend.
+Phases 8 and 9 run the golden set and the adversarial suites repeatedly, and at
+$2 a full pass the arithmetic only bites in the hundreds of passes. **The thing
+to watch is not a sweep, it is a loop**: an agent retrying `ask_account_question`
+in a tight loop spends the trial in an afternoon and violates no setting in this
+document.
+
+### Day 30, decided now rather than on the 24th
+
+**The plan is rebuild on demand, and it is the plan because the repository was
+already built for it.** Everything in this account is checked-in SQL, `make
+snowflake-rebuild` tears it down and builds it back, and [#41]'s fourth
+acceptance criterion exists so that sentence is a command rather than a hope.
+The three options, and why the other two are not it:
+
+- **Convert to paid.** Enterprise on-demand at roughly $3 a credit. At a
+  plausible public-demo load — say 200 account questions a month — that is
+  ~13 credits of Cortex plus warehouse, comfortably inside [#88]'s $150/month.
+  Worth doing *if the demo is still being shown*. It is a decision about the
+  demo's life, not about Snowflake, so it should not be made by a deadline.
+- **Tear down and stop.** Cheapest, and it silently amputates one lane: the
+  knowledge lane keeps answering from Azure AI Search while the account lane
+  starts refusing everything, which is a worse public artifact than a URL that
+  is plainly off.
+- **Rebuild on demand.** A fresh trial or a paid account, `make
+  snowflake-apply`, `make snowflake-load`, `make snowflake-verify`. Roughly
+  fifteen minutes and about a credit.
+
+**Rebuild on demand has exactly one prerequisite, and this repository failed it
+once already.** The rebuild needs the *landing zone the population came from* —
+the harvested catalogue and the generated accounts — because the gold marts were
+computed against that generation and a second generation would restore visitors
+to states that never existed. On 2026-08-27 no such directory was on disk in
+this checkout, and the symptom was not an error: `demo_visitor_baseline` had
+been created by an apply *after* the load, nothing had filled it, and [#47]'s
+nightly reset would have aged nobody out for as long as nobody looked. It was
+recovered from the live `demo_visitors`, which was faithful only because no
+visitor had ever written through [#46]'s procedures, so the table still held the
+loaded generation exactly. That is luck, and it is not available twice. `make
+snowflake-verify` now fails on an unfilled baseline by name, under [#47], and
+**the landing zone belongs in durable storage before this trial ends** — a
+generated population that exists only in one agent's working directory and in
+one Snowflake account is a population with no copies.
+
 [#39]: https://github.com/gganssle/chip_chat/issues/39
+[#40]: https://github.com/gganssle/chip_chat/issues/40
 [#41]: https://github.com/gganssle/chip_chat/issues/41
 [#42]: https://github.com/gganssle/chip_chat/issues/42
 [#43]: https://github.com/gganssle/chip_chat/issues/43
 [#45]: https://github.com/gganssle/chip_chat/issues/45
 [#46]: https://github.com/gganssle/chip_chat/issues/46
+[#47]: https://github.com/gganssle/chip_chat/issues/47
 [#88]: https://github.com/gganssle/chip_chat/issues/88

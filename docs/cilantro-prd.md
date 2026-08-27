@@ -115,11 +115,19 @@ Cilantro PRD
 
  | Turns to reorder, for the Regular persona | 1 | Product analytics 
 
- | Median turn latency | < 2 s | Application Insights 
+ | Median turn latency — every lane but the account lane | < 2 s | Application Insights 
 
- | 95th percentile turn latency | < 4 s | Application Insights 
+ | 95th percentile turn latency — every lane but the account lane | < 4 s | Application Insights 
+
+ | Median turn latency — **account lane** | < 5 s *(was < 2 s)* | Application Insights 
+
+ | 95th percentile turn latency — **account lane** | < 8 s *(was < 4 s)* | Application Insights 
 
  | Cost per conversation | < $0.05 | Arize + cost dashboard 
+
+ The four latency rows were two until 27 August 2026, and they said under 2 s and under 4 s for every turn of every lane. Those numbers were set against a serving layer co-located with the app. The Snowflake trial was created on AWS us-east-2, where Cortex Analyst is not natively available and reaches the account lane by cross-region inference instead — a Snowflake account's region is fixed at signup, the trial was kept deliberately, and the concession was made in Phase 4 rather than discovered in Phase 9. See `docs/decisions/snowflake-region.md`, which carries the measurement and the arithmetic; GH #104 is the decision.
+
+ What was measured, on 27 August 2026, over seventeen questions: the account lane's Cortex Analyst call has a **2.97 s median** and a **3.93 s p95** of Snowflake's own reported service time, and the SQL it returns then executes in a median of 225 ms. The revised targets are that measurement plus the same budget for the rest of the turn — the model call, the guards and the render — that the original targets implied for a whole turn. Nothing else was given away, and no other lane's target moved. The go/no-go in GH #86 scores against these numbers, not the originals.
 
  06
 

@@ -5,9 +5,18 @@ the expensive overnight thinking; Snowflake answers in the conversation
 (RFC-001 §03). This package holds the account itself as checked-in SQL, plus the
 code that applies it and the code that checks it is still true.
 
-The account is live: a 30-day Enterprise trial started **2026-08-25**, capped at
-roughly $400 of credits, whichever comes first. That deadline is the reason
-almost every design choice here is about idleness rather than about speed.
+The account is live: a 30-day Enterprise trial started **2026-08-25** and
+**expiring 2026-09-24**, capped at roughly $400 of credits, whichever comes
+first. That deadline is the reason almost every design choice here is about
+idleness rather than about speed. `docs/snowflake-account.md` §10 has the burn
+against the allowance, what one of anything costs, and the plan for day 30 —
+which is *rebuild on demand*, and which depends on the landing zone that
+produced the population still existing.
+
+It runs on **AWS us-east-2**, where Cortex Analyst is not natively available and
+reaches the account lane by cross-region inference instead. That was decided
+deliberately and it moved the PRD's turn-latency targets:
+`docs/decisions/snowflake-region.md`.
 
 ## What is here
 
