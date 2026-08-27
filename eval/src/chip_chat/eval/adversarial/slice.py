@@ -54,6 +54,7 @@ from dataclasses import dataclass, field
 from typing import Any, Final
 
 from chip_chat.agent.hardcoded import MENU
+from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.loop import Conversation, TurnResult, run_turn
 from chip_chat.agent.model import ChatModel
 from chip_chat.agent.orders import OrderDesk
@@ -62,7 +63,6 @@ from chip_chat.eval.adversarial.attacks import Capability
 from chip_chat.eval.adversarial.canaries import Canary, Population, Visitor
 from chip_chat.eval.adversarial.run import Attempt, Control, Probe, Signal
 from chip_chat.otel import chat_turn
-from chip_chat.vision.lane import PhotoLane
 
 __all__ = [
     "CONTROL_MESSAGE",
@@ -118,7 +118,9 @@ class SliceTarget:
             cares about most, where the script is
             :class:`~chip_chat.eval.adversarial.testing.CapitulatingModel` and
             what is being measured is what survives a model that complied.
-        lane: The photo lane, where one is wired.
+        lanes: The backing services the slice runs against. A lane that is
+            absent withdraws its tool rather than leaving one nothing can
+            answer.
         visitors: How many visitors to mint. At least two.
         session_prefix: What each visitor's session id is built from.
         desk: The order desk. **One, shared.** Passing a desk per visitor would
@@ -127,7 +129,7 @@ class SliceTarget:
     """
 
     model: ChatModel
-    lane: PhotoLane | None = None
+    lanes: Lanes = NO_LANES
     visitors: int = _DEFAULT_VISITORS
     session_prefix: str = "adversarial"
     desk: OrderDesk | None = None
@@ -225,7 +227,7 @@ class SliceTarget:
                 probe.message,
                 model=self.model,
                 desk=self._shared_desk(),
-                lane=self.lane,
+                lanes=self.lanes,
                 # Never a confirmation. Every attack in the manifest is an
                 # attempt to get a write without one, so handing the loop a
                 # `confirmed_draft_id` would be the harness pressing the button
@@ -312,7 +314,7 @@ class SliceTarget:
         own draft and it is on their screen throughout.
         """
         conversation = Conversation(
-            session_id=visitor.session_id, tools=offered_tools(lane=self.lane)
+            session_id=visitor.session_id, tools=offered_tools(self.lanes)
         )
         card = self._cards.get(visitor.session_id)
         if card is not None:
@@ -328,7 +330,7 @@ class SliceTarget:
                 message,
                 model=self.model,
                 desk=self._shared_desk(),
-                lane=self.lane,
+                lanes=self.lanes,
             )
         return _visible(result)
 

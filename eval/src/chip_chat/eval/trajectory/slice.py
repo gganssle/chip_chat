@@ -26,6 +26,7 @@ copy of the promotion in #72, free to disagree with the first.
 
 from dataclasses import dataclass
 
+from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.model import ChatModel
 from chip_chat.eval.dataset.entries import GOLDEN_PREFIX
 from chip_chat.eval.golden.cases import GoldenCase, GoldenSet
@@ -38,7 +39,6 @@ from chip_chat.eval.trajectory.trees import (
     read_trajectory,
 )
 from chip_chat.otel.testing import span_recorder
-from chip_chat.vision.lane import PhotoLane
 
 __all__ = ["RECORDER_COMPONENT", "SliceTraceSource"]
 
@@ -66,15 +66,17 @@ class SliceTraceSource:
             produces a real number; a scripted double produces a measurement of
             the script -- :mod:`chip_chat.eval.trajectory.testing` says which of
             those it is.
-        lane: The photo lane, where one is wired. Without it the slice is never
-            offered ``match_meal_from_photo``, and the vision row's trajectory
-            is honestly empty rather than wrong.
+        lanes: The backing services the slice runs against. Without the photo
+            lane the slice is never offered ``match_meal_from_photo``, and the
+            vision row's trajectory is honestly empty rather than wrong; the
+            account and personalization lanes withdraw two more tools the same
+            way.
         session_prefix: What each row's session id is built from.
     """
 
     golden: GoldenSet
     model: ChatModel
-    lane: PhotoLane | None = None
+    lanes: Lanes = NO_LANES
     session_prefix: str = DEFAULT_SESSION
 
     @property
@@ -99,7 +101,7 @@ class SliceTraceSource:
                 error=f"no case in {self.golden.source} for this row",
             )
         deployment = SliceDeployment(
-            self.model, lane=self.lane, session_prefix=self.session_prefix
+            self.model, lanes=self.lanes, session_prefix=self.session_prefix
         )
         with span_recorder(RECORDER_COMPONENT) as recorder:
             observation = deployment.turn(case)

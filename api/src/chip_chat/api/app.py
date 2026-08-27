@@ -69,6 +69,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from chip_chat.agent import ACCOUNT, AzureChatModel, FoundryConfig
+from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.loop import PROMPT_VERSION, Conversation
 from chip_chat.agent.tools import offered_tools
 from chip_chat.api.guard import SpendGuard
@@ -101,7 +102,6 @@ from chip_chat.otel import (
     render_response,
     shutdown_tracing,
 )
-from chip_chat.vision.lane import PhotoLane
 from chip_chat.web import chat_page, stop_page
 
 __all__ = [
@@ -264,8 +264,8 @@ class SessionStore:
             tools: The tools this deployment has registered, which a new
                 conversation's runtime context names. Read from
                 :func:`~chip_chat.agent.tools.offered_tools` at the call site,
-                because whether the photo lane is answerable is a property of
-                the assembled service and not of this store.
+                because which lanes are answerable is a property of the
+                assembled service and not of this store.
         """
         with self._lock:
             conversation = self._conversations.get(session_id)
@@ -380,7 +380,7 @@ def build_visitors(
 
 
 def build_service(
-    lane: PhotoLane | None = None,
+    lanes: Lanes = NO_LANES,
     connect: Callable[[], SessionConnection] | None = None,
 ) -> Service:
     """Assemble the real service from the environment.
@@ -391,17 +391,27 @@ def build_service(
     on the Container App is a restart rather than a build.
 
     Args:
-        lane: The photo lane. **Nothing supplies one yet, and a deployment
-            therefore does not offer** ``match_meal_from_photo`` -- see
+        lanes: The backing services this deployment has.
+            **Nothing supplies any of them yet**, so a deployment runs the
+            week-one slice and does not offer ``ask_account_question``,
+            ``get_recommendations`` or ``match_meal_from_photo`` -- see
             :func:`~chip_chat.agent.tools.offered_tools` for why that is the
-            honest state rather than a hole. Two things have to exist first: an
-            upload route, since the tool takes a reference to a photograph the
-            visitor uploaded *on this turn* and there is no route that produces
-            one; and a production catalogue loader, which stage 5 needs and
-            which :class:`~chip_chat.api.drafts.DraftStore` needs too. Both are
-            #62 and #66's, and wiring half of it here would offer the model a
-            tool no visitor could ever hand a reference to. The parameter exists
-            so the seam is named rather than discovered.
+            honest state rather than a hole. The parameter exists so the seam is
+            named rather than discovered, and bead ``cc-e1sr`` is where each is
+            wired:
+
+            *knowledge* needs one
+            :class:`~chip_chat.search.retrieve.Retriever` built per process
+            against the live alias -- the cheapest of the three, and blocked on
+            nothing structural.
+            *account* and *personalization* need the pool below to actually
+            have connections in it, which is ``connect`` and therefore
+            ``cc-lpy4``. Handing them a pool that cannot check anything out
+            would offer the model two tools that decline on every turn, which
+            reads as a lane outage rather than as a deployment nobody finished.
+            *photo* needs an upload route, since the tool takes a reference to a
+            photograph the visitor uploaded on this turn, and a production
+            catalogue loader for stage 5 -- #62 and ``cc-mpd``.
 
         connect: Opens a Snowflake connection, for the pool and the roster. See
             :func:`build_visitors` for why it is an argument.
@@ -414,7 +424,7 @@ def build_service(
         gate=SpendGate(
             SpendGuard(SpendLimits.from_env(), kill_switch=default_kill_switch()),
             lambda: AzureChatModel(FoundryConfig.from_env()),
-            lane=lane,
+            lanes=lanes,
         ),
         visitors=visitors,
         pool=pool,
@@ -522,7 +532,7 @@ def create_app(service: Service | None = None) -> FastAPI:
         # here as well as on the entry route rather than only on the polite path.
         admitted = resolved.visitors.admit(session_id)
         conversation = resolved.sessions.get(
-            session_id, tools=offered_tools(lane=resolved.gate.lane)
+            session_id, tools=offered_tools(resolved.gate.lanes)
         )
         payload = _run_turn(resolved, conversation, body, source_address, admitted)
         response = JSONResponse(payload.model_dump())

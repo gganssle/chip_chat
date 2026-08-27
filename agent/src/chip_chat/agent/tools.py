@@ -1,61 +1,72 @@
-"""Six of the eleven tools: five against hardcoded data, one against the real lane.
+"""The tool bodies: six reads, one draft, one write, and what backs each of them.
 
-The eleven tools of RFC-001 section 06 are the agent's whole action surface. Five
-are implemented here against the week-one slice's hardcoded data -- one per lane
-the issue names, the reorder the Phase 7 demo criterion turns on, and the draft
-that has to exist before a write can be confirmed -- and the sixth is not
-hardcoded at all:
+The eleven tools of RFC-001 §06 are the agent's whole action surface;
+:mod:`chip_chat.agent.surface` is the *definition* and this is where the built
+ones actually run. Since #61 all six read tools are here, each against its own
+backing service, and each with a stand-in only where a stand-in can be honest:
 
 ============================ ===================================================
-Tool                         What it does here, and what it will do
+Tool                         What answers it
 ============================ ===================================================
-``search_menu_knowledge``    Word overlap against three items. Becomes hybrid
-                             retrieval over AI Search (#45); the ``retriever.search``
-                             span it nests is already the right span.
-``get_points_balance``       Reads one hardcoded account. Becomes a gold-mart
-                             read (#38). No child span, then or now.
-``get_usual_order``          Reads the same account's usual order and returns
-                             the item ids it is made of, so "reorder my usual"
-                             is a lookup rather than a guess at prose. Becomes
-                             a gold-mart read alongside the balance (#38).
-``propose_order``            Mints a draft. Becomes the ops API's draft endpoint
-                             with §7.1's twelve rules behind it (#60).
-``place_order``              Places a *confirmed* draft, and nests
-                             ``ops.place_order``. The confirmation rule is
-                             already the real one -- see :mod:`chip_chat.agent.orders`.
-``match_meal_from_photo``    The real photo lane, offered only when one is
-                             wired. Nests ``vision.describe`` and
-                             ``matcher.resolve`` under the *one* tool span --
-                             see :mod:`chip_chat.vision.lane`.
+``search_menu_knowledge``    :class:`~chip_chat.search.lane.KnowledgeLane` --
+                             hybrid retrieval with citations (#49) -- when one
+                             is wired. Word overlap against three hardcoded
+                             items when none is. Nests ``retriever.search``
+                             either way.
+``ask_account_question``     :class:`~chip_chat.snowflake.lane.AccountLane`:
+                             Cortex Analyst writes the SQL, ``analyst.decide``
+                             judges it, the bound connection runs it. Nests
+                             ``db.cortex_analyst``. **No stand-in.**
+``get_points_balance``       The same lane, one fixed query. The hardcoded
+                             account when none is wired. No child span.
+``get_usual_order``          :class:`~chip_chat.snowflake.lane.PersonalizationLane`
+                             over ``MARTS.usual_order``, with the mart's own
+                             confidence and ``derived_at``. The hardcoded
+                             account when none is wired. No child span.
+``get_recommendations``      The same lane, over the ranked mart, with the
+                             rationale each row was scored with. **No
+                             stand-in.**
+``match_meal_from_photo``    :class:`~chip_chat.vision.lane.PhotoLane`. Nests
+                             ``vision.describe`` and ``matcher.resolve`` under
+                             the *one* tool span.
 ============================ ===================================================
 
-The sixth is conditional, and deliberately so. A tool definition the model can
-see and nothing can answer is worse than an absent one: the model will call it,
-the call will fail, and the trace will show a tool span with a refusal in it
-that reads as a lane outage rather than as a deployment nobody finished.
-:func:`offered_tools` and :func:`offered_schemas` therefore take the lane and
-return what is actually answerable, and the loop offers the model that -- both
-as tool definitions and in the runtime context that names what is registered.
+Two of them are offered only when their lane is wired, and
+:mod:`chip_chat.agent.lanes` carries the argument for why that is honest rather
+than incomplete: a hardcoded NL→SQL answer is the plausible number PRD A4
+forbids, and a hardcoded rationale is a sentence attributed to a model that
+never ran. :func:`offered_tools` is what a call site should ask.
 
-Two things here are not placeholders and should survive the data becoming real.
+Three things here are not placeholders and should survive every data source
+becoming real.
 
-**No tool takes a visitor identifier.** RFC-001 section 05: identity is bound to
-the session by the app, and the absence of the parameter *is* the enforcement
+**No tool takes a visitor identifier.** RFC-001 §05: identity is bound to the
+session by the app, and the absence of the parameter *is* the enforcement
 mechanism. :func:`dispatch` takes ``session_id`` as an argument of its own,
-never from :attr:`~chip_chat.agent.model.ToolInvocation.arguments`, so a model
-that invented one would find it ignored rather than honoured.
+never from :attr:`~chip_chat.agent.model.ToolInvocation.arguments`, and hands it
+to the lanes, which hand it to #44's pool. A model that invented a ``demo_id``
+finds it rejected by :mod:`chip_chat.agent.surface` before any body runs, and
+would find it ignored even if it were not.
 
 **Every call opens exactly one ``tool.<tool_name>`` span**, named from
 :class:`~chip_chat.otel.schema.ToolName` rather than from the string the model
 emitted. A model that asks for a tool nobody wrote gets a typed refusal and no
 span at all, because an off-schema span name is the one failure mode
 ``otel/README.md`` says breaks every eval built on top of it.
+
+**A lane may fail; the conversation may not fail with it.** RFC-001 §10, and it
+is a property of this module rather than a rule the lanes are trusted to follow:
+every lane returns its own decline instead of raising, :func:`dispatch` turns a
+declined result into a failed *span* so the outage is visible, and the model is
+handed a sentence it can say. A visitor asking about their points in the next
+breath is served by a lane that never heard about it.
 """
 
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final
 
 from chip_chat.agent.hardcoded import ACCOUNT, MENU, SIMULATION_NOTICE, search_menu
+from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.model import ToolInvocation, UnknownToolError
 from chip_chat.agent.orders import OrderDesk, OrderRejectedError
 from chip_chat.agent.surface import ToolCallRejectedError, spec
@@ -70,6 +81,8 @@ from chip_chat.otel import (
     tool_call,
 )
 from chip_chat.otel.spans import ToolRecorder
+from chip_chat.search.lane import KnowledgeLane
+from chip_chat.snowflake.lane import AccountLane, PersonalizationLane
 from chip_chat.vision.describe import DescribeError
 from chip_chat.vision.lane import PhotoLane, PhotoMatch
 from chip_chat.vision.matcher import Outcome, Resolution
@@ -85,8 +98,9 @@ __all__ = [
 ]
 
 _MENU_INDEX = "hardcoded-menu"
-"""What ``retriever.search`` records as the index searched. Deliberately not a
-plausible index name: a trace should say out loud that this is not AI Search."""
+"""What ``retriever.search`` records as the index searched when no knowledge lane
+is wired. Deliberately not a plausible index name: a trace should say out loud
+that this is not AI Search. The real lane records its own alias."""
 
 TOOLS: tuple[ToolName, ...] = (
     ToolName.SEARCH_MENU_KNOWLEDGE,
@@ -95,11 +109,14 @@ TOOLS: tuple[ToolName, ...] = (
     ToolName.PROPOSE_ORDER,
     ToolName.PLACE_ORDER,
 )
-"""The tools this slice offers unconditionally. Five of the eleven remain.
+"""The tools offered on every deployment, wired or not.
 
-``match_meal_from_photo`` is the sixth and is not here, because whether it can
-be answered depends on whether a lane was wired. :func:`offered_tools` is what a
-call site should ask."""
+Five, and each of them answerable from :mod:`chip_chat.agent.hardcoded` when
+nothing better is available. The three that are *not* here --
+``ask_account_question``, ``get_recommendations``, ``match_meal_from_photo`` --
+depend on a lane; :data:`chip_chat.agent.lanes.CONDITIONAL_TOOLS` is that list
+and :func:`offered_tools` is what a call site should ask.
+"""
 
 
 def _narrowed_to_the_hardcoded_menu(definition: dict[str, Any]) -> dict[str, Any]:
@@ -107,13 +124,17 @@ def _narrowed_to_the_hardcoded_menu(definition: dict[str, Any]) -> dict[str, Any
 
     RFC-001 D3 says the model may describe food and may never name a SKU. The
     real enforcement is the deterministic matcher (#54) and the ops API's
-    catalogue check (#63), neither of which exists yet. What does exist is a
-    three-item menu and a schema, so the vocabulary goes in the schema: an item
-    id that is not on this menu is not expressible.
+    catalogue check (#63); the second does not exist yet. What does exist is a
+    three-item draft store and a schema, so the vocabulary goes in the schema:
+    an item id that is not on this menu is not expressible.
 
     The narrowing is the *slice's* and not the surface's, which is why it lives
-    here rather than in :mod:`chip_chat.agent.surface`. When the real catalogue
-    arrives, the enum is generated from it and this is the function that does it.
+    here rather than in :mod:`chip_chat.agent.surface`. It is also why it is
+    unaffected by a knowledge lane being wired: retrieval over the real corpus
+    can name a real item long before :class:`~chip_chat.agent.orders.OrderDesk`
+    can price one, and widening the enum before then would let the model propose
+    an order the desk must reject. When the real catalogue reaches the desk, the
+    enum is generated from it and this is the function that does it.
     """
     if definition["function"]["name"] != ToolName.PROPOSE_ORDER.value:
         return definition
@@ -125,11 +146,14 @@ def _narrowed_to_the_hardcoded_menu(definition: dict[str, Any]) -> dict[str, Any
     return definition
 
 
-TOOL_SCHEMAS: tuple[Mapping[str, Any], ...] = tuple(
-    _narrowed_to_the_hardcoded_menu(spec(name).as_tool_definition()) for name in TOOLS
-)
-"""The tool definitions the model is offered, and which ``llm.completion``
-records so Arize's tool-selection evals can compare choice against offer.
+def _definition(name: ToolName) -> Mapping[str, Any]:
+    """Return one tool definition, narrowed where the slice narrows it."""
+    return _narrowed_to_the_hardcoded_menu(spec(name).as_tool_definition())
+
+
+TOOL_SCHEMAS: tuple[Mapping[str, Any], ...] = tuple(_definition(name) for name in TOOLS)
+"""The unconditional tool definitions, and what ``llm.completion`` records so
+Arize's tool-selection evals can compare choice against offer.
 
 Derived from :data:`chip_chat.agent.surface.TOOL_SPECS` rather than written out
 a second time here, so the schema the model is shown and the schema its
@@ -144,40 +168,32 @@ PHOTO_UNAVAILABLE_MESSAGE: Final = (
 )
 """What the model is told when the photo lane declines.
 
-A lane may fail; the conversation may not fail with it (RFC-001 section 10). So
-this comes back as a tool *result* the model can read and act on, the span is
-marked failed, and the visitor gets asked a question rather than an error."""
+A lane may fail; the conversation may not fail with it (RFC-001 §10). So this
+comes back as a tool *result* the model can read and act on, the span is marked
+failed, and the visitor gets asked a question rather than an error."""
 
 
-def offered_tools(*, lane: PhotoLane | None = None) -> tuple[ToolName, ...]:
+def offered_tools(lanes: Lanes = NO_LANES) -> tuple[ToolName, ...]:
     """The tools that can actually be answered, given what is wired.
 
     Args:
-        lane: The photo lane, or ``None`` where none is configured.
+        lanes: The backing services this deployment has.
 
     Returns:
-        :data:`TOOLS`, plus ``match_meal_from_photo`` when ``lane`` is given.
+        :data:`TOOLS`, plus whichever of
+        :data:`chip_chat.agent.lanes.CONDITIONAL_TOOLS` have a lane behind them.
     """
-    if lane is None:
-        return TOOLS
-    return (*TOOLS, ToolName.MATCH_MEAL_FROM_PHOTO)
+    return (*TOOLS, *lanes.conditional_tools())
 
 
-def offered_schemas(*, lane: PhotoLane | None = None) -> tuple[Mapping[str, Any], ...]:
+def offered_schemas(lanes: Lanes = NO_LANES) -> tuple[Mapping[str, Any], ...]:
     """The tool definitions to offer the model, aligned with :func:`offered_tools`.
 
     Derived from the surface for the same reason :data:`TOOL_SCHEMAS` is: the
     schema the model is shown and the schema its arguments are checked against
     have to be the same object.
     """
-    if lane is None:
-        return TOOL_SCHEMAS
-    return (
-        *TOOL_SCHEMAS,
-        _narrowed_to_the_hardcoded_menu(
-            spec(ToolName.MATCH_MEAL_FROM_PHOTO).as_tool_definition()
-        ),
-    )
+    return tuple(_definition(name) for name in offered_tools(lanes))
 
 
 def dispatch(
@@ -185,7 +201,7 @@ def dispatch(
     *,
     session_id: str,
     desk: OrderDesk,
-    lane: PhotoLane | None = None,
+    lanes: Lanes = NO_LANES,
     record_spend: Callable[[TokenUsage], None] | None = None,
 ) -> Mapping[str, Any]:
     """Run one tool call and return what the model should see.
@@ -193,10 +209,12 @@ def dispatch(
     Args:
         invocation: The call the model asked for.
         session_id: The bound conversation. Supplied by the request handler and
-            never read out of ``invocation.arguments``.
+            never read out of ``invocation.arguments``. Handed to the lanes,
+            which hand it to #44's pool, which is where it becomes an identity.
         desk: The order desk holding this session's drafts.
-        lane: The photo lane, where one is wired. ``None`` leaves
-            ``match_meal_from_photo`` unimplemented, which is what
+        lanes: The backing services this deployment has. The default is the
+            week-one slice: hardcoded menu, hardcoded account, and the three
+            conditional tools not offered at all -- which is what
             :func:`offered_tools` has already told the model.
         record_spend: Called with what a tool's *own* model calls cost, where a
             tool makes any. The photo lane does -- stage 4 is a vision
@@ -226,7 +244,7 @@ def dispatch(
             arguments,
             session_id=session_id,
             desk=desk,
-            lane=lane,
+            lanes=lanes,
             recorder=recorder,
             record_spend=record_spend,
         )
@@ -240,7 +258,7 @@ def _dispatch_inside_span(
     *,
     session_id: str,
     desk: OrderDesk,
-    lane: PhotoLane | None,
+    lanes: Lanes,
     recorder: ToolRecorder,
     record_spend: Callable[[TokenUsage], None] | None = None,
 ) -> Mapping[str, Any]:
@@ -253,24 +271,26 @@ def _dispatch_inside_span(
     property of the call path -- a model that emits ``demo_id`` gets a refusal
     it can read, and no tool body is ever offered the extra field.
     """
-    if tool not in offered_tools(lane=lane):
-        # Checked before the arguments are, because "that tool arrives in a
-        # later phase" is a more useful thing to tell a model than "your
+    if tool not in offered_tools(lanes):
+        # Checked before the arguments are, because "that lane is not available
+        # on this deployment" is a more useful thing to tell a model than "your
         # blob_ref is missing" for a tool that would not have run either way.
-        return _not_implemented(tool, lane=lane)
+        return _not_implemented(tool, lanes=lanes)
     try:
         bound = spec(tool).bind(arguments)
     except ToolCallRejectedError as rejection:
         recorder.record_failure(rejection)
         return {"rejected": "ARGUMENTS_REJECTED", "detail": rejection.reason}
     try:
-        result = _run(tool, bound.arguments, session_id=session_id, desk=desk, lane=lane)
+        result = _run(
+            tool, bound.arguments, session_id=session_id, desk=desk, lanes=lanes
+        )
     except OrderRejectedError as rejection:
         recorder.record_failure(rejection.message)
         return dict(rejection.as_result())
     except DescribeError as declined:
-        # The photo lane declining. Section 10 again: the span says so and the
-        # model is handed something it can say to the visitor.
+        # The photo lane declining. §10 again: the span says so and the model is
+        # handed something it can say to the visitor.
         recorder.record_failure(declined)
         return {
             "declined": type(declined).__name__,
@@ -290,7 +310,30 @@ def _dispatch_inside_span(
                 # the spend ceiling from stopping at the tool boundary.
                 record_spend(result.usage)
         return _photo_result(result)
+    _mark_a_declining_lane(recorder, result)
     return result
+
+
+def _mark_a_declining_lane(recorder: ToolRecorder, result: Mapping[str, Any]) -> None:
+    """Fail the tool span when the lane behind it declined.
+
+    Every lane returns its decline rather than raising, which is what keeps the
+    conversation alive -- and which would otherwise make an outage dangerously
+    invisible, because a tool span that ended cleanly with a polite sentence in
+    it looks exactly like a tool span that worked. One rule in one place, rather
+    than a ``record_failure`` remembered in five tool bodies: a result carrying
+    ``declined`` is a failed span.
+
+    A ``rejected`` result is deliberately *not* failed here. That is the model
+    getting an argument wrong or reaching for a lane this deployment does not
+    have, which is a fact about the call rather than about a service, and the
+    two are worth telling apart in a trace.
+    """
+    declined = result.get("declined")
+    if declined is None:
+        return
+    reason = result.get("reason") or result.get("detail") or ""
+    recorder.record_failure(f"{declined}: {reason}".rstrip(": "))
 
 
 def _run(
@@ -299,7 +342,7 @@ def _run(
     *,
     session_id: str,
     desk: OrderDesk,
-    lane: PhotoLane | None = None,
+    lanes: Lanes,
 ) -> Mapping[str, Any] | PhotoMatch:
     """Body of one tool, inside its span.
 
@@ -314,27 +357,33 @@ def _run(
     """
     match tool:
         case ToolName.SEARCH_MENU_KNOWLEDGE:
-            return _search_menu_knowledge(str(arguments.get("query", "")))
+            return _search_menu_knowledge(
+                str(arguments.get("query", "")), lanes.knowledge
+            )
+        case ToolName.ASK_ACCOUNT_QUESTION if lanes.account is not None:
+            return _ask_account_question(
+                str(arguments.get("question", "")), lanes.account, session_id
+            )
         case ToolName.GET_POINTS_BALANCE:
-            return _get_points_balance()
+            return _get_points_balance(lanes.account, session_id)
         case ToolName.GET_USUAL_ORDER:
-            return _get_usual_order()
+            return _get_usual_order(lanes.personalization, session_id)
+        case ToolName.GET_RECOMMENDATIONS if lanes.personalization is not None:
+            return _get_recommendations(lanes.personalization, session_id)
         case ToolName.PROPOSE_ORDER:
             return _propose_order(arguments.get("items"), session_id, desk)
         case ToolName.PLACE_ORDER:
             return _place_order(str(arguments.get("draft_id", "")), session_id, desk)
-        case ToolName.MATCH_MEAL_FROM_PHOTO if lane is not None:
+        case ToolName.MATCH_MEAL_FROM_PHOTO if lanes.photo is not None:
             return _match_meal_from_photo(
-                str(arguments.get(PHOTO_REF_ARGUMENT, "")), lane
+                str(arguments.get(PHOTO_REF_ARGUMENT, "")), lanes.photo
             )
         case _:  # pragma: no cover - dispatch refuses these before _run is reached
-            return _not_implemented(tool, lane=lane)
+            return _not_implemented(tool, lanes=lanes)
 
 
-def _not_implemented(
-    tool: ToolName, *, lane: PhotoLane | None = None
-) -> Mapping[str, Any]:
-    """A real tool of the eleven that this slice has not built yet.
+def _not_implemented(tool: ToolName, *, lanes: Lanes) -> Mapping[str, Any]:
+    """A real tool of the eleven that this deployment cannot answer.
 
     A typed refusal the model can read and act on, not an exception: it needs to
     tell the visitor that the lane is not available rather than fail the turn.
@@ -342,14 +391,28 @@ def _not_implemented(
     return {
         "rejected": "TOOL_NOT_IMPLEMENTED",
         "detail": (
-            f"{tool.value} arrives in a later phase. Tools available now: "
-            f"{', '.join(name.value for name in offered_tools(lane=lane))}."
+            f"{tool.value} is not available on this deployment. Tools available "
+            f"now: {', '.join(name.value for name in offered_tools(lanes))}."
         ),
     }
 
 
-def _search_menu_knowledge(query: str) -> Mapping[str, Any]:
-    """Menu knowledge. Nests ``retriever.search``, as the schema requires."""
+# ---------------------------------------------------------------------------
+# Knowledge
+# ---------------------------------------------------------------------------
+
+
+def _search_menu_knowledge(query: str, lane: KnowledgeLane | None) -> Mapping[str, Any]:
+    """Menu knowledge. Nests ``retriever.search``, as the schema requires.
+
+    The lane owns its own span, its own scores and its own decline (#49), so
+    when one is wired this is a delegation and nothing else -- and the fallback
+    below opens the same child span, so a trace has the same shape either way
+    and ``retriever.search``'s ``index`` attribute is what says which corpus was
+    actually searched.
+    """
+    if lane is not None:
+        return lane.search(query).as_tool_result()
     hits = search_menu(query)
     documents = [
         Document(
@@ -382,32 +445,75 @@ def _search_menu_knowledge(query: str) -> Mapping[str, Any]:
     }
 
 
-def _get_points_balance() -> Mapping[str, Any]:
-    """The account lane. No child span: the tool span is the whole of it."""
+# ---------------------------------------------------------------------------
+# Account
+# ---------------------------------------------------------------------------
+
+
+def _ask_account_question(
+    question: str, lane: AccountLane, session_id: str
+) -> Mapping[str, Any]:
+    """The account lane. Nests ``db.cortex_analyst``, which the lane opens.
+
+    Offered only when a lane is wired, so there is no branch here and no
+    fallback. That absence is PRD A4 and RFC-001 §10 in one line: a question
+    this lane will not answer is a question nothing else in this file answers
+    either, and there is no hand-written query to reach for because there is no
+    hand-written query.
+    """
+    return lane.ask(question, session_id=session_id).as_tool_result()
+
+
+def _get_points_balance(lane: AccountLane | None, session_id: str) -> Mapping[str, Any]:
+    """The points read. No child span: the tool span is the whole of it.
+
+    RFC-001 §09 gives ``db.cortex_analyst`` to the generated query and nothing
+    to a fixed one, which is also the argument for this being a separate tool:
+    one question with one answer does not need a language model to write its
+    SQL, and the surface's description tells the model to prefer it for exactly
+    that reason.
+    """
+    if lane is not None:
+        return lane.points_balance(session_id=session_id).as_tool_result()
     return {
         "points_balance": ACCOUNT.points_balance,
         "member_since": ACCOUNT.member_since,
         "home_store": ACCOUNT.home_store.name,
         "usual_order": ACCOUNT.usual_order,
+        "source": (
+            "A hardcoded account fixture, not this visitor's rows -- no "
+            "Snowflake account lane is wired on this deployment. Do not offer "
+            "to redeem anything against it."
+        ),
     }
 
 
-def _get_usual_order() -> Mapping[str, Any]:
-    """The reorder lane. No child span: the tool span is the whole of it.
+# ---------------------------------------------------------------------------
+# Personalization
+# ---------------------------------------------------------------------------
 
-    Returns the item ids and not only the sentence, because "reorder my usual"
-    has to become a draft over real rows. A model handed only
-    ``"a chicken burrito bowl with a side of guac"`` would have to turn prose
-    back into identifiers, and the one thing this architecture is arranged to
-    prevent is a menu item arrived at by inference.
+
+def _get_usual_order(
+    lane: PersonalizationLane | None, session_id: str
+) -> Mapping[str, Any]:
+    """The habit. No child span: the tool span is the whole of it.
+
+    Returns item ids and not only a sentence, because "reorder my usual" has to
+    become a draft over real rows. A model handed only ``"a chicken burrito bowl
+    with a side of guac"`` would have to turn prose back into identifiers, and
+    the one thing this architecture is arranged to prevent is a menu item
+    arrived at by inference.
 
     The surface promises a confidence with the habit, and says the confidence is
-    real and sometimes low. There is no gold mart behind this yet, so what is
-    reported is the *absence* of one rather than a number invented to fill the
-    field: an account fixture is not evidence of a habit, and a confidence
-    fabricated here would be exactly the guess-presented-as-a-habit the tool
-    description warns against.
+    real and sometimes low. With a lane wired that is the mart's own number and
+    the mart's own ``derived_at``. Without one, what is reported is the
+    *absence* of a mart rather than a number invented to fill the field: an
+    account fixture is not evidence of a habit, and a confidence fabricated here
+    would be exactly the guess-presented-as-a-habit the tool description warns
+    against.
     """
+    if lane is not None:
+        return lane.usual_order(session_id=session_id).as_tool_result()
     items = [
         {
             "item_id": item_id,
@@ -423,8 +529,9 @@ def _get_usual_order() -> Mapping[str, Any]:
         "confidence": None,
         "how_it_was_worked_out": (
             "Read off the hardcoded account fixture, not computed from order "
-            "history -- the gold mart behind this arrives with #38. Do not "
-            "describe it to the visitor as something learned from their orders."
+            "history -- no personalization lane is wired on this deployment. "
+            "Do not describe it to the visitor as something learned from their "
+            "orders."
         ),
         "next_step": (
             "Call propose_order with these item_ids, adjusted for anything the "
@@ -432,6 +539,23 @@ def _get_usual_order() -> Mapping[str, Any]:
             "guacamole line, not a new item. Then show them the card."
         ),
     }
+
+
+def _get_recommendations(lane: PersonalizationLane, session_id: str) -> Mapping[str, Any]:
+    """The ranked mart. No child span: the tool span is the whole of it.
+
+    Offered only when a lane is wired, and for a sharper reason than the account
+    lane's: every row of this mart carries a ``rationale`` that #37 rendered from
+    the visitor's own order share at scoring time, and a sentence composed here
+    instead would be an explanation attributed to a model that never saw this
+    visitor. There is no honest fixture for that, so there is no fixture.
+    """
+    return lane.recommendations(session_id=session_id).as_tool_result()
+
+
+# ---------------------------------------------------------------------------
+# Vision
+# ---------------------------------------------------------------------------
 
 
 def _match_meal_from_photo(
@@ -530,6 +654,11 @@ def _photo_items(resolution: Resolution) -> list[Mapping[str, Any]]:
         }
         for item in resolution.items()
     ]
+
+
+# ---------------------------------------------------------------------------
+# Action
+# ---------------------------------------------------------------------------
 
 
 def _propose_order(items: Any, session_id: str, desk: OrderDesk) -> Mapping[str, Any]:

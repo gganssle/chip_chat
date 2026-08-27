@@ -14,7 +14,8 @@ the versioned system prompt, and the loop that runs them.
 | Module | What it is |
 | --- | --- |
 | `surface.py` | The eleven tools of RFC-001 §06 — the *definition* |
-| `tools.py` | The subset built so far, running against hardcoded data |
+| `tools.py` | The bodies: all six read tools, the draft, and one write |
+| `lanes.py` | What is wired on this deployment, and therefore what is offered |
 | `prompt.py`, `prompts/` | The system prompt, and the version that follows it into traces |
 | `loop.py` | The agent loop: model, tools, model again |
 | `definition.py` | What the container assembles: deployment + prompt + eleven tools |
@@ -27,6 +28,61 @@ the versioned system prompt, and the loop that runs them.
 | `version.py` | The hosted agent version manifest, and its registration |
 | `verify.py` | Phase 0: prove the chat and vision deployments answer |
 | `threads.py` | The thread-retention probe for [#11](https://github.com/gganssle/chip_chat/issues/11) |
+
+---
+
+## The six read tools, and where each of them actually runs
+
+[#61](https://github.com/gganssle/chip_chat/issues/61) built all six. None of
+the services behind them is built here — each arrives as an object on
+`lanes.Lanes`, the same arrangement `match_meal_from_photo` already had, and for
+the same reason: a lane that could construct its own client would be a second
+place where a deployment name, an endpoint or a credential is resolved.
+
+| Tool | Backed by | Child span |
+| --- | --- | --- |
+| `search_menu_knowledge` | `chip_chat.search.lane.KnowledgeLane` | `retriever.search` |
+| `ask_account_question` | `chip_chat.snowflake.lane.AccountLane` | `db.cortex_analyst` |
+| `get_points_balance` | the same lane, one fixed query | — |
+| `get_usual_order` | `chip_chat.snowflake.lane.PersonalizationLane` | — |
+| `get_recommendations` | the same lane, the ranked mart | — |
+| `match_meal_from_photo` | `chip_chat.vision.lane.PhotoLane` | `vision.describe`, `matcher.resolve` |
+
+Three of them have no child span on purpose. RFC-001 §09 gives
+`db.cortex_analyst` to the *generated* query; a fixed one that borrowed the name
+would make "how often does the account lane write SQL" unanswerable from a trace.
+
+**An absent lane is a smaller tool list, never a broken tool.** #64's argument
+generalises to all four:
+
+> A tool definition the model can see and nothing can answer is worse than an
+> absent one: the model will call it, the call will fail, and the trace will
+> show a tool span with a refusal in it that reads as a lane outage rather than
+> as a deployment nobody finished.
+
+So `offered_tools(lanes)` is what a call site asks, `runtime_context` names the
+same list in words, and `run_turn` raises if a conversation was opened believing
+a different list. Three tools keep an honest hardcoded stand-in when no lane is
+wired — the three-item menu, the account fixture — and each says so in its own
+result. Two do not, and the line is whether an invented answer would be a lie:
+a hardcoded NL→SQL answer is exactly the plausible number PRD A4 forbids, and a
+hardcoded rationale is a sentence attributed to a model that never ran.
+
+**A lane may fail; the conversation may not fail with it.** Every lane returns
+its own decline rather than raising, and `dispatch` turns a result carrying
+`declined` into a *failed span* — because a tool span that ended cleanly with a
+polite sentence in it is the one outage a dashboard cannot see. A `rejected`
+result is deliberately not failed: that is the model getting an argument wrong
+or reaching for a lane this deployment does not have, which is a fact about the
+call rather than about a service.
+
+**Nothing wires them in a deployment yet.** `build_service` takes a `Lanes` and
+nobody supplies one: the two Snowflake lanes need `VisitorPool` built with a
+real connection factory and a session store that binds a visitor
+([#66](https://github.com/gganssle/chip_chat/issues/66)), and handing them a
+pool with nobody bound would produce a lane that returns zero rows and reads as
+an empty database. The parameter exists so the seam is named rather than
+discovered.
 
 ---
 

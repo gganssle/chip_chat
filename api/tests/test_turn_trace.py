@@ -31,6 +31,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from chip_chat.agent.lanes import Lanes
 from chip_chat.agent.testing import ScriptedModel, answer, calls_tool
 from chip_chat.agent.tools import TOOLS
 from chip_chat.api.app import Service, create_app
@@ -72,7 +73,9 @@ def lane() -> PhotoLane:
 def serving(
     model: ScriptedModel, limits: SpendLimits, lane: PhotoLane | None = None
 ) -> Iterator[TestClient]:
-    service = Service(SpendGate(SpendGuard(limits), lambda: model, lane=lane))
+    service = Service(
+        SpendGate(SpendGuard(limits), lambda: model, lanes=Lanes(photo=lane))
+    )
     with TestClient(create_app(service)) as client:
         yield client
 
