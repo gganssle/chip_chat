@@ -206,6 +206,11 @@ _STREAM_MEDIA_TYPE = "application/x-ndjson"
 _ROBOTS = "User-agent: *\nDisallow: /\n"
 """The demo must never surface on the brand's own search terms."""
 
+_photos_lock = threading.Lock()
+_photos: "PhotoIntake | None" = None
+_photos_built = False
+"""The memo behind :func:`build_photos`. One process, one intake, built late."""
+
 _log = logging.getLogger("chip_chat.api")
 """Where a failed turn goes as well as onto its span.
 
@@ -520,13 +525,24 @@ class Service:
     """
 
     photos: PhotoIntake | None = None
-    """Stages 1 to 3 of the photo path, where this deployment has them.
+    """Stages 1 to 3 of the photo path, for a caller that assembles its own.
 
-    ``None`` on a deployment with no storage account or no Content Safety
-    endpoint, and the route then declines uploads in a sentence rather than
-    failing on one. Never built without a moderator -- see
-    :func:`build_photos`, and :class:`chip_chat.vision.intake.PhotoIntake` for
-    why that constructor has no default for it.
+    ``None`` on every deployment, and ``None`` does **not** mean photographs are
+    refused: the route falls back to :func:`build_photos`, which reads the
+    environment on the first upload and memoises the result. The field is here
+    so a test can install a double without one.
+
+    **Built on first use rather than at start-up, and that is not a
+    micro-optimisation.** Assembling the intake constructs two Azure SDK clients
+    and a :class:`~azure.identity.DefaultAzureCredential`, and the first
+    deployment of this route spent thirty-five seconds looking healthy and then
+    stopped answering ``/healthz`` until Container Apps restarted it -- over and
+    over. Whatever the credential chain was doing, it was doing it in a process
+    whose whole job is to answer a one-second liveness probe. Nothing that talks
+    to Azure belongs on the start-up path of an app that scales from zero: a
+    visitor who never sends a photograph should not pay for the clients, and a
+    probe should never be behind them. ``docs/deployment.md`` §3.11 is the
+    write-up.
     """
 
     pool: VisitorPool | None = None
@@ -650,7 +666,6 @@ def build_service(
         ),
         visitors=visitors,
         uploads=UploadLimiter(limits),
-        photos=build_photos(),
         pool=pool,
     )
 
@@ -663,24 +678,34 @@ def build_photos() -> PhotoIntake | None:
     first without the second. Both read their endpoints from the environment
     Terraform sets on the Container App.
 
+    Called on the **first upload** rather than at assembly, and memoised after.
+    See :attr:`Service.photos` for what start-up construction cost, measured on
+    a live deployment.
+
     Returns:
         The intake, or ``None`` where either half is unconfigured. ``None`` is
         the honest state of a deployment that cannot store a photograph, and the
         route says so in a sentence -- an upload button that accepts a
         photograph and then loses it would be worse than one that declines.
     """
-    try:
-        return PhotoIntake(
-            AzureBlobStore.from_env(),
-            moderator=ImageModerator(analyzer=AzureImageAnalyzer.from_env()),
-        )
-    except Exception:
-        _log.warning(
-            "no photo intake: the uploads container or the Content Safety "
-            "endpoint is not configured, so photographs will be declined",
-            exc_info=True,
-        )
-        return None
+    global _photos, _photos_built
+    with _photos_lock:
+        if _photos_built:
+            return _photos
+        _photos_built = True
+        try:
+            _photos = PhotoIntake(
+                AzureBlobStore.from_env(),
+                moderator=ImageModerator(analyzer=AzureImageAnalyzer.from_env()),
+            )
+        except Exception:
+            _log.warning(
+                "no photo intake: the uploads container or the Content Safety "
+                "endpoint is not configured, so photographs will be declined",
+                exc_info=True,
+            )
+            _photos = None
+        return _photos
 
 
 def create_app(service: Service | None = None) -> FastAPI:
@@ -1009,7 +1034,8 @@ async def _accept_photo(
     Returns:
         The reference the next chat request carries, or the refusal.
     """
-    if service.photos is None:
+    intake = service.photos if service.photos is not None else build_photos()
+    if intake is None:
         return PhotoReply(
             reply=(
                 "Photographs are not wired up on this deployment, so I cannot "
@@ -1022,7 +1048,7 @@ async def _accept_photo(
     if stop is not None:
         return PhotoReply(reply=stop.message)
     try:
-        stored = await service.photos.accept_stream(
+        stored = await intake.accept_stream(
             _RequestBody(request),
             declared_media_type=request.headers.get("content-type"),
             declared_length=_declared_length(request.headers.get("content-length")),
