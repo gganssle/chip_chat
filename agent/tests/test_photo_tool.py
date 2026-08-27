@@ -23,6 +23,7 @@ from typing import Any
 
 import pytest
 
+from chip_chat.agent.lanes import Lanes
 from chip_chat.agent.loop import (
     RUNTIME_CONTEXT,
     Conversation,
@@ -81,7 +82,9 @@ def run(
         chat_turn(session_id=SESSION, turn_index=0),
         agent_step(index=0),
     ):
-        result = dispatch(invocation, session_id=SESSION, desk=desk, lane=lane)
+        result = dispatch(
+            invocation, session_id=SESSION, desk=desk, lanes=Lanes(photo=lane)
+        )
     return result, spans
 
 
@@ -94,8 +97,8 @@ def test_the_photo_tool_is_absent_without_a_lane() -> None:
 
 
 def test_the_photo_tool_is_offered_when_a_lane_is_wired(lane: PhotoLane) -> None:
-    assert ToolName.MATCH_MEAL_FROM_PHOTO in offered_tools(lane=lane)
-    names = {schema["function"]["name"] for schema in offered_schemas(lane=lane)}
+    assert ToolName.MATCH_MEAL_FROM_PHOTO in offered_tools(Lanes(photo=lane))
+    names = {schema["function"]["name"] for schema in offered_schemas(Lanes(photo=lane))}
     assert ToolName.MATCH_MEAL_FROM_PHOTO.value in names
 
 
@@ -103,7 +106,7 @@ def test_the_photo_tool_takes_a_reference_and_nothing_else(lane: PhotoLane) -> N
     """RFC-001 section 07: the image does not cross a tool boundary."""
     schema = next(
         definition
-        for definition in offered_schemas(lane=lane)
+        for definition in offered_schemas(Lanes(photo=lane))
         if definition["function"]["name"] == ToolName.MATCH_MEAL_FROM_PHOTO.value
     )
     assert set(schema["function"]["parameters"]["properties"]) == {PHOTO_REF_ARGUMENT}
@@ -226,7 +229,7 @@ def test_the_runtime_context_names_the_photo_tool_when_a_lane_is_wired(
 ) -> None:
     """The definitions and the prose have to agree about what exists."""
     assert ToolName.MATCH_MEAL_FROM_PHOTO.value in runtime_context(
-        offered_tools(lane=lane)
+        offered_tools(Lanes(photo=lane))
     )
     assert ToolName.MATCH_MEAL_FROM_PHOTO.value not in RUNTIME_CONTEXT
 
@@ -254,14 +257,16 @@ def test_a_conversation_opened_without_a_lane_refuses_to_run_with_one(
             "what is in this photo",
             model=ScriptedModel(answer("Nothing much.")),
             desk=desk,
-            lane=lane,
+            lanes=Lanes(photo=lane),
         )
 
 
 def test_a_conversation_opened_with_a_lane_runs_with_it(
     lane: PhotoLane, desk: OrderDesk
 ) -> None:
-    conversation = Conversation(session_id=SESSION, tools=offered_tools(lane=lane))
+    conversation = Conversation(
+        session_id=SESSION, tools=offered_tools(Lanes(photo=lane))
+    )
 
     with span_recorder("agent"), chat_turn(session_id=SESSION, turn_index=0):
         result = run_turn(
@@ -269,7 +274,7 @@ def test_a_conversation_opened_with_a_lane_runs_with_it(
             "what is in this photo",
             model=ScriptedModel(answer("A chicken bowl, by the look of it.")),
             desk=desk,
-            lane=lane,
+            lanes=Lanes(photo=lane),
         )
 
     assert result.reply.startswith("A chicken bowl")

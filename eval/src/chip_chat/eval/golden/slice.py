@@ -43,6 +43,7 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 from chip_chat.agent.hardcoded import ACCOUNT, MENU
+from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.loop import Conversation, TurnResult, run_turn
 from chip_chat.agent.model import ChatModel
 from chip_chat.agent.orders import Draft, OrderDesk
@@ -50,7 +51,6 @@ from chip_chat.agent.tools import offered_tools
 from chip_chat.eval.golden.cases import ANY_PERSONA, GoldenCase
 from chip_chat.eval.golden.run import DEFAULT_SESSION, Observation, Signal
 from chip_chat.otel import chat_turn
-from chip_chat.vision.lane import PhotoLane
 
 __all__ = ["SLICE_PERSONA", "SLICE_SIGNALS", "SliceDeployment"]
 
@@ -81,14 +81,16 @@ class SliceDeployment:
             produces a real number; a scripted double produces a measurement of
             the script, which is what ``chip_chat.eval.photos.testing`` says at
             greater length and is no less true here.
-        lane: The photo lane, where one is wired. Without it the slice is not
-            offered ``match_meal_from_photo`` at all, and the vision routing
-            case fails for the honest reason that the tool is absent.
+        lanes: The backing services the slice runs against. Without the photo
+            lane the slice is not offered ``match_meal_from_photo`` at all, and
+            the vision routing case fails for the honest reason that the tool is
+            absent; the same is true of the account and personalization cases
+            and their two tools.
         session_prefix: What each case's session id is built from.
     """
 
     model: ChatModel
-    lane: PhotoLane | None = None
+    lanes: Lanes = NO_LANES
     session_prefix: str = DEFAULT_SESSION
 
     @property
@@ -124,7 +126,7 @@ class SliceDeployment:
         session_id = f"{self.session_prefix}-{case.case_id}"
         desk = OrderDesk()
         conversation = Conversation(
-            session_id=session_id, tools=offered_tools(lane=self.lane)
+            session_id=session_id, tools=offered_tools(self.lanes)
         )
         draft = self._confirmed_draft(case, session_id, desk)
         draft_id = None if draft is None else draft.draft_id
@@ -140,7 +142,7 @@ class SliceDeployment:
                 _fill(case.message, draft_id),
                 model=self.model,
                 desk=desk,
-                lane=self.lane,
+                lanes=self.lanes,
                 confirmed_draft_id=draft_id,
             )
         return self._observed(case, result, conversation.messages[before:])

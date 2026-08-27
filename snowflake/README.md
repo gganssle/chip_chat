@@ -41,6 +41,13 @@ src/chip_chat/snowflake/semantic.py    the semantic view as data, and the tables
                                        it deliberately does not model
 src/chip_chat/snowflake/procedures.py  the write path as data. Same bargain
 src/chip_chat/snowflake/analyst.py     answer, or say so. No network call
+src/chip_chat/snowflake/cortex.py      the Cortex Analyst call itself (#61)
+src/chip_chat/snowflake/reads.py       the three visitor-scoped read queries,
+                                       none of which names a visitor
+src/chip_chat/snowflake/lane.py        the account and personalization lanes:
+                                       four tools, and four ways to decline
+src/chip_chat/snowflake/testing.py     doubles for both seams, so the declines
+                                       are asserted for free
 src/chip_chat/snowflake/snow.py        the `snow` CLI, wrapped
 src/chip_chat/snowflake/apply.py       `make snowflake-apply`
 src/chip_chat/snowflake/load.py        `make snowflake-load-sample`
@@ -196,8 +203,19 @@ Three things about this file are easy to lose and expensive to lose:
 
 `analyst.py` is the other half and it makes no network call: it takes a Cortex
 Analyst response and returns either SQL worth running or the reason it will not,
-which is RFC-001 §10's *"I can't answer that reliably"* as a function. #61 owns
-the HTTP and the span.
+which is RFC-001 §10's *"I can't answer that reliably"* as a function.
+
+`cortex.py` is the HTTP and `lane.py` is the span, both #61's. `AccountLane.ask`
+opens one `db.cortex_analyst` around all three steps — the Analyst call, the
+decision, and the execution of whatever it admitted — because that span's two
+attributes are *the SQL* and *how many rows it returned*, and those come from
+opposite ends of the sequence.
+
+Authentication is a key-pair JWT minted by `snow connection generate-jwt`, from
+the same `~/.snowflake/config.toml` connection `snow.py` shells out to. Same
+argument as that module's: a second code path that knew how to sign a JWT is a
+second thing to fix when the key rotates. A deployment that cannot ship the CLI
+supplies a different `TokenSource`; that is what the protocol is for.
 
 Measured against the live trial on 2026-08-27: seven answerable questions
 answered and executed, ten deliberately unanswerable ones refused with no SQL at
@@ -205,6 +223,29 @@ all, and an Analyst round trip with a **3.65s median** — which is past the PRD
 whole-turn target on its own, because Cortex Analyst is not native in this
 region. [docs/snowflake-semantic-view.md](../docs/snowflake-semantic-view.md)
 has the numbers, the six findings behind the file, and what was not measured.
+
+## The reads that name nobody
+
+`reads.py` is `get_points_balance`, `get_usual_order` and `get_recommendations`,
+and **not one of the four statements in it carries a predicate on `demo_id`**.
+`sql/11_semantic_view.sql` already gives the reason for the generated path and
+it is the same reason here: every query is written as though the visitor were
+the only person in the database, because [#43]'s row access policies mean the
+session cannot see another visitor's rows. A `WHERE demo_id = ...` would need a
+visitor identifier to put in it, and RFC-001 §06's whole design is that no
+signature has one. `test_reads.py` asserts the string's absence from every
+statement.
+
+Identity arrives through `SessionCheckout`, which is
+`chip_chat.api.pool.VisitorPool.for_session` — a *session* id in, a connection
+with one visitor already bound out. The lanes hold that callable and never a
+`demo_id`.
+
+Two absences are reported rather than papered over. `CHIP_CHAT.MARTS` has no
+`recommendations` table yet (bead `cc-afo5`), so `get_recommendations` declines
+and says so; nothing publishes `rewards` yet (`cc-99cn`), so the balance comes
+back real with a note saying the catalogue it would be spent against is not
+loaded. Both are visible in a trace as declining lanes, which is what they are.
 
 ## The write path, and the one word holding it up
 

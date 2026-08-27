@@ -42,12 +42,12 @@ output changes.
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
+from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.loop import Conversation, TurnResult, run_turn
 from chip_chat.agent.model import ChatModel
 from chip_chat.agent.orders import OrderDesk
 from chip_chat.api.guard import SpendGuard, TurnBudget
 from chip_chat.api.outcome import Stop
-from chip_chat.vision.lane import PhotoLane
 
 __all__ = ["FundedTurn", "SpendGate", "UnfundedTurnError"]
 
@@ -67,14 +67,14 @@ class FundedTurn:
     The constructor is the enforcement. Everything else is bookkeeping.
     """
 
-    __slots__ = ("_budget", "_desk", "_lane", "_model")
+    __slots__ = ("_budget", "_desk", "_lanes", "_model")
 
     def __init__(
         self,
         budget: TurnBudget,
         model: ChatModel,
         desk: OrderDesk,
-        lane: PhotoLane | None = None,
+        lanes: Lanes = NO_LANES,
     ) -> None:
         """Bind an allowed budget to the model it paid for.
 
@@ -82,7 +82,7 @@ class FundedTurn:
             budget: The turn's budget, which must be allowed.
             model: The chat model this turn may call.
             desk: The order desk holding this session's drafts.
-            lane: The photo lane, where one is configured.
+            lanes: The backing services this deployment has.
 
         Raises:
             UnfundedTurnError: If ``budget`` is not allowed. There is no such
@@ -96,7 +96,7 @@ class FundedTurn:
         self._budget = budget
         self._model = model
         self._desk = desk
-        self._lane = lane
+        self._lanes = lanes
 
     @property
     def tokens_used(self) -> int:
@@ -134,7 +134,7 @@ class FundedTurn:
             message,
             model=self._model,
             desk=self._desk,
-            lane=self._lane,
+            lanes=self._lanes,
         )
         self._budget.record_usage(
             prompt_tokens=result.prompt_tokens,
@@ -160,7 +160,7 @@ class SpendGate:
     still start, serve ``/healthz`` and say what is wrong.
     """
 
-    __slots__ = ("_desk", "_guard", "_lane", "_model", "_model_factory")
+    __slots__ = ("_desk", "_guard", "_lanes", "_model", "_model_factory")
 
     def __init__(
         self,
@@ -168,7 +168,7 @@ class SpendGate:
         model_factory: Callable[[], ChatModel],
         *,
         desk: OrderDesk | None = None,
-        lane: PhotoLane | None = None,
+        lanes: Lanes = NO_LANES,
     ) -> None:
         """Assemble the gate.
 
@@ -177,14 +177,15 @@ class SpendGate:
                 without one, which is the point of the class.
             model_factory: Builds the chat model on first use.
             desk: The order desk. Defaults to a fresh one.
-            lane: The photo lane. ``None`` -- the default -- means the agent is
-                never offered ``match_meal_from_photo``, which is the honest
-                state for a deployment with no vision deployment behind it.
+            lanes: The backing services this deployment has. The default is
+                nothing wired, which withdraws ``ask_account_question``,
+                ``get_recommendations`` and ``match_meal_from_photo`` -- the
+                honest state for a deployment with none of them behind it.
         """
         self._guard = guard
         self._model_factory = model_factory
         self._desk = desk if desk is not None else OrderDesk()
-        self._lane = lane
+        self._lanes = lanes
         self._model: ChatModel | None = None
 
     @property
@@ -198,9 +199,9 @@ class SpendGate:
         return self._desk
 
     @property
-    def lane(self) -> PhotoLane | None:
-        """The photo lane, or ``None`` where none is configured."""
-        return self._lane
+    def lanes(self) -> Lanes:
+        """What is wired, which is what the agent may be offered."""
+        return self._lanes
 
     def entry_state(self) -> Stop | None:
         """Whether a visitor may start a conversation at all. Emits no span."""
@@ -233,7 +234,7 @@ class SpendGate:
                 assert budget.stop is not None
                 yield budget.stop
                 return
-            yield FundedTurn(budget, self._model_for_this_turn(), self._desk, self._lane)
+            yield FundedTurn(budget, self._model_for_this_turn(), self._desk, self._lanes)
 
     def _model_for_this_turn(self) -> ChatModel:
         """Build the model on first use and keep it. Private, and stays private.

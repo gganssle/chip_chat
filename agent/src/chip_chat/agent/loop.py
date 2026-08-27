@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from chip_chat.agent.hardcoded import ACCOUNT, MENU, SIMULATION_NOTICE, STORE
+from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.model import ChatModel, ModelReply
 from chip_chat.agent.orders import OrderDesk
 from chip_chat.agent.prompt import load
@@ -37,7 +38,6 @@ from chip_chat.otel import (
     agent_step,
     llm_completion,
 )
-from chip_chat.vision.lane import PhotoLane
 
 __all__ = [
     "CONFIRMATION_NOTE",
@@ -102,22 +102,28 @@ PROMPT_VERSION = load().version
 """What ``chat.turn`` records. See :mod:`chip_chat.agent.prompt`."""
 
 
-def runtime_context(tools: Sequence[ToolName] = TOOLS) -> str:
+def runtime_context(tools: Sequence[ToolName] = TOOLS, *, lanes: Lanes = NO_LANES) -> str:
     """What is true today, as opposed to how the assistant behaves.
 
     Deliberately a separate message rather than an f-string spliced into the
     prompt. Splicing would make the prompt digest a function of the menu and the
     persona, and a version that changes when a visitor changes is not a version.
 
-    A function rather than a constant because the registered tool list is not
-    the same in every deployment: ``match_meal_from_photo`` is answerable only
-    where a photo lane was wired. Telling the model a tool is registered when
-    nothing can answer it, or withholding one that is, are both worse than
-    either being consistently true -- see
+    A function rather than a constant because neither the registered tool list
+    nor the data behind it is the same in every deployment. Telling the model a
+    tool is registered when nothing can answer it, or withholding one that is,
+    are both worse than either being consistently true -- see
     :func:`~chip_chat.agent.tools.offered_tools`.
+
+    ``lanes`` is here for the same reason and it is not cosmetic: the paragraph
+    about the three-item menu is *true* on a deployment with no knowledge lane
+    and *false* on one with the harvested corpus behind it. A model told the
+    menu is three items while retrieval returns forty will either contradict the
+    corpus or refuse to read it, and both look like a retrieval bug.
 
     Args:
         tools: The tools actually registered for this deployment.
+        lanes: What is wired, which decides which facts below are facts.
 
     Returns:
         The second system message a conversation opens with.
@@ -129,26 +135,48 @@ The visitor is signed in as {ACCOUNT.display_name}, a rewards member at the
 {STORE.name} store. You already know who they are, so never ask for a name, an
 email, a phone number or a payment detail.
 
-This is a proof of concept running on a deliberately tiny hardcoded menu, and
-you never pretend otherwise. The menu is exactly these items and nothing else
-exists:
-{_MENU_LINES}
-
-If search_menu_knowledge returns nothing, say the menu is only these items.
+{_menu_facts(lanes)}
 
 The tools registered right now are: {", ".join(name.value for name in tools)}.
 Any lane above whose tool is not on that list is not available on this turn --
 say so plainly rather than improvising an answer or reaching for another tool.
-There is no retrieval corpus behind this menu yet, so answer menu questions from
-what search_menu_knowledge returns and leave the citations field empty.
 
 {SIMULATION_NOTICE} Say so whenever an order is placed.
 
 Keep replies to a few sentences. Plain text, no markdown."""
 
 
+_HARDCODED_MENU_FACTS = f"""\
+This is a proof of concept running on a deliberately tiny hardcoded menu, and
+you never pretend otherwise. The menu is exactly these items and nothing else
+exists:
+{_MENU_LINES}
+
+If search_menu_knowledge returns nothing, say the menu is only these items.
+There is no retrieval corpus behind this menu yet, so answer menu questions from
+what search_menu_knowledge returns and leave the citations field empty."""
+"""What is true of a deployment with no knowledge lane wired."""
+
+_RETRIEVED_MENU_FACTS = """\
+Menu questions are answered from the restaurant's published pages through
+search_menu_knowledge, and from nowhere else -- not from what you remember about
+this restaurant and not from an earlier turn. Every passage it returns carries
+an id; cite the ones you used and never a source it did not return. If it comes
+back with nothing, or says its confidence is low, say you could not find it
+rather than filling the gap."""
+"""What is true of a deployment with the harvested corpus behind #49's lane."""
+
+
+def _menu_facts(lanes: Lanes) -> str:
+    """Return the menu paragraph that is true for this wiring."""
+    if lanes.knowledge is None:
+        return _HARDCODED_MENU_FACTS
+    return _RETRIEVED_MENU_FACTS
+
+
 RUNTIME_CONTEXT = runtime_context()
-"""The runtime context of a deployment with no photo lane wired."""
+"""The runtime context of a deployment with nothing wired: the hardcoded menu,
+the hardcoded account, and none of the three conditional tools offered."""
 
 
 @dataclass(slots=True)
@@ -226,7 +254,7 @@ def run_turn(
     *,
     model: ChatModel,
     desk: OrderDesk,
-    lane: PhotoLane | None = None,
+    lanes: Lanes = NO_LANES,
     confirmed_draft_id: str | None = None,
     max_steps: int = DEFAULT_MAX_STEPS,
 ) -> TurnResult:
@@ -239,8 +267,8 @@ def run_turn(
         message: What the visitor said.
         model: The chat model to call.
         desk: The order desk holding this session's drafts.
-        lane: The photo lane, where one is wired. ``None`` means the model is
-            not offered ``match_meal_from_photo`` at all -- see
+        lanes: The backing services this deployment has. A lane that is absent
+            withdraws its tool rather than leaving one nothing can answer -- see
             :func:`~chip_chat.agent.tools.offered_tools` for why an unanswerable
             tool definition is worse than an absent one.
         confirmed_draft_id: A draft the desk has *already* confirmed. The model
@@ -255,9 +283,9 @@ def run_turn(
 
     Raises:
         ToolRegistrationError: If ``conversation`` was opened believing a
-            different set of tools was registered than ``lane`` implies.
+            different set of tools was registered than ``lanes`` implies.
     """
-    offered = offered_tools(lane=lane)
+    offered = offered_tools(lanes)
     if tuple(conversation.tools) != offered:
         # The runtime context is written once, when the conversation opens, and
         # names the registered tools. A lane wired after that -- or a
@@ -281,7 +309,7 @@ def run_turn(
     card: Mapping[str, Any] | None = None
     receipt = False
 
-    schemas = offered_schemas(lane=lane)
+    schemas = offered_schemas(lanes)
 
     for step_index in range(max_steps):
         with agent_step(index=step_index) as step:
@@ -316,7 +344,7 @@ def run_turn(
                     invocation,
                     session_id=conversation.session_id,
                     desk=desk,
-                    lane=lane,
+                    lanes=lanes,
                     record_spend=lane_spend.append,
                 )
                 for usage in lane_spend:

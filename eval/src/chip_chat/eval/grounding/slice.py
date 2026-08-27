@@ -35,6 +35,7 @@ disagree with the first.
 
 from dataclasses import dataclass
 
+from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.model import ChatModel
 from chip_chat.eval.dataset.entries import GOLDEN_PREFIX
 from chip_chat.eval.golden.cases import GoldenCase, GoldenSet
@@ -45,7 +46,6 @@ from chip_chat.eval.grounding.questions import Question
 from chip_chat.eval.grounding.run import Turn
 from chip_chat.eval.trajectory.trees import from_readable_spans
 from chip_chat.otel.testing import span_recorder
-from chip_chat.vision.lane import PhotoLane
 
 __all__ = ["RECORDER_COMPONENT", "SliceTurnSource"]
 
@@ -70,13 +70,15 @@ class SliceTurnSource:
         model: The chat model to run the loop against. A real deployment
             produces a real number; a scripted double produces a measurement of
             the script.
-        lane: The photo lane, where one is wired.
+        lanes: The backing services the slice runs against. A lane that is
+            absent withdraws its tool rather than leaving one nothing can
+            answer.
         session_prefix: What each row's session id is built from.
     """
 
     golden: GoldenSet
     model: ChatModel
-    lane: PhotoLane | None = None
+    lanes: Lanes = NO_LANES
     session_prefix: str = DEFAULT_SESSION
 
     @property
@@ -107,7 +109,7 @@ class SliceTurnSource:
                 reports=self.reports,
             )
         deployment = SliceDeployment(
-            self.model, lane=self.lane, session_prefix=self.session_prefix
+            self.model, lanes=self.lanes, session_prefix=self.session_prefix
         )
         with span_recorder(RECORDER_COMPONENT) as recorder:
             observation = deployment.turn(case)

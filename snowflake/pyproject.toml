@@ -3,7 +3,15 @@ name = "chip-chat-snowflake"
 version = "0.0.0"
 description = "Schema, RBAC, row access policies, semantic view, stored procs."
 requires-python = ">=3.13"
-dependencies = ["chip-chat-otel"]
+dependencies = [
+    "chip-chat-otel",
+    # #61's `ask_account_question` owns the HTTP call to
+    # `/api/v2/cortex/analyst/message`; `cortex.py` is that call and `analyst.py`
+    # is still the judgement, which makes no request at all. The client is
+    # injected and imported inside one function, so `make ci` pays nothing for
+    # this and a test supplies a transport.
+    "httpx>=0.28",
+]
 
 [build-system]
 requires = ["hatchling"]

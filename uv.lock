@@ -452,6 +452,8 @@ dependencies = [
     { name = "azure-identity" },
     { name = "azure-storage-blob" },
     { name = "chip-chat-otel" },
+    { name = "chip-chat-search" },
+    { name = "chip-chat-snowflake" },
     { name = "chip-chat-vision" },
     { name = "openai" },
 ]
@@ -461,6 +463,8 @@ requires-dist = [
     { name = "azure-identity", specifier = ">=1.19" },
     { name = "azure-storage-blob", specifier = ">=12.24" },
     { name = "chip-chat-otel", editable = "otel" },
+    { name = "chip-chat-search", editable = "search" },
+    { name = "chip-chat-snowflake", editable = "snowflake" },
     { name = "chip-chat-vision", editable = "vision" },
     { name = "openai", specifier = ">=1.60" },
 ]
@@ -630,10 +634,14 @@ version = "0.0.0"
 source = { editable = "snowflake" }
 dependencies = [
     { name = "chip-chat-otel" },
+    { name = "httpx" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "chip-chat-otel", editable = "otel" }]
+requires-dist = [
+    { name = "chip-chat-otel", editable = "otel" },
+    { name = "httpx", specifier = ">=0.28" },
+]
 
 [[package]]
 name = "chip-chat-vision"
