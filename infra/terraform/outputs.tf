@@ -333,3 +333,18 @@ output "databricks_recommender_model" {
   description = "The registered model's three-level Unity Catalog name. Load the deployed version with: mlflow.pyfunc.load_model(\"models:/<name>@champion\")"
   value       = var.databricks_unity_catalog_enabled ? databricks_registered_model.recommender[0].id : null
 }
+
+output "databricks_publish_job_id" {
+  description = "Publishes the catalogue, the three account tables and the four marts into Snowflake (gh-39). Nightly, and PAUSED until var.databricks_publish_schedule_enabled is true. Run it by hand with: databricks jobs run-now <id>. Run it after the gold pipeline -- it copies what that pipeline computed and never recomputes anything. Null while var.snowflake_account_url is empty."
+  value       = length(databricks_job.publish) > 0 ? databricks_job.publish[0].id : null
+}
+
+output "databricks_publish_verify_job_id" {
+  description = "Asserts gh-39's acceptance criteria against the live serving layer. Run it after the publish job with: databricks jobs run-now <id>"
+  value       = length(databricks_job.publish_verify) > 0 ? databricks_job.publish_verify[0].id : null
+}
+
+output "databricks_publish_secret_scope" {
+  description = "The Databricks secret scope the publish reads its Snowflake private key from. Created empty; fill it with: databricks secrets put-secret <scope> publisher-private-key --string-value \"$(cat ~/.snowflake/keys/chip_chat_publisher.p8)\""
+  value       = databricks_secret_scope.snowflake.name
+}

@@ -1,4 +1,4 @@
--- One database, three schemas, and a boundary you can grant on.
+-- One database, four schemas, and a boundary you can grant on.
 --
 -- RFC-001 §04: Snowflake holds two populations that must never blur -- the real
 -- catalogue, harvested and versioned, and the synthetic account data generated
@@ -10,6 +10,25 @@
 --   CHIP_CHAT.ACCOUNTS    synthetic, visitor-scoped     #42 fills it, #43 puts
 --                                                       row access policies on it
 --   CHIP_CHAT.MARTS       published nightly, derived    #39 fills it
+--   CHIP_CHAT.STAGING     the loading dock, not a lane  #39 writes and empties it
+--
+-- THE FOURTH IS NOT A POPULATION. The three above are lanes a conversation
+-- reads. STAGING is where #39's nightly publish lands an incoming generation
+-- before one INSERT OVERWRITE makes it live in the lane it belongs to.
+--
+-- It cannot land beside its target, and that is the whole reason this schema
+-- exists. 03_grants.sql gives CHIP_CHAT_READ SELECT ON FUTURE TABLES in all
+-- three lanes -- deliberately, so a table a later issue adds is readable
+-- without anyone remembering to re-run a grants file. Applied to an incoming
+-- generation that is exactly wrong: an `orders_incoming` in ACCOUNTS would be a
+-- complete unscoped copy of the population, readable by the identity the agent
+-- runs as, and covered by no row access policy, because #43 attaches policies
+-- to tables BY NAME. A schema nothing but the publisher can reach is the only
+-- shape of that dock which is not a hole.
+--
+-- It holds no declared table and is empty between runs: the publish drops a
+-- staging table when its swap succeeds, so one that is still there is the
+-- evidence of a run that stopped.
 --
 -- Why schemas and not a table-name prefix: the same argument the lakehouse made
 -- in docs/lakehouse-catalog.md. A prefix cannot be granted on. A schema can, and
@@ -52,11 +71,16 @@ CREATE SCHEMA IF NOT EXISTS CHIP_CHAT.MARTS
     WITH MANAGED ACCESS
     COMMENT = 'Published nightly from Databricks (#39). customer_360, usual_order, item_affinity, spend_summary. Read by the personalization lane, written by nobody else.';
 
+CREATE SCHEMA IF NOT EXISTS CHIP_CHAT.STAGING
+    WITH MANAGED ACCESS
+    COMMENT = 'The loading dock for the nightly publish (#39), and not one of the three populations. Holds one incoming generation per published table, for as long as it takes an INSERT OVERWRITE to make it live, and is empty between runs. Granted to CHIP_CHAT_PUBLISH and to nobody else: an incoming generation is an unscoped copy of a visitor-scoped table with no row access policy on it, so neither lane a conversation runs on may read one. Nothing here is declared by snowflake/sql -- every table in it is created and dropped by the job.';
+
 -- ENABLE MANAGED ACCESS on a re-run: IF NOT EXISTS above is silent about the
 -- properties of a schema that already exists, and a schema someone turned
 -- managed access off on would otherwise stay that way forever.
 ALTER SCHEMA CHIP_CHAT.CATALOGUE ENABLE MANAGED ACCESS;
 ALTER SCHEMA CHIP_CHAT.ACCOUNTS  ENABLE MANAGED ACCESS;
 ALTER SCHEMA CHIP_CHAT.MARTS     ENABLE MANAGED ACCESS;
+ALTER SCHEMA CHIP_CHAT.STAGING   ENABLE MANAGED ACCESS;
 
 DROP SCHEMA IF EXISTS CHIP_CHAT.PUBLIC;

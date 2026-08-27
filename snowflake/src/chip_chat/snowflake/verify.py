@@ -106,9 +106,15 @@ PROBE_TABLE = account.table("ACCOUNTS", "_VERIFY_PROBE")
 PROBE_POLICY = account.table("ACCOUNTS", "_VERIFY_PROBE_POLICY")
 PROBE_MART = account.table("MARTS", "_VERIFY_PROBE_MART")
 
-# The three schemas, quoted, for the INFORMATION_SCHEMA predicates in #42's
-# checks. Built from account.SCHEMAS so a fourth schema is covered by adding
+# The three lane schemas, quoted, for the INFORMATION_SCHEMA predicates in
+# #42's checks. Built from account.SCHEMAS so another LANE is covered by adding
 # it there rather than by remembering this line.
+#
+# account.STAGING_SCHEMA is deliberately not in that tuple and so is not here.
+# #39's loading dock holds no declared table and is empty between runs, so
+# "every table in these schemas is one schema.py declares" is a question that
+# does not apply to it -- and asking it anyway would make this command fail
+# while a publish was running.
 _SCHEMA_LIST = ", ".join(f"'{name}'" for name in account.SCHEMAS)
 
 # Two visitors. The whole of criterion 3 is that a session which is one of them

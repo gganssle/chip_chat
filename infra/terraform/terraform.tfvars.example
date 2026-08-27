@@ -85,3 +85,32 @@
 # apply while someone sets one.
 #
 # databricks_unity_catalog_enabled = true
+
+# --- The nightly publish (issue #39) ----------------------------------------
+#
+# Snowflake is not managed by this Terraform. `snowflake/sql/` builds the account
+# and `make snowflake-apply` runs it; what is here is the two facts the
+# Databricks job needs to find it, neither of which is a secret.
+#
+# snowflake_account_url IS THE SWITCH. Empty — the default — means neither the
+# publish job nor its verify job is created at all: a job pointed at no account
+# would fail on its first scheduled run and email somebody about a system that
+# was never stood up.
+#
+# The private key is NOT here and is not a variable. Terraform creates the secret
+# scope empty and an operator fills it, so no credential enters state:
+#
+#   databricks secrets put-secret chip-chat-snowflake publisher-private-key \
+#     --string-value "$(cat ~/.snowflake/keys/chip_chat_publisher.p8)"
+#
+# AWS us-east-2, not Azure East US 2. Fixed at signup; GitHub #104 has the
+# decision and what it costs. docs/nightly-publish.md is the whole write-up.
+#
+# snowflake_account_url = "hq72718.us-east-2.aws.snowflakecomputing.com"
+
+# The schedule ships PAUSED, like the recommender's. Turn it on once the
+# medallion is loaded and the marts are current — a job that fails every night at
+# seven is an alert that stops meaning anything.
+#
+# databricks_publish_schedule_enabled = false
+# databricks_publish_cron             = "0 0 7 * * ?"

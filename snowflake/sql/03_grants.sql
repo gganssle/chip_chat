@@ -1,14 +1,20 @@
 -- Privileges. This file IS the security boundary; everything else is furniture.
 --
--- Read it as three columns. CHIP_CHAT_READ may SELECT everywhere and do nothing
--- else anywhere. CHIP_CHAT_WRITE may change ACCOUNTS, may read CATALOGUE to
--- price what it writes, and cannot see MARTS at all. CHIP_CHAT_PUBLISH may
--- replace CATALOGUE and MARTS wholesale and cannot see ACCOUNTS at all.
+-- Read it as four columns. CHIP_CHAT_READ may SELECT everywhere a conversation
+-- reads and do nothing else anywhere. CHIP_CHAT_WRITE may change ACCOUNTS, may
+-- read CATALOGUE to price what it writes, and cannot see MARTS at all.
+-- CHIP_CHAT_PUBLISH may replace CATALOGUE and MARTS wholesale, owns the STAGING
+-- dock outright, and reaches ACCOUNTS through three tables and no schema grant.
 --
---                     CATALOGUE      ACCOUNTS       MARTS       warehouse
---   READ              select         select         select      serving
---   WRITE             select         select+DML     --          serving
---   PUBLISH           select+DML     --             select+DML  publish
+--                     CATALOGUE      ACCOUNTS       MARTS       STAGING   warehouse
+--   READ              select         select         select      --        serving
+--   WRITE             select         select+DML     --          --        serving
+--   PUBLISH           select+DML     3 tables       select+DML  all       publish
+--
+-- THE THREE TABLES ARE THE ONE EXCEPTION IN THIS FILE, so read the argument for
+-- them where it is made, at CHIP_CHAT_PUBLISH below. `account.GRANTS` carries
+-- the same exception as `Access.tables` with the same reasoning attached, and
+-- `test_account_layout.py` refuses a table-level grant the table does not name.
 --
 -- Every grant is made twice: once ON ALL, which covers what exists now, and once
 -- ON FUTURE, which covers what #42, #39 and #46 will create. Future grants are
@@ -108,19 +114,62 @@ GRANT USAGE ON FUTURE PROCEDURES IN SCHEMA CHIP_CHAT.ACCOUNTS TO ROLE CHIP_CHAT_
 -- CHIP_CHAT_PUBLISH -- the nightly job out of Databricks (#39).
 --
 -- It creates tables, because a publish replaces a mart rather than merging into
--- one. It cannot see ACCOUNTS: the marts are computed in the lakehouse from
--- data that got there another way, and RFC-001 §04's containment argument --
--- that no visitor-editable field is an input to a mart -- is easier to keep
--- when the publisher physically cannot read demo_visitors.
+-- one.
+--
+-- IT DOES NOT GET A SCHEMA GRANT ON ACCOUNTS, and it does write three tables in
+-- it. Both halves are deliberate. #39's scope publishes the synthetic account
+-- tables on the same schedule as the marts, and the three named below are
+-- exactly the tables the marts are computed from -- `schema.MART_INPUTS`, and
+-- `account.PUBLISHED_ACCOUNT_TABLES` asserts the two lists are one list.
+--
+-- The three that are missing are the point:
+--
+--   demo_visitors       Holds all three columns a visitor may edit, and is the
+--                       one account table a visitor writes to. A nightly
+--                       overwrite would delete every edit made that day. It is
+--                       also what RFC-001 §04 rests its answer to PRD Q2 on --
+--                       no editable field is an input to a mart, checkable
+--                       because the publisher physically cannot read the table
+--                       they live in. A schema-level grant here would have
+--                       thrown that away to move three tables.
+--   personas
+--   persona_fixtures    Reference rows the generator emits once. They reach the
+--                       account through `chip_chat.snowflake.load`, run by an
+--                       operator as CHIP_CHAT_ADMIN.
+--
+-- No CREATE TABLE on ACCOUNTS either: the publisher replaces the rows of three
+-- tables somebody else declared, and cannot make a fourth.
+--
+-- AND IT OWNS STAGING. That schema is the loading dock -- an incoming
+-- generation is an unscoped copy of a visitor-scoped table with no row access
+-- policy on it, so it lands somewhere neither lane a conversation runs on can
+-- reach. 02_database.sql carries the argument; the grants are three lines and
+-- the absence of six.
 -- --------------------------------------------------------------------------
 
 GRANT USAGE ON SCHEMA CHIP_CHAT.CATALOGUE TO ROLE CHIP_CHAT_PUBLISH;
 GRANT USAGE ON SCHEMA CHIP_CHAT.MARTS     TO ROLE CHIP_CHAT_PUBLISH;
+GRANT USAGE ON SCHEMA CHIP_CHAT.STAGING   TO ROLE CHIP_CHAT_PUBLISH;
 
 GRANT CREATE TABLE, CREATE VIEW, CREATE STAGE ON SCHEMA CHIP_CHAT.CATALOGUE TO ROLE CHIP_CHAT_PUBLISH;
 GRANT CREATE TABLE, CREATE VIEW, CREATE STAGE ON SCHEMA CHIP_CHAT.MARTS     TO ROLE CHIP_CHAT_PUBLISH;
+GRANT CREATE TABLE, CREATE STAGE               ON SCHEMA CHIP_CHAT.STAGING   TO ROLE CHIP_CHAT_PUBLISH;
 
 GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES    IN SCHEMA CHIP_CHAT.CATALOGUE TO ROLE CHIP_CHAT_PUBLISH;
 GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON FUTURE TABLES IN SCHEMA CHIP_CHAT.CATALOGUE TO ROLE CHIP_CHAT_PUBLISH;
 GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES    IN SCHEMA CHIP_CHAT.MARTS     TO ROLE CHIP_CHAT_PUBLISH;
 GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON FUTURE TABLES IN SCHEMA CHIP_CHAT.MARTS     TO ROLE CHIP_CHAT_PUBLISH;
+GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES    IN SCHEMA CHIP_CHAT.STAGING   TO ROLE CHIP_CHAT_PUBLISH;
+GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON FUTURE TABLES IN SCHEMA CHIP_CHAT.STAGING   TO ROLE CHIP_CHAT_PUBLISH;
+
+-- ACCOUNTS, three tables and no schema. USAGE reaches into the schema and
+-- reaches nothing in it on its own -- a managed-access schema grants no object
+-- privilege with it -- so the three GRANTs below are the whole of what the
+-- publisher can touch here. TRUNCATE is what the swap's INSERT OVERWRITE needs;
+-- UPDATE is not granted, because a publish replaces a generation and never
+-- edits a row.
+GRANT USAGE ON SCHEMA CHIP_CHAT.ACCOUNTS TO ROLE CHIP_CHAT_PUBLISH;
+
+GRANT SELECT, INSERT, DELETE, TRUNCATE ON TABLE CHIP_CHAT.ACCOUNTS.orders         TO ROLE CHIP_CHAT_PUBLISH;
+GRANT SELECT, INSERT, DELETE, TRUNCATE ON TABLE CHIP_CHAT.ACCOUNTS.order_items    TO ROLE CHIP_CHAT_PUBLISH;
+GRANT SELECT, INSERT, DELETE, TRUNCATE ON TABLE CHIP_CHAT.ACCOUNTS.loyalty_ledger TO ROLE CHIP_CHAT_PUBLISH;

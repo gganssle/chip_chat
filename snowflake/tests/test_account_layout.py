@@ -112,7 +112,7 @@ def test_every_warehouse_is_created_and_sized(sql: dict[str, str]) -> None:
 def test_every_schema_is_created_with_managed_access(sql: dict[str, str]) -> None:
     source = _flat(sql["02_database.sql"])
     assert f"CREATE DATABASE IF NOT EXISTS {account.DATABASE}" in source
-    for name in account.SCHEMAS:
+    for name in account.ALL_SCHEMAS:
         qualified = account.schema(name)
         assert f"CREATE SCHEMA IF NOT EXISTS {qualified}" in source, (
             f"{qualified} is in account.py but nothing creates it"
@@ -200,6 +200,35 @@ def _schema_grants(source: str) -> list[tuple[str, str, set[str]]]:
     return found
 
 
+def _table_grants(source: str) -> list[tuple[str, str, str, set[str]]]:
+    """Return every GRANT on one named table as ``(role, schema, table, privileges)``.
+
+    A separate parser rather than a widened one, because a table-level grant is
+    a different kind of statement about the boundary: it reaches *into* a schema
+    the access table may have closed. Before `#39` there were none, and the
+    check that matters is the one below -- that a grant like this is one
+    `account.GRANTS` names, so a fourth table cannot be slipped in beside the
+    three that were argued for.
+    """
+    pattern = (
+        r"GRANT (?P<privileges>.+?) ON TABLE "
+        rf"{account.DATABASE}\.(?P<schema>\w+)\.(?P<table>\w+) TO ROLE (?P<role>\w+)"
+    )
+    found = []
+    for statement in _statements(source):
+        match = re.fullmatch(pattern, statement)
+        if match:
+            found.append(
+                (
+                    match.group("role"),
+                    match.group("schema"),
+                    match.group("table"),
+                    _privileges(match.group("privileges")),
+                )
+            )
+    return found
+
+
 def test_the_grant_parser_still_reads_the_file(sql: dict[str, str]) -> None:
     """A parser that matches nothing would make every test below vacuous."""
     grants = _schema_grants(sql["03_grants.sql"])
@@ -215,7 +244,7 @@ def test_no_grant_contradicts_the_access_table(sql: dict[str, str]) -> None:
     for role, schema_name, privileges in _schema_grants(sql["03_grants.sql"]):
         if role not in account.GRANTS:
             continue  # CHIP_CHAT_ADMIN owns the schemas; it is not a lane.
-        access = account.GRANTS[role][schema_name]  # type: ignore[index]
+        access = account.access(role, schema_name)  # type: ignore[arg-type]
 
         mutating = privileges & MUTATING
         assert not mutating or access.write, (
@@ -224,17 +253,110 @@ def test_no_grant_contradicts_the_access_table(sql: dict[str, str]) -> None:
             f"if it is the table then this is a widened boundary."
         )
         reading = privileges & READING
-        assert not reading or access.read, (
+        assert not reading or access.read or (access.tables and reading == {"USAGE"}), (
             f"03_grants.sql gives {role} {sorted(reading)} on {schema_name}, which "
             f"account.GRANTS says it may not read at all."
+        )
+
+
+def test_a_table_grant_is_one_the_access_table_names(sql: dict[str, str]) -> None:
+    """A grant that reaches into a closed schema is one `Access.tables` argued for.
+
+    This is the check the table-level exception is worth having. `#39` needs
+    three tables of ACCOUNTS and the schema stays shut; the failure mode to
+    guard against is a fourth line appearing beside them, in a file whose header
+    still says the publisher cannot see the schema.
+    """
+    for role, schema_name, table_name, privileges in _table_grants(sql["03_grants.sql"]):
+        if role not in account.GRANTS:
+            continue
+        access = account.access(role, schema_name)  # type: ignore[arg-type]
+        if access.write:
+            continue  # the schema is open to it anyway; the grant adds nothing
+        named = {name.upper() for name in access.tables}
+        assert table_name.upper() in named, (
+            f"03_grants.sql grants {role} {sorted(privileges)} on "
+            f"{schema_name}.{table_name}, and account.GRANTS names only "
+            f"{sorted(named)} there. Either the table belongs in the access "
+            "table with an argument beside it, or this grant is a widened "
+            "boundary."
+        )
+        assert access.why, (
+            f"{role} may write {schema_name}.{table_name} by name and "
+            "account.GRANTS gives no reason. A table-level grant with no "
+            "argument beside it is a boundary nobody has to defend."
+        )
+
+
+def test_the_published_account_tables_are_the_tables_the_marts_came_from(
+    sql: dict[str, str],
+) -> None:
+    """The publisher writes `MART_INPUTS` and nothing else in ACCOUNTS.
+
+    Two lists in two modules, held to being one list. `schema.MART_INPUTS` is
+    what the gold marts read; `account.PUBLISHED_ACCOUNT_TABLES` is what the
+    nightly publish may replace. They are the same tables because the publish
+    carries what the marts were derived from -- and if they ever stop being the
+    same, one of the two changed without the other being asked.
+    """
+    from chip_chat.snowflake import schema
+
+    assert account.PUBLISHED_ACCOUNT_TABLES == schema.MART_INPUTS
+    assert account.GRANTS["CHIP_CHAT_PUBLISH"]["ACCOUNTS"].tables == schema.MART_INPUTS
+
+    granted = {
+        table_name.lower()
+        for role, schema_name, table_name, _ in _table_grants(sql["03_grants.sql"])
+        if role == "CHIP_CHAT_PUBLISH" and schema_name == "ACCOUNTS"
+    }
+    assert granted == set(schema.MART_INPUTS), (
+        f"03_grants.sql gives the publisher {sorted(granted)} in ACCOUNTS and the "
+        f"marts are computed from {sorted(schema.MART_INPUTS)}"
+    )
+
+    for editable in schema.EDITABLE_COLUMNS:
+        assert editable not in _flat(sql["03_grants.sql"]), (
+            "an editable column is named in the grants file, which is not where "
+            "a column belongs"
+        )
+    assert "demo_visitors" not in _flat(sql["03_grants.sql"]), (
+        "demo_visitors is granted to somebody by name. It holds all three "
+        "editable columns and is the one account table a visitor writes to; "
+        "RFC-001 SS04's answer to PRD Q2 is that the publisher cannot read it."
+    )
+
+
+def test_nothing_but_the_publisher_can_reach_the_staging_schema(
+    sql: dict[str, str],
+) -> None:
+    """The loading dock is granted to one role.
+
+    An incoming generation is an unscoped copy of a visitor-scoped table with no
+    row access policy on it -- #43 attaches policies to tables by name, and a
+    staging table has no name it knows. The value of `STAGING_ACCESS` is its two
+    False rows, so this asserts the absence rather than the presence.
+    """
+    for role, access in account.STAGING_ACCESS.items():
+        assert (role == "CHIP_CHAT_PUBLISH") == access.read, (
+            f"{role} reads {account.STAGING_SCHEMA}"
+        )
+        assert (role == "CHIP_CHAT_PUBLISH") == access.write
+
+    for role, schema_name, privileges in _schema_grants(sql["03_grants.sql"]):
+        if schema_name != account.STAGING_SCHEMA or role not in account.GRANTS:
+            continue
+        assert role == "CHIP_CHAT_PUBLISH", (
+            f"03_grants.sql gives {role} {sorted(privileges)} on "
+            f"{account.STAGING_SCHEMA}, which only the publisher may reach"
         )
 
 
 def test_every_access_the_table_claims_is_actually_granted(sql: dict[str, str]) -> None:
     """And the other direction: the table does not promise what the SQL withholds."""
     grants = _schema_grants(sql["03_grants.sql"])
-    for role, access_by_schema in account.GRANTS.items():
-        for schema_name, access in access_by_schema.items():
+    for role in account.LANE_ROLES:
+        for schema_name in account.ALL_SCHEMAS:
+            access = account.access(role, schema_name)
             privileges: set[str] = set()
             for granted_role, granted_schema, granted in grants:
                 if granted_role == role and granted_schema == schema_name:
@@ -250,10 +372,18 @@ def test_every_access_the_table_claims_is_actually_granted(sql: dict[str, str]) 
                     f"account.GRANTS says {role} writes {schema_name}, but no "
                     "mutating privilege is granted there"
                 )
-            if not access.read:
+            if not access.read and not access.tables:
                 assert not privileges, (
                     f"account.GRANTS says {role} cannot see {schema_name} at all, "
                     f"but it is granted {sorted(privileges)} on it"
+                )
+            if not access.read and access.tables:
+                assert privileges == {"USAGE"}, (
+                    f"{role} reaches {schema_name} through named tables only, so "
+                    f"USAGE on the schema is all it may hold there -- it has "
+                    f"{sorted(privileges)}. A managed-access schema grants no "
+                    "object privilege with USAGE, which is what makes the three "
+                    "table grants the whole of what it can touch."
                 )
 
 
@@ -591,3 +721,9 @@ def test_the_access_table_covers_every_lane_and_schema() -> None:
     assert set(account.GRANTS) == set(account.LANE_ROLES)
     for role, access in account.GRANTS.items():
         assert set(access) == set(account.SCHEMAS), f"{role} does not mention them all"
+    assert set(account.STAGING_ACCESS) == set(account.LANE_ROLES), (
+        "the staging dock does not say what every lane role may do to it"
+    )
+    for role in account.LANE_ROLES:
+        for schema_name in account.ALL_SCHEMAS:
+            account.access(role, schema_name)
