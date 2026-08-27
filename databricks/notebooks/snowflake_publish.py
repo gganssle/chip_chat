@@ -144,17 +144,38 @@ def scalar(query):
 
 
 def landed(target):
-    """Return how many rows `target` holds in Snowflake, read as the publisher.
+    """Return how many rows `target` holds in Snowflake, counted off the metadata.
 
-    Coerced to `int`. Snowflake's `COUNT(*)` is a `NUMBER(18,0)` and the
-    connector maps it to a `Decimal`, which compares correctly against the
-    staging count and then refuses to be serialised: the first publish that
+    NOT `SELECT COUNT(*)`. Three of the eleven tables this job publishes carry
+    `demo_id` and so wear #43's `visitor_isolation` row access policy, and that
+    policy is default-deny: a session that has bound no visitor reads zero rows.
+    The publisher binds no visitor -- it replaces these tables wholesale, for
+    every visitor at once -- so a `COUNT(*)` here comes back 0 against a staging
+    count of 18,898 and aborts the run after the swap has already happened.
+
+    The obvious fix is an OR clause in the policy naming CHIP_CHAT_PUBLISH, and
+    it is the wrong one. `tests/test_row_access_policies.py` refuses exactly
+    that, on the grounds that a lane role appearing in a policy body is a lane
+    role the policy has stopped applying to; and #43's acceptance criterion is
+    that an unset session variable returns zero rows from every visitor-scoped
+    table, for every role, not for every role but one.
+
+    `INFORMATION_SCHEMA.TABLES.ROW_COUNT` is metadata about the table rather
+    than a read of its rows, so no row access policy filters it. Measured on
+    the live account: as CHIP_CHAT_READ with nothing bound, `COUNT(*)` on
+    `ACCOUNTS.ORDERS` returns 0 and this returns 18,898. That is the whole
+    argument -- the publisher gets its number, and the isolation guarantee is
+    not touched to give it.
+
+    Coerced to `int` for the same reason the `COUNT(*)` was: the connector maps
+    a Snowflake `NUMBER(18,0)` to a `Decimal`, which compares correctly against
+    the staging count and then refuses to be serialised. The first publish that
     reached the end of the loop died on `TypeError: Object of type Decimal is
     not JSON serializable` in `dbutils.notebook.exit`, after all eleven tables
-    had swapped. Every row was where it should be and the run was marked
-    FAILED, which is the worst way for this job to be wrong.
+    had swapped -- every row where it should be, and the run marked FAILED,
+    which is the worst way for this job to be wrong.
     """
-    return int(scalar(f"SELECT COUNT(*) FROM {target.qualified}"))
+    return int(scalar(publish.row_count(target)))
 
 
 # COMMAND ----------

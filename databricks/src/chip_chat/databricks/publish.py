@@ -679,6 +679,43 @@ def select(candidate: Target, resolve: Callable[[str, str, str], str]) -> str:
     return f"SELECT\n    {projection}\nFROM {source}"
 
 
+def row_count(candidate: Target) -> str:
+    """Return the query counting ``candidate``'s rows off the metadata.
+
+    ``INFORMATION_SCHEMA.TABLES.ROW_COUNT`` rather than ``SELECT COUNT(*)``,
+    and the difference is the whole reason this function exists rather than an
+    f-string at the call site.
+
+    Three of the published tables carry ``demo_id`` and wear #43's
+    ``visitor_isolation`` row access policy. That policy is default-deny: a
+    session with no visitor bound reads zero rows. The publisher never binds
+    one -- it replaces these tables for every visitor at once -- so counting
+    them with ``SELECT COUNT(*)`` returns 0 and aborts the run *after* the swap.
+
+    Exempting ``CHIP_CHAT_PUBLISH`` in the policy body would fix the symptom
+    and cost the guarantee: ``tests/test_row_access_policies.py`` refuses a
+    lane role named in any policy body, because a lane role in a body is a lane
+    role the policy has stopped applying to. Metadata is not a read of the
+    rows, so no policy filters it, and the guarantee is left alone. Verified on
+    the live account: unbound as ``CHIP_CHAT_READ``, ``COUNT(*)`` on
+    ``ACCOUNTS.ORDERS`` returns 0 where this returns 18,898.
+
+    Args:
+        candidate: The published table to count.
+
+    Returns:
+        A one-row, one-column query. ``MAX`` collapses the row rather than
+        guarding a count -- ``INFORMATION_SCHEMA`` holds at most one row for a
+        given schema and table name, and ``MAX`` of no rows is NULL, which
+        ``int()`` refuses loudly rather than reading as a zero-row table.
+    """
+    return (
+        f"SELECT MAX(row_count) FROM {DATABASE}.INFORMATION_SCHEMA.TABLES "
+        f"WHERE table_schema = '{candidate.schema.upper()}' "
+        f"AND table_name = '{candidate.table.upper()}'"
+    )
+
+
 def swap(candidate: Target) -> str:
     """Return the one statement that makes ``candidate``'s new generation live.
 

@@ -846,3 +846,55 @@ def test_the_verify_job_reads_a_count_as_an_int() -> None:
         if "SELECT COUNT(*)" in line:
             assert "count(" in line or "duplicates = count(" in source, line
     assert 'scalar(f"SELECT COUNT(*)' not in source
+
+
+# ---------------------------------------------------------------------------
+# Counting what was landed, without touching #43 -- GH #39, GH #43
+# ---------------------------------------------------------------------------
+
+
+def test_the_landed_count_reads_metadata_and_not_the_rows() -> None:
+    """The publisher counts off INFORMATION_SCHEMA, and this is why.
+
+    Three published tables carry ``demo_id`` and wear ``visitor_isolation``,
+    which is default-deny. The publisher binds no visitor, so ``COUNT(*)``
+    over those tables returns 0 and aborts the run after the swap has already
+    landed the rows -- the failure that showed up the first time this job ran
+    against the real account.
+
+    The fix that was applied to the live account during that stand-up was an
+    ``OR CURRENT_ROLE() = 'CHIP_CHAT_PUBLISH'`` in the policy body. This test
+    exists because that fix is refused: ``snowflake/tests/test_row_access_policies.py``
+    holds that no lane role may appear in any policy body, and #43's criterion
+    is that an unset session variable reads zero rows for *every* role.
+
+    Metadata is not a read of the rows, so no policy filters it.
+    """
+    for candidate in publish.TARGETS:
+        query = publish.row_count(candidate)
+        assert "INFORMATION_SCHEMA.TABLES" in query, (
+            f"{candidate.table} is counted some way other than off the "
+            "metadata. If this became SELECT COUNT(*), the three visitor-scoped "
+            "tables report zero and the publish aborts after swapping"
+        )
+        assert "COUNT(*)" not in query, (
+            f"{candidate.table} is counted with COUNT(*), which #43's row "
+            "access policy filters to zero for a session that has bound no "
+            "visitor -- which the publisher never does"
+        )
+        assert candidate.schema.upper() in query
+        assert candidate.table.upper() in query
+
+
+def test_the_landed_count_is_scoped_to_one_table() -> None:
+    """INFORMATION_SCHEMA holds every table in the database, not just this one.
+
+    A count that forgot its predicates would sum unrelated tables and compare
+    that against the staging count, which fails closed but for a reason nobody
+    reading the error would guess.
+    """
+    orders = publish.target("orders")
+    stores = publish.target("stores")
+    assert publish.row_count(orders) != publish.row_count(stores)
+    assert "table_name" in publish.row_count(orders)
+    assert "table_schema" in publish.row_count(orders)

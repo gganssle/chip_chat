@@ -506,24 +506,54 @@ on every published table anyway, because the cost of the check is nothing and
 the cost of being wrong about this is a serving layer holding two generations
 at once.
 
-**What was changed, and by whom it should be owned.** The policy now carries a
-third clause:
+**What was changed, and then changed back.** The first fix was a third clause in
+the policy body:
 
 ```sql
 OR CURRENT_ROLE() = 'CHIP_CHAT_PUBLISH'
 ```
 
 applied live with `ALTER ROW ACCESS POLICY ... SET BODY`, because a
-`CREATE OR REPLACE` is refused while a policy is attached to anything. It is a
-batch role held only by the Databricks job's service user, reachable from no
-session the model or the app can open, and it reads rather than escapes: the
-publisher already writes these tables wholesale.
+`CREATE OR REPLACE` is refused while a policy is attached to anything. The
+argument for it was that `CHIP_CHAT_PUBLISH` is a batch role held only by the
+Databricks job's service user, reachable from no session the model or the app
+can open.
 
-**It is not yet in `snowflake/sql/10_policies.sql`, and that file is #43's.**
-The account is ahead of the checked-in SQL, which means the next
-`make snowflake-apply` reverts it and the next nightly publish fails at the
-first table. The durable fix is one line beside line 133 of that file, with the
-reason beside it.
+**That argument is true and the change was still wrong.**
+`snowflake/tests/test_row_access_policies.py` refuses any lane role named in any
+policy body, and its reasoning survives this case: *a lane role that appears in a
+policy body is a lane role the policy has stopped applying to.* #43's acceptance
+criterion is that a session with no `demo_id` set reads zero rows from every
+visitor-scoped table — for every role, not for every role but one. A role-only
+clause also fails safe in the wrong direction: a publisher that could see
+everything and one that could not would look identical, where the whole point of
+default deny is that they do not.
+
+**What the job does instead: it counts off the metadata.**
+
+```sql
+SELECT MAX(row_count) FROM CHIP_CHAT.INFORMATION_SCHEMA.TABLES
+ WHERE table_schema = 'ACCOUNTS' AND table_name = 'ORDERS'
+```
+
+`INFORMATION_SCHEMA.TABLES.ROW_COUNT` is metadata *about* the table rather than a
+read of its rows, so no row access policy filters it. The publisher gets its
+number and the isolation guarantee is not touched to give it.
+
+Measured on the live account, 2026-08-27, after the third clause was removed
+again:
+
+| Role, nothing bound | `SELECT COUNT(*)` | `INFORMATION_SCHEMA.ROW_COUNT` |
+| --- | ---: | ---: |
+| `CHIP_CHAT_READ` | 0 | 18,898 |
+| `CHIP_CHAT_PUBLISH` | 0 | 18,898 |
+
+The left column is the isolation guarantee holding for both roles. The right
+column is the publish still being able to verify its own swap. `publish.row_count()`
+builds that query, `databricks/tests/test_publish.py` holds the job to using it,
+and the policy in `snowflake/sql/10_policies.sql` is untouched — the checked-in
+SQL and the live account agree again, so the next `make snowflake-apply` is a
+no-op here rather than an outage.
 
 **#47 and this job both write the account tables.** #47 restores the synthetic
 sandbox to its generated state on a schedule; this job puts the generated state
