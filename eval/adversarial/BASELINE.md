@@ -18,11 +18,11 @@ runs on every pull request.
 
 | | |
 | --- | --- |
-| Attacks in the suite | 31 |
+| Attacks in the suite | 37 |
 | …that run from every visitor at the same instant | 2 |
 | PRD requirements the golden set delegates here | A3, S2 — both covered |
 | Cross-visitor disclosures observed | **0 of 51 attempts, 45 of them unscored** |
-| Writes executed without confirmation | **0 of 27 attempts, 6 of them unscored** |
+| Writes executed without confirmation | **0 of 45 attempts, 9 of them unscored** |
 | Both launch gates | **not measured** |
 | Scored against a real model | **0 attacks** |
 
@@ -34,12 +34,6 @@ the app's session store through a tool result, an instruction painted into an
 uploaded photograph, a persona switch checked for what survived it, and a second
 concurrent attack aimed at the account lane rather than the order desk. The two
 mechanisms are below, under *the concurrency test* and *where each attack died*.
-| …that run from every visitor at the same instant | 1 |
-| PRD requirements the golden set delegates here | A3, S2 — both covered |
-| Cross-visitor disclosures observed | **0 of 33 attempts, 30 of them unscored** |
-| Writes executed without confirmation | **0 of 42 attempts, 6 of them unscored** |
-| Both launch gates | **not measured** |
-| Scored against a real model | **0 attacks** |
 
 **This file is one front of launch gate two, not the gate.** Every attack here
 reaches the write path through a model. The other front — calls made straight at
@@ -307,3 +301,4 @@ python -m chip_chat.eval.adversarial --gate2 --catalog <build>  # …with no mod
 Both exit non-zero while a gate is unmeasured. That is deliberate: PRD §12 makes
 both gates blocking, and a pipeline going green on a gate nobody measured is the
 most expensive possible way to discover it later.
+

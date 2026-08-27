@@ -26,11 +26,14 @@ test it. `databricks/notebooks/snowflake_publish.py` is the loop.
 > in §7. None of them could have been found without running it, and one of them
 > was found by the alert this ticket is required to have.
 >
-> **One thing is live and not in the repository.** #43's `VISITOR_ISOLATION`
-> policy now exempts `CHIP_CHAT_PUBLISH`; the change was applied to the account
-> and belongs in `snowflake/sql/10_policies.sql`, which is #43's file. Until it
-> lands there, `make snowflake-apply` reverts it and the next publish fails at
-> the first table. §7.
+> **The policy exemption was applied to the live account and then removed
+> again.** #43's `VISITOR_ISOLATION` briefly exempted `CHIP_CHAT_PUBLISH` so the
+> publisher could count what it had written. That clause is gone from the
+> account and was never committed: the job now counts off
+> `INFORMATION_SCHEMA.TABLES.ROW_COUNT`, which is metadata rather than a read of
+> the rows and so is filtered by no policy. The checked-in SQL and the live
+> policy agree. §7 has the whole argument, including why the exemption looked
+> like a fix.
 
 ---
 
