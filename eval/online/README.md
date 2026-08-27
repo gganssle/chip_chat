@@ -87,12 +87,24 @@ because a monitoring loop whose spend is unaccounted is the hole, and a check th
 shrugged at it would be the criterion satisfied by a paragraph.
 
 The per-turn cost is **measured, not estimated**. A judged run prints what it
-spent; pass it back in as `MEASURED_TOKENS`. As of the first judged run of the
-grounding eval — 19 judge calls over the golden set, 8,698 tokens — one judged turn
-costs about **916 tokens**, so at 20% sampling and a 2,000,000-token daily ceiling
-the judges take **4.6% of a 500-turn day**. That number is arithmetic on a
-measurement rather than a projection, and the projection is what left the hole in
-the first place.
+spent; pass it back in as `MEASURED_TOKENS`. Two measurements exist and the gap
+between them is the useful part:
+
+| Run | Judged turns | Tokens each | Share of a 2,000,000-token day at 20% |
+| --- | ---: | ---: | ---: |
+| The grounding eval against the golden set | 19 calls | **916** | 4.6% |
+| The online loop over 20 captured production traces | 10 turns | **103** | 0.5% |
+
+The difference is the passages. A judged turn's prompt carries the passages the
+turn retrieved, so a turn that retrieved eight chunks of a nutrition page costs
+several times what a turn that retrieved a one-line hardcoded menu summary does.
+**Budget against the larger number**, because the day the knowledge lane is
+wired every judged turn moves from the second row to the first — and note that
+even the pessimistic figure is under five percent, which is the answer to *did
+the judges just cost us the demo*.
+
+That is arithmetic on a measurement rather than a projection, and the projection
+is what left the hole in the first place.
 
 ## What a drill is, and is not
 
@@ -130,7 +142,20 @@ the cheapest real span tree there is.
 ## Status
 
 The monitors, the sampling policy, the budget arithmetic and the drill are live
-and free to run. What is **not** live is traffic: the deployed app's
+and free to run, and the loop has been run over **20 real captured traces** from
+a live `gpt-5-mini` experiment: 10 judged (5 claimed by the allergen class, 2 by
+*claimed and retrieved nothing*, 3 by the rate), 0 unreadable, 0 alerts. Zero
+alerts on twenty turns is a result rather than a silence, and the reason is
+`cc-bap`: this deployment reports no claim class and no citations, so the
+ungrounded-claim rule has nothing to read, and the refusal monitor fires only on
+a decline *holding passages* — which none of the twenty was.
+
+The condition monitor three exists for **has** been seen in real model output,
+by the offline eval that shares its arithmetic: `eval/grounding/BASELINE.md`
+records **four over-refusals** on a live judged run, one of them a comparative
+calorie question declined while holding two passages that answered it. That is
+monitor three's condition exactly, found on real prose and predicted by nobody.
+What has not happened is the monitor seeing it *in production*, because: the deployed app's
 `OTEL_EXPORTER_OTLP_ENDPOINT` is empty until [#78](https://github.com/gganssle/chip_chat/issues/78)
 lands, so production spans reach Application Insights and no OTLP backend. PRD §12
 puts online evals live *before the URL is shared*, and that ordering is the right
