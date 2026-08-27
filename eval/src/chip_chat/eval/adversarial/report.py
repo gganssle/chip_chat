@@ -46,6 +46,13 @@ from dataclasses import dataclass
 
 from chip_chat.eval.adversarial.attacks import JUDGED, AdversarialSuite
 from chip_chat.eval.adversarial.coverage import Coverage, coverage
+from chip_chat.eval.adversarial.gate2 import (
+    NO_VISITOR_BOUND,
+    BypassCoverage,
+    Refusal,
+    Siege,
+    bypass_coverage,
+)
 from chip_chat.eval.adversarial.postmortem import furthest
 from chip_chat.eval.adversarial.run import Capability, Heat, Judge, Run, Signal
 from chip_chat.eval.adversarial.scoring import (
@@ -58,7 +65,7 @@ from chip_chat.eval.adversarial.scoring import (
     score,
 )
 
-__all__ = ["Report", "build_report", "render"]
+__all__ = ["Report", "build_report", "render", "render_siege"]
 
 _EM_DASH = "--"
 
@@ -459,3 +466,223 @@ def _attack_row(item: AttackScore) -> str:
         f"| {'yes' if item.attack.concurrent else _EM_DASH} | {trace} "
         f"| {end.stage.name.lower().replace('_', ' ')} — {end.detail} |"
     )
+
+
+# ---------------------------------------------------------------------------
+# The second front: the ops API attacked directly. See `gate2`.
+# ---------------------------------------------------------------------------
+
+
+def render_siege(siege: Siege) -> str:
+    """Render a direct-API siege as Markdown.
+
+    Kept beside :func:`render` rather than in
+    :mod:`chip_chat.eval.adversarial.gate2` because both documents are read by
+    the same person on the same afternoon and the wording of a verdict should
+    not drift between them. :data:`_GATE_TEXT` is shared for exactly that
+    reason: *not measured* has to look the same on both fronts, since on both it
+    means the same thing and blocks in the same way.
+
+    Args:
+        siege: What came back.
+
+    Returns:
+        The document, ending in a newline.
+    """
+    lines = [
+        "# Launch gate two — the ops API, attacked directly",
+        "",
+        f"- **Target** — {siege.target}",
+        f"- **Bypasses** — {len(siege.refusals)}, none of them routed through a "
+        "model or a browser",
+        f"- **Unconfirmed writes executed** — {siege.writes}",
+        f"- **Attempts visible in an `ops.<action>` span** — {siege.audited} of "
+        f"{siege.auditable}",
+        "",
+        "PRD launch gate two is a count and never a rate: *zero account writes "
+        "executed without explicit confirmation*. This document covers the "
+        "front the attack manifest cannot reach — a caller who has the write "
+        "service's hostname and is not talking to the assistant at all. The "
+        "other front is `BASELINE.md`, and **the gate is both**.",
+        "",
+        "## Verdict",
+        "",
+        f"This front — {_GATE_TEXT[siege.passes]}",
+        "",
+    ]
+    lines.extend(_control_section(siege))
+    lines.extend(
+        _siege_coverage_section(bypass_coverage([item.bypass for item in siege.refusals]))
+    )
+    lines.extend(_bypass_section(siege))
+    lines.extend(_siege_breach_section(siege))
+    lines.extend(_siege_unmeasured_section(siege))
+    return "\n".join(lines) + "\n"
+
+
+def _control_section(siege: Siege) -> list[str]:
+    """The positive control, above the outcomes, for the reason coverage is."""
+    control = siege.control
+    lines = [
+        "## Could this doorway write at all",
+        "",
+        "Zero unconfirmed writes is not evidence of a gate until something has "
+        "gone through it. A harness wired to a backend that is down refuses "
+        "every bypass below and produces this same document.",
+        "",
+    ]
+    if control.wrote:
+        lines.append(
+            "**Yes.** One properly confirmed draft was placed before the "
+            f"bypasses ran, and its `ops.place_order` span recorded "
+            f"`{control.confirmation}`. Every refusal below is therefore a "
+            "refusal rather than an outage."
+        )
+    else:
+        lines.append("**No, so nothing below is measured.** " + control.detail)
+    lines.append("")
+    return lines
+
+
+def _siege_coverage_section(cover: BypassCoverage) -> list[str]:
+    """Coverage, above the outcomes, for the reason `_coverage_section` is.
+
+    Thirteen bypasses all aimed at ``place_order`` produce zero writes and a
+    clean verdict, and so do thirteen aimed at all four actions. Nothing in the
+    outcome table can tell those apart.
+    """
+    lines = [
+        "## Is this the siege #83 asked for",
+        "",
+        "The confirmation check is enforced per call and per record, so the "
+        "surface is two axes: the four write actions, and the seven refusals "
+        "the gate can produce. A refusal no bypass provokes is a branch of the "
+        "ops API this red team never executed.",
+        "",
+        "| Write action | Bypasses aimed at it |",
+        "| --- | --- |",
+    ]
+    lines.extend(
+        f"| `{action.value}` | "
+        + (", ".join(f"`{name}`" for name in ids) or "**none**")
+        + " |"
+        for action, ids in cover.actions
+    )
+    lines.append("")
+    lines.append("| Refusal | Bypasses that provoke it |")
+    lines.append("| --- | --- |")
+    lines.extend(
+        f"| `{code}` | " + (", ".join(f"`{name}`" for name in ids) or "**none**") + " |"
+        for code, ids in cover.codes
+    )
+    lines.append("")
+    if cover.complete:
+        lines.append("Every action attacked, every refusal provoked.")
+        lines.append("")
+    return lines
+
+
+def _bypass_section(siege: Siege) -> list[str]:
+    """Pass/fail per bypass, with where each one died beside it."""
+    lines = [
+        "## Every bypass",
+        "",
+        "`state` is what the `ops.<action>` span recorded. Four of the six "
+        "precondition codes are agent violations and read `rejected`; the two "
+        "expiry codes read `unconfirmed`, because consent that aged out was "
+        "plausibly given and a dashboard that called it an attack is one nobody "
+        "keeps reading.",
+        "",
+        "| Bypass | Action | Outcome | Refused with | Span state |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    lines.extend(_bypass_row(item) for item in siege.refusals)
+    lines.append("")
+    lines.append(
+        f"{siege.held} held, {len(siege.breaches())} breached, "
+        f"{siege.unscored} unscored, of {len(siege.refusals)} bypasses run."
+    )
+    lines.append("")
+    return lines
+
+
+def _bypass_row(refusal: Refusal) -> str:
+    outcome = {
+        Outcome.HELD: "held",
+        Outcome.BREACHED: "**BREACHED**",
+        Outcome.UNSCORED: "*unscored*",
+    }[refusal.outcome]
+    code = refusal.code or _EM_DASH
+    state = refusal.confirmation or (
+        "no span — refused before one could open"
+        if refusal.code == NO_VISITOR_BOUND
+        else _EM_DASH
+    )
+    return (
+        f"| `{refusal.bypass.bypass_id}` | `{refusal.bypass.action.value}` "
+        f"| {outcome} | `{code}` | {state} |"
+    )
+
+
+def _siege_breach_section(siege: Siege) -> list[str]:
+    """What got written. Empty on a good day, and read first."""
+    breaches = siege.breaches()
+    if not breaches:
+        return [
+            "## Writes executed",
+            "",
+            "None. Every bypass was refused before a session was acquired, so "
+            "no transaction opened and nothing was half-written.",
+            "",
+        ]
+    lines = [
+        "## Writes executed",
+        "",
+        "**Each row is a launch-gate failure.** A write executed against "
+        "something the visitor never confirmed.",
+        "",
+        "| Bypass | Action | What was written | Why this bypass exists |",
+        "| --- | --- | --- | --- |",
+    ]
+    lines.extend(
+        f"| `{item.bypass.bypass_id}` | `{item.bypass.action.value}` "
+        f"| {item.receipt or 'nothing was returned, and a row was written'} "
+        f"| {item.bypass.why} |"
+        for item in breaches
+    )
+    lines.append("")
+    return lines
+
+
+def _siege_unmeasured_section(siege: Siege) -> list[str]:
+    """What this siege could not have caught, and what would make it able to."""
+    unmeasured = siege.unmeasured()
+    if not unmeasured:
+        return [
+            "## What this siege did not measure",
+            "",
+            "Every bypass died where it was aimed, and every one that could "
+            "emit an `ops.<action>` span did. Two limits remain and neither is "
+            "visible in the numbers above: the Snowflake connection is "
+            "`RecordingWriteBackend` rather than a warehouse, so what is "
+            "verified is that the procedure is never *called* rather than that "
+            "the procedure would refuse; and the Functions host's own three "
+            "checks — the ops key, the trace context, the session header — are "
+            "one layer out and are held by `api/tests/test_ops_host.py`.",
+            "",
+        ]
+    lines = [
+        "## What this siege did not measure",
+        "",
+        "A bypass that did not die where it was aimed tested something other "
+        "than what it is for. It wrote nothing, and that is not the same as the "
+        "rule holding.",
+        "",
+        "| Bypass | Why it could not be scored |",
+        "| --- | --- |",
+    ]
+    lines.extend(
+        f"| `{item.bypass.bypass_id}` | {item.unmeasured} |" for item in unmeasured
+    )
+    lines.append("")
+    return lines

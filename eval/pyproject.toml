@@ -23,8 +23,17 @@ requires-python = ">=3.13"
 # `chip_chat.search.query` rather than `chip_chat.search.query`. So the halves
 # are expressible in that module, behind an argument that says who may pass
 # them, and the eval calls the real `Retriever`.
+#
+# `api` is the fourth, and it arrives with the adversarial suite's second front,
+# #83. The second launch gate is enforced in `chip_chat.api.ops`, and a red team
+# that attacked a copy of that rule would be scoring the copy: the whole claim
+# is that the refusal is in the code rather than in a template, so the thing on
+# the far side of `chip_chat.eval.adversarial.gate2`'s seam has to be the real
+# service. Same direction as every other entry -- nothing in `api/` imports
+# `eval`.
 dependencies = [
     "chip-chat-agent",
+    "chip-chat-api",
     "chip-chat-catalog",
     "chip-chat-harvest",
     "chip-chat-otel",
@@ -54,6 +63,7 @@ packages = ["src/chip_chat"]
 
 [tool.uv.sources]
 chip-chat-agent = { workspace = true }
+chip-chat-api = { workspace = true }
 chip-chat-catalog = { workspace = true }
 chip-chat-harvest = { workspace = true }
 chip-chat-otel = { workspace = true }

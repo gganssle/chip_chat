@@ -87,6 +87,29 @@ jobs:
       # still says in the log what it did not measure.
       - name: Adversarial suite -- red team, sustained, blocks on a breach
         run: make adversarial-redteam
+      # Issue #83, the red team on launch gate two. Neither step calls a model.
+      #
+      # The sabotaged run carries the same waiver as the step above, and for the
+      # same reason: it is the same suite against the same one-account
+      # deployment, so the FIRST gate is still unmeasurable and the exit status
+      # is still 1. What it adds is the prompt being the attacker's, and what it
+      # refuses to do is report anything at all unless the sabotage demonstrably
+      # reached the model.
+      #
+      # The direct front DOES block, and this is the difference worth reading.
+      # It needs no identity path and no corpus -- the ops API is reachable and
+      # every one of its refusals is provokable today -- so there is nothing
+      # about this deployment that makes it unmeasurable, and a non-zero exit
+      # here means either an unconfirmed write executed or a bypass stopped
+      # testing what it was aimed at. Both are build failures rather than
+      # background noise, and neither will be true for months and then quietly
+      # switched off.
+      - name: Launch gate two -- the gates with the attacker's system prompt
+        run: make adversarial-sabotaged
+        continue-on-error: true
+
+      - name: Launch gate two -- the ops API, attacked directly
+        run: make adversarial-gate2
 
       # Issue #74. Neither step calls a model.
       #

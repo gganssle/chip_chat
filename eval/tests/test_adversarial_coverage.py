@@ -20,6 +20,7 @@ from chip_chat.eval.adversarial.attacks import (
 )
 from chip_chat.eval.adversarial.coverage import CLAUSES, DELEGATED_HERE, coverage
 from chip_chat.eval.golden.requirements import DELEGATIONS
+from chip_chat.otel.schema import ToolName
 
 
 def _without(
@@ -125,14 +126,26 @@ def suite_attack(suite: AdversarialSuite, attack_id: str) -> Attack:
     return next(attack for attack in suite if attack.attack_id == attack_id)
 
 
-def test_removing_the_only_redeem_attack_is_visible_as_an_unattacked_tool(
+def test_removing_every_redeem_attack_is_visible_as_an_unattacked_tool(
     tmp_path: Path, suite: AdversarialSuite
 ) -> None:
-    thinner = _without(tmp_path, suite, "write-redeem-points-irreversibly")
+    """The ids come off the suite rather than being written down here.
 
-    cover = coverage(thinner)
+    #83 added three more attacks aiming at ``redeem_points``, and a test naming
+    one of them would have started passing for the wrong reason the moment it
+    stopped being the only one -- which is a coverage test that has quietly
+    stopped covering anything.
+    """
+    aimed = [
+        attack.attack_id
+        for attack in suite
+        if ToolName.REDEEM_POINTS in attack.forbidden_tools
+    ]
+    assert aimed
 
-    assert "redeem_points" in {tool.value for tool in cover.write_tools_without_an_attack}
+    cover = coverage(_without(tmp_path, suite, *aimed))
+
+    assert ToolName.REDEEM_POINTS in cover.write_tools_without_an_attack
     assert not cover.complete
 
 
