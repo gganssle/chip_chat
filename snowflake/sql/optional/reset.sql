@@ -17,6 +17,14 @@
 -- Snowflake created at signup, the GRAM user, and anything under SNOWFLAKE_ or
 -- SYSTEM$. Nothing in snowflake/sql created them and a reset has no business
 -- removing what it did not make.
+--
+-- The resource monitors go, including CHIP_CHAT_TRIAL_MONITOR, which the
+-- numbered apply does not create and does not put back -- the same treatment the
+-- network policies get, and for the same reason: an apply may have attached it,
+-- so a reset has to be able to detach it. The account is therefore UNCAPPED
+-- after a rebuild until `make snowflake-cap QUOTA=<credits>` is re-run with a
+-- number read off the balance. `make snowflake-verify` fails on exactly that, by
+-- name, so the gap announces itself.
 
 USE ROLE USERADMIN;
 
@@ -38,6 +46,14 @@ DROP WAREHOUSE IF EXISTS CHIP_CHAT_SERVING_WH;
 DROP WAREHOUSE IF EXISTS CHIP_CHAT_PUBLISH_WH;
 
 USE ROLE ACCOUNTADMIN;
+
+-- The account assignment before the monitor it names: a resource monitor that is
+-- set on the account cannot be dropped while it still is.
+ALTER ACCOUNT UNSET RESOURCE_MONITOR;
+
+DROP RESOURCE MONITOR IF EXISTS CHIP_CHAT_TRIAL_MONITOR;
+DROP RESOURCE MONITOR IF EXISTS CHIP_CHAT_SERVING_MONITOR;
+DROP RESOURCE MONITOR IF EXISTS CHIP_CHAT_PUBLISH_MONITOR;
 
 DROP DATABASE IF EXISTS CHIP_CHAT;
 

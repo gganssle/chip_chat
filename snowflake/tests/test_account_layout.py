@@ -27,7 +27,7 @@ import re
 import pytest
 
 from chip_chat.snowflake import account
-from chip_chat.snowflake.apply import SQL_DIRECTORY, ordered_files
+from chip_chat.snowflake.apply import CAP_FILE, SQL_DIRECTORY, ordered_files
 
 # Privileges that change something. CREATE is here because a role that may
 # create a table in a schema may write to the table it created.
@@ -340,6 +340,194 @@ def test_the_warehouse_split_is_enforced_by_grants(sql: dict[str, str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# The credit ceiling
+# ---------------------------------------------------------------------------
+
+
+def _triggers(statement: str) -> dict[str, tuple[int, ...]]:
+    """Return a resource monitor statement's triggers, keyed by action.
+
+    ``ON 80 PERCENT DO NOTIFY ON 300 PERCENT DO SUSPEND`` becomes
+    ``{"NOTIFY": (80,), "SUSPEND": (300,)}``. Thresholds come back in the order
+    the file writes them, which is what lets a test say the notifications come
+    before the suspension rather than merely that both exist.
+    """
+    found: dict[str, tuple[int, ...]] = {}
+    for threshold, action in re.findall(
+        r"ON (\d+) PERCENT DO (SUSPEND_IMMEDIATE|SUSPEND|NOTIFY)", statement
+    ):
+        found[action] = (*found.get(action, ()), int(threshold))
+    return found
+
+
+def test_every_resource_monitor_is_created_and_re_asserted(sql: dict[str, str]) -> None:
+    """`05_resource_monitors.sql` is `account.MONITORS` spelled as SQL.
+
+    Both the CREATE and the ALTER are checked against the same record. The ALTER
+    is what narrows a quota somebody raised in the UI on the next apply, so a
+    file that created the right monitor and re-asserted the wrong one would be a
+    guardrail that quietly stops matching the account it is named after.
+    """
+    statements = _statements(sql["05_resource_monitors.sql"])
+    for monitor in account.MONITORS:
+        created = next(
+            (
+                statement
+                for statement in statements
+                if statement.startswith(
+                    f"CREATE RESOURCE MONITOR IF NOT EXISTS {monitor.name}"
+                )
+            ),
+            "",
+        )
+        assert created, f"{monitor.name} is in account.py but nothing creates it"
+        assert "FREQUENCY = DAILY" in created, (
+            f"{monitor.name} does not reset daily, so a suspension lasts for the "
+            "rest of the trial rather than until tomorrow"
+        )
+
+        altered = next(
+            (
+                statement
+                for statement in statements
+                if statement.startswith(f"ALTER RESOURCE MONITOR {monitor.name} SET")
+            ),
+            "",
+        )
+        assert altered, (
+            f"nothing re-asserts {monitor.name}'s quota and triggers on a re-run, "
+            "so a quota somebody raised in the UI would stay raised"
+        )
+
+        for kind, statement in (("created", created), ("re-asserted", altered)):
+            assert f"CREDIT_QUOTA = {monitor.daily_credit_quota}" in statement, (
+                f"{monitor.name} as {kind} disagrees with account.py's quota"
+            )
+            triggers = _triggers(statement)
+            assert triggers.get("NOTIFY", ()) == monitor.notify_at_percent, (
+                f"{monitor.name} as {kind} notifies at {triggers.get('NOTIFY')}, "
+                f"account.py says {monitor.notify_at_percent}"
+            )
+            assert triggers.get("SUSPEND", ()) == (monitor.suspend_at_percent,), (
+                f"{monitor.name} as {kind} suspends at {triggers.get('SUSPEND')}, "
+                f"account.py says {monitor.suspend_at_percent}%"
+            )
+            assert triggers.get("SUSPEND_IMMEDIATE", ()) == (
+                monitor.suspend_immediate_at_percent,
+            ), f"{monitor.name} as {kind} kills statements at the wrong threshold"
+
+
+def test_each_monitor_is_assigned_to_exactly_its_own_warehouse(
+    sql: dict[str, str],
+) -> None:
+    """A monitor nothing is assigned to counts nothing.
+
+    And one monitor shared between both warehouses would let the publish spend
+    the serving lane's quota, which is the failure two separate warehouses were
+    bought to avoid.
+    """
+    assignments = {
+        match.group("warehouse"): match.group("monitor")
+        for statement in _statements(sql["05_resource_monitors.sql"])
+        if (
+            match := re.fullmatch(
+                r"ALTER WAREHOUSE (?P<warehouse>\w+) SET "
+                r"RESOURCE_MONITOR = (?P<monitor>\w+)",
+                statement,
+            )
+        )
+    }
+    assert assignments == {m.warehouse: m.name for m in account.MONITORS}
+
+
+def test_the_frequency_is_set_once_and_never_re_asserted(sql: dict[str, str]) -> None:
+    """Re-asserting START_TIMESTAMP would zero the counter on every apply.
+
+    FREQUENCY may only be set together with START_TIMESTAMP, and setting
+    START_TIMESTAMP restarts the counting period. An ALTER that re-asserted
+    either would hand a runaway a fresh quota every time somebody ran `make
+    snowflake-apply` -- which makes this the one property in these files that
+    cannot be made idempotent the way `01_warehouses.sql` is. The CREATE owns it;
+    `chip_chat.snowflake.verify` is what holds the live account to it instead.
+    """
+    sources = {
+        "05_resource_monitors.sql": sql["05_resource_monitors.sql"],
+        CAP_FILE.name: CAP_FILE.read_text(),
+    }
+    for name, source in sources.items():
+        for statement in _statements(source):
+            if not statement.startswith("ALTER RESOURCE MONITOR"):
+                continue
+            for property_name in ("FREQUENCY", "START_TIMESTAMP"):
+                assert property_name not in statement, (
+                    f"{name} re-asserts {property_name} on an existing monitor, "
+                    "which restarts the counting period and zeroes used_credits"
+                )
+
+
+def test_no_monitor_suspends_the_serving_lane_on_a_busy_day(sql: dict[str, str]) -> None:
+    """The asymmetry between the two monitors, as an assertion.
+
+    A suspended publish costs a stale mart until tomorrow. A suspended serving
+    warehouse costs the demo, mid-conversation. So the serving lane may only be
+    suspended well past its quota -- at a number no demo reaches on a warehouse
+    where every statement times out after sixty seconds -- while the publish lane
+    is suspended at its quota.
+    """
+    by_warehouse = {monitor.warehouse: monitor for monitor in account.MONITORS}
+    serving = by_warehouse[account.SERVING_WAREHOUSE]
+    publish = by_warehouse[account.PUBLISH_WAREHOUSE]
+
+    assert serving.suspend_at_percent >= 200, (
+        "the serving warehouse is suspended at "
+        f"{serving.suspend_at_percent}% of a quota a genuinely busy demo day can "
+        "reach, which ends a conversation over an ordinary afternoon"
+    )
+    assert publish.suspend_at_percent <= 100, (
+        "the publish warehouse is not suspended at its quota, so the runaway "
+        "nightly job this monitor exists for runs on"
+    )
+    for monitor in account.MONITORS:
+        assert monitor.notify_at_percent, f"{monitor.name} warns nobody first"
+        assert max(monitor.notify_at_percent) <= monitor.suspend_at_percent, (
+            f"{monitor.name} suspends before its last notification, so the first "
+            "anybody hears of the ceiling is the demo stopping"
+        )
+        assert monitor.suspend_at_percent < monitor.suspend_immediate_at_percent, (
+            f"{monitor.name} kills running statements before it stops taking new ones"
+        )
+
+
+def test_the_total_cap_is_opt_in_and_has_no_default_quota() -> None:
+    """The one number that has to come from an operator is not guessed here.
+
+    A daily quota is arithmetic anybody can redo. The cap on the whole trial is
+    read off the remaining balance: too low suspends the demo mid-conversation,
+    too high does nothing while looking handled. So the file that sets it takes
+    its quota as a variable, and lives where an apply will not run it.
+    """
+    source = CAP_FILE.read_text()
+    assert CAP_FILE.name not in {path.name for path in ordered_files()}, (
+        "an apply would set an account-wide credit cap from a number no file here "
+        "is in a position to know"
+    )
+    assert "<% trial_credit_quota %>" in source, (
+        "the quota is hard-coded, which is the guess this file exists to refuse"
+    )
+    assert re.search(r"CREDIT_QUOTA = \d", source) is None
+    assert f"ALTER ACCOUNT SET RESOURCE_MONITOR = {account.TRIAL_MONITOR}" in _flat(
+        source
+    ), (
+        "the monitor is created and never set on the account, so it counts "
+        "nothing -- and the account level is the only one that sees COMPUTE_WH"
+    )
+    assert _triggers(_flat(source)).get("SUSPEND"), (
+        "the total cap only notifies. A notification does not stop a runaway, and "
+        "on a trial account nobody has switched notifications on yet"
+    )
+
+
+# ---------------------------------------------------------------------------
 # The rebuild
 # ---------------------------------------------------------------------------
 
@@ -352,6 +540,11 @@ def test_an_apply_never_destroys(sql: dict[str, str]) -> None:
     attached, and neither failure announces itself. The one exception is
     ``DROP SCHEMA CHIP_CHAT.PUBLIC``, which removes a schema Snowflake created
     and nothing here ever writes to.
+
+    RESOURCE MONITOR is in the replace list for a reason of its own: replacing a
+    monitor is how you accidentally reset ``used_credits`` to zero, so a
+    ``CREATE OR REPLACE`` here would be an apply that hands a runaway a fresh
+    quota rather than an apply that destroys something.
     """
     allowed = {f"DROP SCHEMA IF EXISTS {account.DATABASE}.PUBLIC"}
     for name, source in sql.items():
@@ -359,7 +552,9 @@ def test_an_apply_never_destroys(sql: dict[str, str]) -> None:
             if statement.startswith("DROP") and statement not in allowed:
                 pytest.fail(f"{name} drops something on a routine apply: {statement}")
             if re.match(
-                r"CREATE OR REPLACE (DATABASE|SCHEMA|WAREHOUSE|USER|ROLE)", statement
+                r"CREATE OR REPLACE "
+                r"(DATABASE|SCHEMA|WAREHOUSE|USER|ROLE|RESOURCE MONITOR)",
+                statement,
             ):
                 pytest.fail(
                     f"{name} replaces a live object on a routine apply: {statement}"
@@ -374,7 +569,21 @@ def test_reset_drops_everything_the_apply_creates(reset_sql: str) -> None:
         assert f"DROP WAREHOUSE IF EXISTS {warehouse.name}" in reset_sql
     for user in account.USERS:
         assert f"DROP USER IF EXISTS {user.name}" in reset_sql
+    for monitor in account.MONITORS:
+        assert f"DROP RESOURCE MONITOR IF EXISTS {monitor.name}" in reset_sql
     assert f"DROP DATABASE IF EXISTS {account.DATABASE}" in reset_sql
+
+    # The account-wide cap too, even though no apply creates it -- the same
+    # treatment the network policies get, and for the same reason: an operator
+    # may have attached it, so a teardown has to be able to detach it.
+    assert f"DROP RESOURCE MONITOR IF EXISTS {account.TRIAL_MONITOR}" in reset_sql
+    unset = reset_sql.index("ALTER ACCOUNT UNSET RESOURCE_MONITOR")
+    assert unset < reset_sql.index(
+        f"DROP RESOURCE MONITOR IF EXISTS {account.TRIAL_MONITOR}"
+    ), (
+        "the monitor is dropped while it is still set on the account, which "
+        "Snowflake refuses -- and the refusal stops the rest of the teardown"
+    )
 
     database = reset_sql.index(f"DROP DATABASE IF EXISTS {account.DATABASE}")
     admin = reset_sql.index(f"DROP ROLE IF EXISTS {account.ADMIN_ROLE}")
@@ -391,7 +600,11 @@ def test_the_optional_files_are_not_part_of_an_apply() -> None:
     assert "network_policy.sql" not in names, (
         "an apply would attach a network policy built from placeholder addresses"
     )
+    assert CAP_FILE.name not in names, (
+        "an apply would cap the account from a number no file here can know"
+    )
     assert (SQL_DIRECTORY / "optional" / "network_policy.sql").exists()
+    assert CAP_FILE.exists()
 
 
 def test_the_access_table_covers_every_lane_and_schema() -> None:

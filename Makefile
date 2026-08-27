@@ -301,13 +301,24 @@ freshness: ## Report how old the corpus is, and fail if it has stopped moving
 # because #41's first criterion says "verified" rather than "configured".
 # `snowflake-verify-fast` skips that minute and checks the setting instead.
 #
+# `snowflake-cap` is #88's half. An apply gives each warehouse a daily credit
+# ceiling from numbers that come off the trial's own arithmetic; the cap on the
+# WHOLE trial comes off the remaining balance instead, so no checked-in file has
+# a default for it and this target takes the number:
+#
+#   make snowflake-cap QUOTA=60
+#
+# It refuses a quota the account has already spent past -- the one wrong number
+# that suspends every warehouse the moment you press return. A rebuild drops the
+# cap and does not put it back, and `snowflake-verify` fails on that by name.
+#
 # None of these are in `make ci`. They need a `snow` connection and a live trial,
 # and a gate that needs a credential and a credit balance is not a gate. What is
 # in CI is `snowflake/tests/`, which holds the SQL to `chip_chat.snowflake.account`
 # for free.
 
-.PHONY: snowflake-plan snowflake-apply snowflake-verify snowflake-verify-fast \
-        snowflake-rebuild
+.PHONY: snowflake-plan snowflake-apply snowflake-cap snowflake-verify \
+        snowflake-verify-fast snowflake-rebuild
 
 snowflake-plan: ## Print the SQL files an apply would run, in order
 	$(UV) run python -m chip_chat.snowflake.apply --plan
@@ -315,7 +326,16 @@ snowflake-plan: ## Print the SQL files an apply would run, in order
 snowflake-apply: ## Create or re-assert every Snowflake object from snowflake/sql
 	$(UV) run python -m chip_chat.snowflake.apply
 
-snowflake-verify: ## Check the live account against issue #41, suspension included
+snowflake-cap: ## Cap the whole trial: make snowflake-cap QUOTA=<credits>
+	@test -n "$(QUOTA)" || { \
+		echo "QUOTA=<credits> is required, and no file here can guess it."; \
+		echo "Snowsight -> Admin -> Cost Management has the remaining balance in"; \
+		echo "dollars; Enterprise credits are about \$$3 each. Pass what you are"; \
+		echo "prepared to spend from now:  make snowflake-cap QUOTA=60"; \
+		exit 2; }
+	$(UV) run python -m chip_chat.snowflake.apply --cap $(QUOTA)
+
+snowflake-verify: ## Check the live account against issues #41 and #88
 	$(UV) run python -m chip_chat.snowflake.verify
 
 snowflake-verify-fast: ## The same, minus the minute spent watching it suspend

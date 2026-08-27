@@ -3,7 +3,8 @@
 What the serving layer contains, who may touch which part of it, and how each of
 those claims was checked against the live account rather than against the SQL
 that was supposed to produce it. Issue
-[#41](https://github.com/gganssle/chip_chat/issues/41).
+[#41](https://github.com/gganssle/chip_chat/issues/41), plus the credit ceiling
+[#41] deliberately left to an operator — section 7 below, and [#88].
 
 The account was built before it held a single row, for the same reason the
 lakehouse catalogue was: ownership and grants are cheap to set on an empty
@@ -27,6 +28,10 @@ CHIP_CHAT                          ← one database, owned by CHIP_CHAT_ADMIN
 
 CHIP_CHAT_SERVING_WH   X-Small · 60s auto-suspend · 60s statement timeout
 CHIP_CHAT_PUBLISH_WH   X-Small · 60s auto-suspend · 1h statement timeout
+
+CHIP_CHAT_SERVING_MONITOR   4 credits/day  notify 50/80/100 · suspend 300/400
+CHIP_CHAT_PUBLISH_MONITOR   2 credits/day  notify 80        · suspend 100/120
+CHIP_CHAT_TRIAL_MONITOR     the whole trial, on the ACCOUNT — opt-in, no default
 
                      CATALOGUE      ACCOUNTS       MARTS       warehouse
   CHIP_CHAT_READ     select         select         select      serving
@@ -84,10 +89,15 @@ it, so `CHIP_CHAT_READ` still cannot reach `CHIP_CHAT_WRITE`.
 
 ```bash
 make snowflake-apply         # create or re-assert. Safe to repeat
-make snowflake-verify        # 25 checks against the live account, ~3 minutes
-make snowflake-verify-fast   # 24 of them, skipping the minute of watching
+make snowflake-verify        # 30 checks against the live account, ~3 minutes
+make snowflake-verify-fast   # 29 of them, skipping the minute of watching
 make snowflake-rebuild       # drop everything, build it back, verify
 ```
+
+The transcripts in this section are [#41]'s, recorded when there were 25 checks
+and five SQL files. [#88] added a sixth file and five more checks — section 7 —
+and they have not been run against the live account yet, so nothing below has
+been rewritten to look as though they had.
 
 ### 3.1 “Warehouse auto-suspends within 60 seconds of going idle, verified”
 
@@ -104,7 +114,7 @@ PASS  the serving warehouse suspends after going idle
 
 Sixty-three rather than sixty because Snowflake looks for idle warehouses on its
 own cadence rather than running a timer per warehouse. What would be a finding is
-a number near 600 — or, as §7.2 explains, a number *below* 60.
+a number near 600 — or, as §8.2 explains, a number *below* 60.
 
 ### 3.2 “The read role cannot write, verified by an attempted write that is refused”
 
@@ -162,6 +172,12 @@ make snowflake-rebuild  2:32.41 total
 
 Two and a half minutes from an account with nothing in it to one that passes
 every check above.
+
+Since [#88] a rebuild is one command short of green, on purpose:
+`optional/reset.sql` drops the account-wide credit cap, the numbered files do not
+put it back, and the run ends `29/30` with the failing check naming
+`make snowflake-cap QUOTA=<credits>`. Section 7 says why the number cannot live
+in a file.
 
 ## 4. What an apply may and may not do
 
@@ -225,7 +241,93 @@ protection does not exist here: nothing about the operator's address is checked
 when a policy is attached to a service user. Get the addresses wrong and the
 failure surfaces as the app losing its database.
 
-## 7. Seven things that surprised the first person to do this
+## 7. The credit ceiling, and the one number that is not in this repository
+
+Section 1's warehouse settings bound what **one query** costs: X-Small, sixty
+seconds of idle, no query acceleration, a statement timeout per lane. None of
+them bounds the **total**. A nightly publish that loops, a Snowsight worksheet
+left open on a Friday, or a Cortex Analyst query a language model wrote badly can
+each spend a 30-day trial in a weekend without violating a single setting above.
+
+Three resource monitors close that, and they are not interchangeable.
+
+| | counts | quota | notifies | suspends |
+| --- | --- | --- | --- | --- |
+| `CHIP_CHAT_SERVING_MONITOR` | `CHIP_CHAT_SERVING_WH` | 4 credits, **daily** | 50 / 80 / 100% | 300% · 400% immediate |
+| `CHIP_CHAT_PUBLISH_MONITOR` | `CHIP_CHAT_PUBLISH_WH` | 2 credits, **daily** | 80% | 100% · 120% immediate |
+| `CHIP_CHAT_TRIAL_MONITOR` | the whole **account** | your number, **never resets** | 50 / 75 / 90% | 100% · 110% immediate |
+
+The first two are `snowflake/sql/05_resource_monitors.sql` and every apply
+creates them. The third is `snowflake/sql/optional/trial_credit_cap.sql`, which
+no apply runs.
+
+**Why the suspend thresholds are asymmetric.** A suspended publish costs a stale
+mart until tomorrow. A suspended serving warehouse costs the demo,
+mid-conversation, in front of whoever was being shown it. So the publish
+warehouse is suspended *at* its quota and the serving warehouse only at three
+times its — twelve credits in a day, on a warehouse where every statement times
+out after sixty seconds and the compute goes idle sixty seconds after the last
+one. There is no demo on the other side of that line, only something that has
+come loose. Between the quota and the ceiling the serving monitor notifies and
+does nothing else, which is the honest action for a number a genuinely busy day
+can reach. Both quotas reset **daily**, so a suspension is over by tomorrow
+rather than for the rest of the trial.
+
+**Where the daily numbers come from.** Not from the balance. $400 of credits at
+Enterprise's roughly $3 each is about 130 credits over 30 days, which is 4.4 a
+day — so 4 credits of serving in one day is a thirtieth of the trial spent on
+conversations, and 2 credits of publish is two hours of X-Small for a job that
+takes minutes. Both are arithmetic a reader can redo, which is what makes them
+safe to check in.
+
+**Where the third number comes from, and why it is not here.** The cap on the
+whole trial has to be read off the remaining balance, and that is the one number
+a checked-in file cannot know: too low suspends the demo mid-conversation, too
+high does nothing at all while looking handled. [#41] left it out for exactly
+that reason. So it is a variable in an `optional/` file, next to the network
+policy, and it is applied deliberately:
+
+```bash
+make snowflake-cap QUOTA=60
+```
+
+which refuses a quota the monitor has already counted past — the one wrong number
+that suspends every warehouse in the account the instant you press return. The
+quota counts from the moment the monitor is first created, not from the start of
+the trial, so what to pass is what you are prepared to spend **from now**.
+Snowsight → Admin → Cost Management has the remaining balance in dollars;
+`SELECT ROUND(SUM(credits_used), 1) FROM
+SNOWFLAKE.ACCOUNT_USAGE.METERING_DAILY_HISTORY` has what has gone, lagging by up
+to two hours.
+
+**Only the account-level monitor sees `COMPUTE_WH`** — the warehouse Snowflake
+created at signup, which still auto-suspends after 600 seconds, still has query
+acceleration on, and is still the default in the `snow` connection (§8.7). The
+two daily monitors are attached to the two warehouses this repository built, and
+a worksheet left open does not run on either of them.
+
+**What no resource monitor counts:** serverless. Snowpipe, tasks, materialized
+view maintenance, search optimization, Cortex and query acceleration all bill to
+pools a monitor does not watch. That is the second reason
+`01_warehouses.sql` sets `ENABLE_QUERY_ACCELERATION = FALSE` rather than trusting
+a cap to catch it — a serverless pool is exactly the spend that does not appear
+where you go looking for it, and a resource monitor is where you would go
+looking.
+
+**A rebuild leaves the account uncapped.** `optional/reset.sql` drops all three
+monitors, the numbered apply puts two of them back, and nothing puts back the
+third. `make snowflake-verify` fails on that by name rather than letting it be
+quiet:
+
+```
+#88
+  FAIL  the trial has a total credit cap, not just a daily one
+        no account-level resource monitor with a SUSPEND trigger. ...
+        Choose a quota against the remaining balance and run
+        make snowflake-cap QUOTA=<credits>
+```
+
+## 8. Nine things that surprised the first person to do this
 
 **1. `USE ROLE X` does not give a session the privileges of X.** It gives it
 those *plus every other role its user holds*, as secondary roles, because
@@ -319,7 +421,44 @@ existing entry, so point it at the serving warehouse by hand:
 warehouse = "CHIP_CHAT_SERVING_WH"
 ```
 
-## 8. What this deliberately does not do
+**8. A resource monitor's notifications go nowhere by default, and nothing tells
+you.** `DO NOTIFY` mails the users in `NOTIFY_USERS`, plus account administrators
+who have *both* a verified email address and notifications switched on. A fresh
+trial account has neither, so every NOTIFY trigger in section 7 fires into
+nothing until somebody fixes it once, by hand:
+
+```sql
+-- verify the address first: Snowsight → your name → Profile → email
+ALTER USER <you> SET EMAIL = 'you@example.com';
+ALTER RESOURCE MONITOR CHIP_CHAT_SERVING_MONITOR SET NOTIFY_USERS = ('<you>');
+```
+
+`snowflake/sql/` deliberately does not do this: a checked-in file cannot know the
+operator's user name, and re-asserting `NOTIFY_USERS` on every apply would revoke
+whoever had been added since. It is the same argument that keeps `RSA_PUBLIC_KEY`
+out of `04_users.sql`. What `make snowflake-verify` does instead is print the
+recipients as evidence on every monitor check, so an empty list is visible rather
+than assumed — and the design does not rest on it, because the SUSPEND triggers
+work whether or not anybody is reading email.
+
+**9. A resource monitor cannot be made idempotent the way a warehouse can.**
+`01_warehouses.sql` re-asserts every property on every apply, so a setting
+somebody widened in the UI is narrowed again. Doing the same to a monitor is a
+trap with no error message: `FREQUENCY` may only be set together with
+`START_TIMESTAMP`, and setting `START_TIMESTAMP` **restarts the counting period**
+— zeroing `used_credits`. An apply that re-asserted the frequency would hand a
+runaway a fresh quota every time anybody ran `make`, and the account would look
+perfectly healthy the whole time.
+
+So `CREATE RESOURCE MONITOR IF NOT EXISTS` owns the frequency and the start, and
+the `ALTER` re-asserts only the quota and the triggers. `CREATE OR REPLACE` is
+worse still for the same reason, and is refused in CI by
+`test_an_apply_never_destroys` alongside the objects that hold data. The one
+property an apply cannot narrow back is the frequency, and
+`test_the_frequency_is_set_once_and_never_re_asserted` is what stops somebody
+adding it to the `ALTER` in good faith.
+
+## 9. What this deliberately does not do
 
 - **No tables.** [#42] adds them, into the schemas and the grants that already
   exist. `SELECT` on `FUTURE TABLES` is granted in every schema, so [#42] does
@@ -331,17 +470,20 @@ warehouse = "CHIP_CHAT_SERVING_WH"
 - **No `SNOWFLAKE.CORTEX_USER` grant.** The Cortex Analyst semantic view is
   [#45]'s, and the read role's grant list is the security artefact of this issue
   — every line in it should be one that something already built needs.
-- **No resource monitor.** A credit cap on a credit-limited trial is a real gap,
-  and choosing the quota needs the operator rather than a guess: too low suspends
-  the demo mid-conversation, too high does nothing. Filed as `cc-48q`, and it
-  belongs with the rest of the cost guardrails in [#88].
+- **No cap on the whole trial in the numbered apply.** Section 7. The two daily
+  monitors are there and every apply creates them; the cap on the account needs a
+  quota read off the remaining balance, so it is `make snowflake-cap
+  QUOTA=<credits>` and a failing check until somebody runs it.
+- **No `NOTIFY_USERS` on any monitor.** Section 8 item 8. The suspensions do not
+  depend on it; the notifications do.
 - **No network policy in force.** Section 6.
 - **No `make ci` integration.** These targets need a `snow` connection and a live
   trial, and a gate that needs a credential and a credit balance is not a gate.
   What *is* in CI is `snowflake/tests/`, which holds the SQL to
   `chip_chat.snowflake.account` for free and offline: that no `GRANT` contradicts
   the access table, that no lane role can apply a policy or own anything, that
-  each lane holds exactly one warehouse, and that an apply cannot destroy.
+  each lane holds exactly one warehouse, that an apply cannot destroy, and that
+  no monitor re-asserts the property that would zero its own counter.
 
 [#39]: https://github.com/gganssle/chip_chat/issues/39
 [#41]: https://github.com/gganssle/chip_chat/issues/41

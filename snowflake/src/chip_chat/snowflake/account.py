@@ -23,6 +23,12 @@ than a chain, and :func:`may_write` answers from it.
 ``chip_chat.snowflake.verify`` hold the live account to. The trial is capped at
 $400 of credits or 30 days, whichever comes first, so idle compute does not
 merely cost money -- it shortens the trial.
+
+**Two of the numbers here are guardrails and one of them is deliberately
+missing.** :data:`MONITORS` caps what each warehouse may spend in a day, off
+arithmetic anybody can redo. :data:`TRIAL_MONITOR` caps what the account may
+spend in total, off the remaining balance -- which is why it is a name here and
+a file in ``sql/optional/`` rather than a number.
 """
 
 from collections.abc import Iterator
@@ -35,13 +41,16 @@ __all__ = [
     "DATABASE",
     "GRANTS",
     "LANE_ROLES",
+    "MONITORS",
     "PUBLISH_WAREHOUSE",
     "SCHEMAS",
     "SERVING_WAREHOUSE",
+    "TRIAL_MONITOR",
     "USERS",
     "WAREHOUSES",
     "WAREHOUSE_SIZE",
     "Access",
+    "ResourceMonitor",
     "SchemaName",
     "ServiceUser",
     "Warehouse",
@@ -116,6 +125,84 @@ WAREHOUSES: Final[tuple[Warehouse, ...]] = (
     Warehouse(PUBLISH_WAREHOUSE, statement_timeout_seconds=3600),
 )
 """Both warehouses. Both X-Small, both suspending after sixty seconds."""
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceMonitor:
+    """One warehouse's daily credit ceiling, and what happens at each threshold.
+
+    :data:`WAREHOUSES` bounds what one query costs. This bounds what a day of
+    them costs, which is the only thing that stops a runaway from spending the
+    trial before the trial ends. `snowflake/sql/05_resource_monitors.sql` is
+    these two records spelled as SQL.
+
+    Attributes:
+        name: The resource monitor.
+        warehouse: The warehouse it is assigned to. One monitor per warehouse
+            rather than one shared between them, so the publish lane cannot
+            spend the serving lane's quota and suspend a conversation for a
+            batch job's mistake.
+        daily_credit_quota: ``CREDIT_QUOTA``, reset ``DAILY``. Read off the
+            trial's own arithmetic -- roughly 130 credits over 30 days is about
+            4.4 a day -- and off what the workload can plausibly cost. Not off
+            the remaining balance, which changes daily and which no checked-in
+            file can know: that number is :data:`TRIAL_MONITOR`'s, and it
+            belongs to the operator.
+        notify_at_percent: Thresholds that send email and nothing else.
+        suspend_at_percent: Where the warehouse is suspended, letting running
+            statements finish.
+        suspend_immediate_at_percent: Where they are killed instead.
+    """
+
+    name: str
+    warehouse: str
+    daily_credit_quota: int
+    notify_at_percent: tuple[int, ...]
+    suspend_at_percent: int
+    suspend_immediate_at_percent: int
+
+
+MONITORS: Final[tuple[ResourceMonitor, ...]] = (
+    ResourceMonitor(
+        "CHIP_CHAT_SERVING_MONITOR",
+        warehouse=SERVING_WAREHOUSE,
+        daily_credit_quota=4,
+        notify_at_percent=(50, 80, 100),
+        suspend_at_percent=300,
+        suspend_immediate_at_percent=400,
+    ),
+    ResourceMonitor(
+        "CHIP_CHAT_PUBLISH_MONITOR",
+        warehouse=PUBLISH_WAREHOUSE,
+        daily_credit_quota=2,
+        notify_at_percent=(80,),
+        suspend_at_percent=100,
+        suspend_immediate_at_percent=120,
+    ),
+)
+"""One monitor per warehouse, and the asymmetry between them is the design.
+
+A suspended publish costs a stale mart until tomorrow, so the publish warehouse
+is suspended *at* its quota. A suspended serving warehouse costs the demo,
+mid-conversation, in front of whoever was being shown it -- so it is suspended
+only at three times its quota, twelve credits in a day, which no demo reaches on
+a warehouse where every statement times out after sixty seconds. Between the two
+the serving monitor only notifies, which is the honest action for a number a
+genuinely busy day can reach.
+"""
+
+TRIAL_MONITOR: Final = "CHIP_CHAT_TRIAL_MONITOR"
+"""The account-wide cap, and the only object here an apply does not create.
+
+:data:`MONITORS` bounds a day off the shape of the workload. This bounds the
+trial off the remaining balance, which is a number that comes from the bill --
+too low suspends the demo mid-conversation, too high does nothing at all while
+looking handled. So it lives in `snowflake/sql/optional/trial_credit_cap.sql`
+with the network policy, gets applied by ``make snowflake-cap QUOTA=<credits>``,
+and its absence is a named failure in ``chip_chat.snowflake.verify`` rather than
+a quiet gap. It is also the only monitor that counts ``COMPUTE_WH``, which
+`snowflake/sql/` does not manage and a Snowsight worksheet wakes.
+"""
 
 LANE_ROLES: Final = ("CHIP_CHAT_READ", "CHIP_CHAT_WRITE", "CHIP_CHAT_PUBLISH")
 """The three runtime roles. :data:`ADMIN_ROLE` is not one of them, deliberately:

@@ -16,6 +16,13 @@ The first three are checked here. The fourth is checked by running
 `make snowflake-rebuild`, which tears the account down and builds it back before
 this runs -- a claim about a rebuild is not something a query can answer.
 
+#88 adds the other half of the cost story, and it is a different kind of claim:
+#41 is about what one query costs, #88 is about what a day of them costs. The
+resource monitors are checked here too, including the one an apply deliberately
+does not create. That check fails on a freshly rebuilt account, on purpose --
+`optional/trial_credit_cap.sql` needs a number read off the remaining balance,
+and an uncapped trial should be a named failure rather than a quiet gap.
+
 Criterion 3 needs a row access policy to exist, and the real ones are #43's.
 This builds a throwaway one on a throwaway table, proves the write role is
 subject to it, and drops both. That is deliberately not a stand-in for #43: what
@@ -23,7 +30,7 @@ is under test is the *role*, not the policy. #41's grants are what leave
 CHIP_CHAT_WRITE without ``APPLY ROW ACCESS POLICY`` and without ownership of
 anything, and this is where that absence gets demonstrated rather than asserted.
 
-Three Snowflake behaviours the checks are built around, each of which cost an
+Four Snowflake behaviours the checks are built around, each of which cost an
 hour to discover:
 
 **Secondary roles.** ``USE ROLE CHIP_CHAT_READ`` does not give a session the
@@ -48,6 +55,15 @@ the result cache the second time it is asked -- which also resumes nothing. A
 suspension check built on either times a warehouse it never woke and reports a
 healthy number that would look just as healthy if the setting were 600. See
 :data:`WAKE_QUERY` and :func:`_check_suspension_observed`.
+
+**A resource monitor's notifications go nowhere by default.** A NOTIFY trigger
+mails the users in ``NOTIFY_USERS``, plus account administrators who have both a
+verified email address and notifications switched on -- and a fresh trial has
+neither. Nothing in `snowflake/sql/` sets ``NOTIFY_USERS``, because re-asserting
+it on every apply would revoke whoever the operator added. So
+:func:`_check_resource_monitors` reports the recipients as evidence rather than
+passing on the triggers alone, and the SUSPEND thresholds are what the guardrail
+actually rests on.
 
     make snowflake-verify           # everything, about three minutes
     make snowflake-verify-fast      # everything except watching it suspend
@@ -618,6 +634,169 @@ def _check_service_users() -> list[Check]:
 
 
 # ---------------------------------------------------------------------------
+# #88 -- a day of queries has a ceiling, and so does the trial
+# ---------------------------------------------------------------------------
+
+
+def _percentages(value: Any) -> tuple[int, ...]:
+    """Return the whole numbers in a ``SHOW RESOURCE MONITORS`` threshold column.
+
+    Snowflake writes the trigger columns as ``50%,80%,100%``, an empty string
+    when there are none, and null when the monitor has none of that kind. All
+    three arrive here as a tuple of ints, so a monitor with no SUSPEND trigger
+    compares unequal to one that has the wrong SUSPEND trigger rather than
+    raising on the way to finding out.
+    """
+    return tuple(int(found) for found in re.findall(r"\d+", str(value or "")))
+
+
+def _monitor_rows() -> dict[str, dict[str, Any]]:
+    """Return ``SHOW RESOURCE MONITORS`` output keyed by monitor name.
+
+    Resource monitors are ACCOUNTADMIN objects: there is no lane role that can
+    see one, and the connection's default role is whatever the operator left it
+    as. Hence the explicit ``USE ROLE``.
+    """
+    statements = snow.query("USE ROLE ACCOUNTADMIN;\nSHOW RESOURCE MONITORS;")
+    rows = statements[-1] if statements else []
+    return {str(row["name"]): row for row in rows}
+
+
+def _check_resource_monitors() -> list[Check]:
+    """Check both warehouse monitors, their assignments, and the account cap.
+
+    `01_warehouses.sql` bounds what one query costs; this bounds what a day of
+    them costs. The two are different guardrails and only the second one can
+    stop a runaway from spending a 30-day trial in a weekend.
+    """
+    try:
+        monitors = _monitor_rows()
+    except snow.SnowError as error:
+        return [
+            Check(
+                "#88",
+                "the resource monitors can be read at all",
+                passed=False,
+                detail=(
+                    "SHOW RESOURCE MONITORS was refused, so nothing below could "
+                    f"be checked. It needs ACCOUNTADMIN:\n      "
+                    f"{_refusal_line(str(error))}"
+                ),
+            )
+        ]
+
+    warehouses = _warehouse_rows()
+    checks: list[Check] = []
+
+    for monitor in account.MONITORS:
+        row = monitors.get(monitor.name)
+        if row is None:
+            checks.append(
+                Check(
+                    "#88",
+                    f"{monitor.name} exists",
+                    passed=False,
+                    detail=(
+                        "not in SHOW RESOURCE MONITORS, so nothing bounds what "
+                        f"{monitor.warehouse} can spend in a day. Run "
+                        "`make snowflake-apply`."
+                    ),
+                )
+            )
+            continue
+
+        quota = int(float(row.get("credit_quota") or 0))
+        frequency = str(row.get("frequency") or "").upper()
+        notify = _percentages(row.get("notify_at"))
+        suspend = _percentages(row.get("suspend_at"))
+        immediate = _percentages(row.get("suspend_immediately_at"))
+        recipients = str(row.get("notify_users") or "").strip("[]() ")
+        checks.append(
+            Check(
+                "#88",
+                f"{monitor.name} caps {monitor.warehouse} at "
+                f"{monitor.daily_credit_quota} credits a day",
+                passed=(
+                    quota == monitor.daily_credit_quota
+                    and frequency == "DAILY"
+                    and notify == monitor.notify_at_percent
+                    and suspend == (monitor.suspend_at_percent,)
+                    and immediate == (monitor.suspend_immediate_at_percent,)
+                ),
+                detail=(
+                    f"quota={quota} frequency={frequency or 'unset'} "
+                    f"notify={list(notify)} suspend={list(suspend)} "
+                    f"suspend_immediate={list(immediate)} "
+                    f"used={row.get('used_credits')} of them today. "
+                    + (
+                        f"NOTIFY reaches {recipients}"
+                        if recipients
+                        else "NOTIFY reaches nobody -- NOTIFY_USERS is empty and no "
+                        "checked-in file sets it. The SUSPEND thresholds do not "
+                        "depend on anyone reading email; the NOTIFY ones do. "
+                        "docs/snowflake-account.md section 8 item 8"
+                    )
+                ),
+            )
+        )
+
+        assigned = str(warehouses.get(monitor.warehouse, {}).get("resource_monitor"))
+        checks.append(
+            Check(
+                "#88",
+                f"{monitor.warehouse} is assigned to {monitor.name}",
+                passed=assigned == monitor.name,
+                detail=(
+                    f"resource_monitor={assigned}"
+                    + (
+                        ""
+                        if assigned == monitor.name
+                        else ". A monitor nothing is assigned to counts nothing"
+                    )
+                ),
+            )
+        )
+
+    # The account-wide cap. An apply does not create it -- the quota comes off
+    # the remaining balance rather than off the shape of the workload -- so this
+    # fails on a freshly rebuilt account, which is the intended reading: the
+    # trial really is uncapped until somebody chooses a number.
+    account_level = [
+        row
+        for row in monitors.values()
+        if str(row.get("level") or "").upper() == "ACCOUNT"
+    ]
+    capped = next(
+        (row for row in account_level if _percentages(row.get("suspend_at"))), None
+    )
+    checks.append(
+        Check(
+            "#88",
+            "the trial has a total credit cap, not just a daily one",
+            passed=capped is not None,
+            detail=(
+                f"{capped['name']} is set on the account: quota "
+                f"{int(float(capped.get('credit_quota') or 0))} credits, "
+                f"{capped.get('used_credits')} used, frequency "
+                f"{capped.get('frequency')}, suspends at "
+                f"{list(_percentages(capped.get('suspend_at')))}"
+                if capped is not None
+                else (
+                    "no account-level resource monitor with a SUSPEND trigger. The "
+                    "daily monitors above bound each CHIP_CHAT warehouse and do not "
+                    "bound the total, and neither of them counts COMPUTE_WH -- which "
+                    "is still the default warehouse in the `snow` connection and "
+                    "still suspends after 600 seconds. Choose a quota against the "
+                    "remaining balance and run\n"
+                    "        make snowflake-cap QUOTA=<credits>"
+                )
+            ),
+        )
+    )
+    return checks
+
+
+# ---------------------------------------------------------------------------
 # The fixture, and the run
 # ---------------------------------------------------------------------------
 
@@ -673,6 +852,10 @@ def _drop_fixture() -> None:
 def run(*, watch_suspend: bool = True) -> list[Check]:
     """Run every check and return the results in report order.
 
+    The #88 monitor checks run inside the fixture's ``try`` with everything
+    else, and cost nothing: they are three ``SHOW`` statements, which Snowflake
+    answers without resuming a warehouse.
+
     Args:
         watch_suspend: Whether to include the minute spent watching the serving
             warehouse actually suspend. The settings check runs either way; this
@@ -686,6 +869,7 @@ def run(*, watch_suspend: bool = True) -> list[Check]:
         checks += _check_write_role_under_policy()
         checks += _check_warehouse_separation()
         checks += _check_service_users()
+        checks += _check_resource_monitors()
     finally:
         _drop_fixture()
     # Last, and only after the fixture is gone: everything above resumes the
@@ -700,7 +884,7 @@ def main(argv: list[str] | None = None) -> int:
     """Entry point. Returns a process exit status."""
     parser = argparse.ArgumentParser(
         prog="python -m chip_chat.snowflake.verify",
-        description="Check the live Snowflake account against issue #41.",
+        description="Check the live Snowflake account against issues #41 and #88.",
     )
     parser.add_argument(
         "--no-watch",
