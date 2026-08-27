@@ -315,7 +315,93 @@ recovers it.
 
 ---
 
-## 9. What is not done here
+## 9. The vector half comes back empty, and the service calls that a success
+
+This section is a defect report. It was found on 2026-08-27 by re-running the
+ablation against the live alias, and it is the most consequential thing anybody
+has learned about this lane since it was built, because it means *hybrid* is not
+reliably what the service is doing when the application asks for hybrid.
+
+**The symptom.** A vector query against the live index returns
+
+```json
+{"@odata.context": "…/indexes('corpus')/$metadata#docs(*)", "value": []}
+```
+
+with **HTTP 200**, no `error`, no warning key, and an `elapsed-time` header in
+the ordinary 115–350 ms range. Not an error, not a timeout, not a partial
+result. An empty result set that is indistinguishable from a corpus with nothing
+in it.
+
+**The rate, measured.** One question, `k: 50`, the same index, across a session
+of about five hundred queries:
+
+| When | n | empty |
+|---|---:|---:|
+| minutes after a build | 20 | 25% |
+| after a few hundred queries | 20 | 85% |
+| after three minutes idle, 15 s apart | 6 | 67% |
+| a freshly built index, first 20 of a 60-query run | 20 | 30% |
+| the next 20 of the same run | 20 | 85% |
+| the last 20 of the same run | 20 | 90% |
+
+The last three rows are the shape of it: a rested service answers the first
+twenty or so vector queries and then mostly stops, and it does not recover in
+minutes. That is why the middle one of the three sweeps in §10 scored the vector
+arm 40% on `ingredients` — the first category in the question file — and **0%**
+on all four categories after it. The number is not a fact about embeddings. It is
+the order the questions are in.
+
+**What it is not.** Each of these was eliminated by a run rather than by an
+argument, and each cost an index or a few hundred queries.
+
+| Suspect | Test | Result |
+|---|---|---|
+| query-time vectorization | send the floats: `"kind": "vector"` instead of `"kind": "text"` | 4/12 empty against 2/12 in the same minute. **Not the vectorizer.** |
+| the embedding deployment | 20 embeddings requests direct to Foundry with the same Key Vault key | 20 × 200 in 4.2 s, no 429. The deployment is fine. |
+| the preview API contract (§4) | the same query under `2025-08-01-preview`, `2024-11-01-preview`, `2025-09-01`, `2024-07-01` | 10/12, 11/12, 10/12, 11/12 empty. **Not the version.** |
+| `rerankWithOriginalVectors` on a field the schema also declares `stored: false` — a genuine contradiction, and the best hypothesis there was | build an index with `rescoringOptions.enableRescoring: false` and A/B it | 8/30 against 6/30. **Not rescoring.** |
+| scalar quantization | build an index with no compression at all and A/B it | 26/30 against 25/30. **Not quantization.** |
+| `k` | 5, 10, 50 | no relationship. |
+| a quota | `/servicestats` | storage 560,192 of 52,428,800; `vectorIndexSize` 98,928 against a `null` quota. Nothing is near a limit. |
+
+What is left is the service: **Free-tier vector search on `srch-chip-chat-4cy39i`
+degrades under a burst of vector queries and reports the degradation as an empty
+result set.** The lexical half is unaffected throughout — every one of those
+runs had BM25 answering normally beside it.
+
+**Why the application cannot see it.** A hybrid query fuses two rankers by
+reciprocal rank, and RRF has no field saying which ranker contributed. When the
+vector half returns nothing, the response is a well-formed hybrid response whose
+documents happen to all come from BM25, and every score on it is a legal fused
+score. There is one tell and it is arithmetic rather than reported: RRF at
+`k = 60` gives a document found by exactly one ranker `1/(60 + rank)`, so a
+result set whose top score is 0.0167 was found by one half and one whose top
+score is 0.0321 was found by two. Both appear in this document — §2's worked
+example and §8's latency table were taken on a healthy service; the probes in
+this section were not.
+
+**What has not been done about it.** Nothing, deliberately, in this lane. A
+retriever that retried until the vector half answered would be measuring a
+service that does not exist, and one that inferred the tell above and declined
+would be turning a degraded answer into no answer — which §7 argues against for
+the reranker and the argument does not change here. The three candidates are
+tracked rather than chosen: recording the tell on the `retriever.search` span so
+a trace says *this hybrid query was lexical only*; pacing the eval sweep so its
+vector arms are a measurement rather than a race; and the Basic tier, which is
+the same $73.73/month that [retrieval-index.md](retrieval-index.md) §3 declines
+for a different reason and would settle both. Filed as **chip-wez**.
+
+**What it does not touch.** The reranked arm — the one production sends — is
+unaffected in every measurement here, because the semantic ranker reorders the
+union it is given and the lexical half is always in that union. #50's demo
+criterion, top-3 recall on the allergen questions under `hybrid + reranker`,
+measured **100%** on the run this section is about. The blast radius of this
+defect is the degrade path and the ablation's two vector arms.
+
+---
+
+## 10. What is not done here
 
 **The tool layer still returns hardcoded data.**
 `agent/src/chip_chat/agent/tools.py` answers `search_menu_knowledge` from three
@@ -336,33 +422,59 @@ The ablation needed two configurations this layer could not express, so
 own existence and names the one caller allowed to pass it; nothing on a serving
 path may.
 
-**Section 2's claim is confirmed.** `recall@3`, measured against
-`corpus-20260827t060000z-2`: keyword-only is at 100% on ingredients and
-allergens and 64% on the rewards policy; vector-only is at **0%** on all three
-menu-row categories and 86–100% on the two policy ones. Hybrid is not a hedge,
-and the two halves are complementary along exactly the line RFC-001 §08 drew.
+**Section 2's claim is not confirmed, and the reason is §9.** Three live sweeps
+of the same forty questions have now been run against three equivalent corpora,
+and the arms sort into two groups. `recall@3`, all categories:
 
-**Section 6's degrade path is more expensive than it looked.** `hybrid` without
-the reranker scores 0% on ingredients and nutrition — where keyword-only alone
-scores 100% and 80%. Reciprocal rank fusion scores *rank*, the vector half
-contributes `VECTOR_CANDIDATES = 50` neighbours to a 30-chunk corpus, and its
-order crowds the keyword half's correct hits out of the five returned; the
-semantic ranker rescues it by reordering the union. So the fallback that was
-designed as *"a valid query that returns real passages"* returns the wrong ones
-on the questions this restaurant is mostly asked about. Filed as **cc-t1o1**,
-whose most interesting candidate is falling back to *keyword* rather than to
-*hybrid* — a trade the ablation now prices.
+| Arm | sweep 1 | sweep 2 | sweep 3 |
+|---|---:|---:|---:|
+| keyword only | 84% | 84% | 84% |
+| hybrid + reranker | 95% | 95% | 91% |
+| hybrid | 53% | 84% | 84% |
+| vector only | 41% | 7% | 83% |
 
-**And section 5's floor is too low.** Restraint on the eight questions the corpus
-cannot answer measured 25% / 50% / 38% / **12%** across the four arms, worst
-under the one production sends: seven of eight came back grounded, including
-*"which items are safe for a peanut allergy"* against four published marks that
-do not include peanut. `PROVISIONAL_RERANKER_FLOOR = 1.5` is what that is,
-and this is the measurement its docstring was waiting for. Filed as **cc-sans**;
-**cc-mpdu** is the same question on the degrade path, where confidence comes from
-the lexical floor instead. The two are thresholds on one question and should be
-chosen together, over three or four sweeps at three or four floors — `--floor` is
-a run parameter, recorded at the top of every report, for exactly that.
+The first two rows are a measurement. The second two are the vector half's
+availability that afternoon: 41% and 7% and 83% is not a retriever changing its
+mind, and sweep 2 fell where it did because §9's failure had set in partway
+through the first category and held for the other four. So *hybrid is not a
+hedge* remains an argument from RFC-001 §08 — a good one — rather than a fact
+this repository has measured.
+Sweep 1's headline read the vector arm's zeros on the three menu-row categories
+as embeddings failing on proper nouns exactly as the RFC predicted; sweep 3 has
+vector-only at 80% on ingredients, 100% on nutrition and 83% on allergens, which
+says sweep 1 was reading a service fault as a finding. **A number that is not
+reproducible is not evidence, whichever way it points.** The ablation is
+repeatable — that is #50's fourth criterion and it holds — so this becomes
+measurable again the day chip-wez does.
+
+**The degrade path is not distinguishable from keyword-only, which is itself the
+finding.** `hybrid` came out equal to `keyword only` in every single cell of
+sweeps 2 and 3, and on a working vector half that would be a surprise. It is not
+one: a hybrid response whose vector half returned nothing *is* the keyword
+response, and §9's arithmetic tell — a fused top score of 0.0167 rather than
+0.0321 — was observed on a live hybrid query in the same minute that the same
+question's vector-only query answered normally. What the degrade path costs is
+therefore still unpriced. **cc-t1o1** holds the question, whose most interesting
+candidate is falling back to *keyword* rather than to *hybrid*; on the evidence
+here that fallback may already be what is happening.
+
+**And section 5's floor is too low.** This one is stable across all three
+sweeps and is a real result. Restraint on the eight questions the corpus cannot
+answer measured 25% / 75% / 25% / **12%** on sweep 3, worst under the arm
+production sends: seven of eight came back grounded, including *"which items are
+safe for a peanut allergy"* against four published marks that do not include
+peanut. `PROVISIONAL_RERANKER_FLOOR = 1.5` is what that is, and this is the
+measurement its docstring was waiting for. Filed as **cc-sans**; **cc-mpdu** is
+the same question on the degrade path, where confidence comes from the lexical
+floor instead. The two are thresholds on one question and should be chosen
+together, over three or four sweeps at three or four floors — `--floor` is a run
+parameter, recorded at the top of every report, for exactly that.
+
+**What did survive all three sweeps is the one #50 asks for.** Top-3 recall on
+the allergen questions under `hybrid + reranker`: **100%, 100%, 100%.** The
+reranked arm is the stable one because the semantic ranker reorders whatever
+union it is handed and the lexical half is always in that union — so the demo
+criterion is measured on the arm the defect cannot reach.
 
 **Chunk ids are assumed stable across a rebuild, and nothing checks it.** D9
 raises it directly: a rebuilt index that renumbered chunks would invalidate
