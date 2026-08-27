@@ -41,8 +41,10 @@ screenshot.
 
 The second screen is already loaded before the visitor types, so the only thing
 between the name and the conversation is one JSON round trip. Measured against
-the live deployment on a warm replica this is **74 ms** for `POST /api/entry`
-— see `docs/deployment.md` §6.
+the live deployment on a warm replica: **0.20 s** for `POST /api/entry` and
+**0.17 s** for `POST /api/switch`, against a criterion of two seconds. See
+`docs/deployment.md` §6.1 — and §6.3 for the turn latency, which is a different
+and much less comfortable number.
 
 ## 2. The opening message is written, not filled in
 
@@ -339,7 +341,40 @@ one counter, one obvious place for a shared implementation to land. `max_replica
 = 1` is what makes that honest, and `docs/deployment.md` §3.7 is where it is
 argued.
 
-## 8. The one thing that is still true and worth saying
+## 8. Which lanes are actually wired, and how to ask
+
+`GET /healthz/lanes` answers it, from the deployment itself rather than from a
+document that can go stale. It is #65's *"surfaced somewhere operable"*, and the
+route is here rather than in `agent/` because `agent/` has no request path — and
+because two of the five answers are this tier's to give: the probe needs a
+**bound** session, since the Snowflake-backed lanes check a connection out of
+the pool by session id, and it needs to be told whether the ops API is
+available, because `agent/` does not import `api/`.
+
+It is deliberately not the platform's liveness probe. A lane being down is a
+fact an operator wants and not a reason to restart a container; RFC-001 §10 is
+explicit that a lane may fail and the conversation may not fail with it, so
+Container Apps stays pointed at `/healthz`, which answers for the process and
+nothing else.
+
+Asked of the live deployment on 27 August 2026:
+
+```json
+{"healthy": true, "down": [], "stale": [],
+ "lanes": [{"lane": "knowledge",       "state": "not_wired", ...},
+           {"lane": "account",         "state": "not_wired", ...},
+           {"lane": "personalization", "state": "not_wired", ...},
+           {"lane": "photo",           "state": "not_wired", ...},
+           {"lane": "action",          "state": "not_wired",
+            "detail": "no ops API configured; drafts are proposed and nothing is written"}]}
+```
+
+`healthy: true` with five `not_wired` lanes is the correct answer and not a
+contradiction: nothing is broken, and nothing is connected. `build_service` is
+called with `NO_LANES` on every deployment, deliberately and at length in its
+own docstring — see §9 below for what that costs a visitor.
+
+## 9. The one thing that is still true and worth saying
 
 `Lanes()` is empty on the deployed app. `search_menu_knowledge`,
 `get_points_balance` and `get_usual_order` answer from

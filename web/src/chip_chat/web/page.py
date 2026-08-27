@@ -292,7 +292,7 @@ function editCard(node, card) {
     const save = el('button', 'primary', 'Re-price');
     save.onclick = () => revise(node, card, draft);
     const cancel = el('button', 'link', 'Cancel');
-    cancel.onclick = () => { node.replaceWith(renderCardInto(node, card, false)); };
+    cancel.onclick = () => renderCardInto(node, card, false);
     actions.appendChild(save); actions.appendChild(cancel);
     actions.appendChild(el('span', 'sim', '\\u00b7 ' + SIMULATED));
     panel.appendChild(actions);
@@ -329,7 +329,9 @@ async function revise(node, card, draft) {
     renderCardInto(node, data.card, false);
     if (data.reply) bubble(data.reply, 'system');
   } else {
-    node.replaceChildren();
+    // The edit did not price up, so the visitor keeps the card they were
+    // already looking at. `revise` mints the new draft before it discards the
+    // old one for exactly this case.
     renderCardInto(node, card, false);
     bubble(data.reply || 'That edit did not price up.', 'system');
   }
