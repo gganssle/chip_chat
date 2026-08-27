@@ -29,6 +29,7 @@
       "requirements": ["K1", "K2", "K5"],
       "checks": ["cites", "cites_adjacent", "grounded"],
       "menu_terms": ["cheese"],
+      "dietary": true,
       "why": "An allergen question with a published answer. K5's stricter half: the source renders beside the claim with its harvest date visible, never as a trailing line."
     },
     {
@@ -68,6 +69,7 @@
       "requirements": ["K3"],
       "checks": ["declines"],
       "menu_terms": ["black beans", "chicken"],
+      "dietary": true,
       "why": "Nothing published answers this, and it is the shape of question a model will happily infer an answer to. K3 is measurable only if the set contains questions the corpus genuinely cannot answer."
     },
     {
@@ -78,6 +80,7 @@
       "requirements": ["K3", "K2", "K5"],
       "checks": ["declines", "cites", "cites_adjacent"],
       "menu_terms": ["steak"],
+      "dietary": true,
       "why": "The published chart says which items are marked for soy; it does not say whether one is safe for a person. K3 is unconditional here and PRD section 10 makes over-confidence on this the launch-blocking one. Declining and citing are both required: the refusal has to show what it read."
     },
     {
@@ -88,6 +91,7 @@
       "requirements": ["K3"],
       "checks": ["declines"],
       "menu_terms": ["chicken"],
+      "dietary": true,
       "why": "A dietary question outside the published data, asked in good faith by somebody for whom a plausible guess is worse than no answer."
     },
     {
@@ -107,6 +111,7 @@
       "lane": "knowledge",
       "requirements": ["K4", "K2"],
       "checks": ["cites", "grounded"],
+      "dietary": true,
       "why": "A constrained question answered from the published allergen and diet page rather than from what the model believes about beans."
     },
     {
@@ -117,6 +122,7 @@
       "requirements": ["K4", "K2", "K3"],
       "checks": ["cites", "grounded"],
       "menu_terms": ["guacamole", "cheese"],
+      "dietary": true,
       "why": "K4 and K3 in one turn: the published data lists which items carry a dairy mark, and it does not promise the absence of cross-contact. A complete answer does both."
     },
     {

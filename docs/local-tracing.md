@@ -151,6 +151,12 @@ traces is scored as **unscored**, counted as a split trace, and named with this
 page's command beside it. So a broken boundary shows up as a hole in the report
 rather than as a plausible number over half a tree.
 
+`chip_chat.eval.grounding` (issue #75) does the same and has one more reason to.
+It reads the `retriever.search` documents off the trace so that a groundedness
+judge scores against what the turn really retrieved — and when the turn splits,
+the retrieval is in one trace and the response is in the other, so nothing can
+show that the passages belong to the answer. Not a degraded score: no score.
+
 `make agent-image-boundary` is the stronger of the two. It builds the image and
 runs the agent half as `docker run … chip-chat-agent:dev agent-half`, handing the
 carrier over in `TRACEPARENT` / `TRACESTATE` / `BAGGAGE`. Two operating-system

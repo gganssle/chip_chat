@@ -1,0 +1,217 @@
+"""``python -m chip_chat.eval.grounding`` -- check, run the ceiling, or score.
+
+Three modes, and two of them are free. The cheap ones are the default for the
+same reason they are in the other four sets: an experiment should fail on the
+free check rather than after the thirty-fourth model call.
+
+``--check`` builds the dataset from the two committed manifests, turns its rows
+into questions, and reports whether they can support the numbers #75 asks for --
+questions the corpus answers *and* questions it does not, allergen rows in both
+directions, answers that owe a citation. It calls nothing.
+
+``--ceiling`` runs those rows through the week-one slice with lane selection
+handed to it and writes the report. Free, needs no credentials, and **not a
+score for the agent** -- :mod:`chip_chat.eval.grounding.testing` says at length
+what a run against an oracle is worth, and here it says one thing more: three of
+the five findings cannot be measured at all until ``chip_chat.agent.envelope``
+has a caller. It is the one to put in CI.
+
+**A run exits non-zero on a measured gate breach and on a split trace.** Never
+on an unmeasured one: PRD section 12 makes the citation gate blocking, and today
+nothing can count it, so a red build here would be a build that is red about the
+wiring rather than about the product -- and a gate that is red by construction is
+a gate somebody switches off. A split trace is issue #103's propagation, and it
+is the failure that makes every other number in the document meaningless: the
+retrieval is in one trace and the response in another, so nothing can show the
+passages belong to the answer.
+
+Without either flag it runs the rows against a real deployment and writes the
+baseline. That spends money: at least one model call per row.
+
+.. code-block:: console
+
+    $ python -m chip_chat.eval.grounding --check
+    $ python -m chip_chat.eval.grounding --ceiling --out eval/grounding/BASELINE.md
+    $ export CHIP_CHAT_FOUNDRY_ENDPOINT=... CHIP_CHAT_FOUNDRY_API_KEY=...
+    $ python -m chip_chat.eval.grounding --out eval/grounding/BASELINE.md
+"""
+
+import argparse
+import sys
+from collections.abc import Sequence
+from pathlib import Path
+
+from chip_chat.agent.foundry import FoundryConfig, FoundryConfigError
+from chip_chat.agent.model import AzureChatModel
+from chip_chat.eval.dataset.build import Dataset, DatasetError, build_dataset
+from chip_chat.eval.golden.cases import DEFAULT_MANIFEST as GOLDEN_MANIFEST
+from chip_chat.eval.golden.cases import CaseError, GoldenSet
+from chip_chat.eval.golden.run import DEFAULT_SESSION
+from chip_chat.eval.grounding.coverage import RATE_NEEDS, coverage
+from chip_chat.eval.grounding.questions import Question, QuestionError, questions
+from chip_chat.eval.grounding.report import Report, build_report, render
+from chip_chat.eval.grounding.run import run_turns
+from chip_chat.eval.grounding.slice import SliceTurnSource
+from chip_chat.eval.grounding.testing import CEILING_CAVEAT, CEILING_SOURCE, ceiling
+from chip_chat.eval.photos.labels import LabeledSet, LabelError
+
+PHOTOS_MANIFEST = Path("eval/photos/labels.json")
+DEFAULT_BASELINE = Path("eval/grounding/BASELINE.md")
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the command.
+
+    Args:
+        argv: Arguments, for a test that drives this without a subprocess.
+
+    Returns:
+        The exit status. ``0`` on success; ``1`` where a manifest cannot be
+        believed, the rows cannot support #75's numbers, a run could not be
+        started, a run found a split trace, or a run found a *measured* gate
+        breach. An unmet scope clause exits non-zero deliberately -- a gap in
+        what can be measured is a build failure, or it stays a gap.
+    """
+    args = _parser().parse_args(argv)
+    try:
+        golden = GoldenSet.load(args.golden)
+        labels = LabeledSet.load(args.photos)
+        dataset = build_dataset(golden, labels)
+        rows = questions(dataset)
+    except (CaseError, LabelError, DatasetError, QuestionError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+    if args.check:
+        return _check(dataset, rows)
+
+    if not rows:
+        print("error: the dataset holds no rows this eval can score", file=sys.stderr)
+        return 1
+
+    if args.ceiling:
+        turns = ceiling(golden, dataset, only=args.only)
+        source = CEILING_SOURCE
+        caveat = CEILING_CAVEAT
+    else:
+        try:
+            model = AzureChatModel(FoundryConfig.from_env())
+        except FoundryConfigError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        adapter = SliceTurnSource(golden=golden, model=model, session_prefix=args.session)
+        turns = run_turns(rows, adapter, only=args.only)
+        source = adapter.name
+        caveat = ""
+
+    report = build_report(
+        rows,
+        turns,
+        source=source,
+        dataset=dataset.name,
+        version=dataset.version,
+        caveat=caveat,
+    )
+    document = render(report)
+    if args.out is not None:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(document, encoding="utf-8")
+        print(f"wrote {args.out}")
+    else:
+        print(document)
+    return _exit_status(report)
+
+
+def _check(dataset: Dataset, rows: Sequence[Question]) -> int:
+    """Report what the rows can support, without running anything."""
+    cover = coverage(rows)
+    print(
+        f"{dataset.name} {dataset.version}: {cover.rows} rows, "
+        f"{cover.stated} the set states something about, "
+        f"{cover.dietary} allergen or dietary"
+    )
+    if cover.thin_category:
+        print(
+            f"  note: fewer than {RATE_NEEDS} allergen and dietary rows; the "
+            "category is held to counts rather than to a rate, so this does not "
+            "move its verdict"
+        )
+    for clause, ids in cover.met:
+        print(f"  ok        {clause.name}: {len(ids)}/{clause.minimum}")
+    for clause, ids in cover.unmet:
+        print(f"  MISSING   {clause.name}: {len(ids)}/{clause.minimum} ({clause.source})")
+    return 0 if cover.complete else 1
+
+
+def _exit_status(report: Report) -> int:
+    """What a run exits with. See the module docstring on why this is narrow."""
+    status = 0
+    scores = report.scores
+    if scores.split_traces:
+        print(
+            f"error: {scores.split_traces} turn(s) arrived as more than one "
+            "trace, so the retrieval cannot be shown to belong to the response; "
+            "trace context is not propagating (#103). Check it with "
+            "`make trace-boundary`.",
+            file=sys.stderr,
+        )
+        status = 1
+    for name, gate in (
+        ("citation gate", scores.citation_gate),
+        ("allergen and dietary gate", scores.dietary_gate),
+    ):
+        if gate is False:
+            print(f"error: the {name} is breached; see the report", file=sys.stderr)
+            status = 1
+    return status
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m chip_chat.eval.grounding",
+        description=(
+            "Score groundedness and citation presence over the dataset's turns."
+        ),
+    )
+    parser.add_argument(
+        "--golden",
+        type=Path,
+        default=GOLDEN_MANIFEST,
+        help=f"the golden case manifest (default: {GOLDEN_MANIFEST})",
+    )
+    parser.add_argument(
+        "--photos",
+        type=Path,
+        default=PHOTOS_MANIFEST,
+        help=f"the labeled photo manifest (default: {PHOTOS_MANIFEST})",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="report what the rows can support, without running anything",
+    )
+    parser.add_argument(
+        "--ceiling",
+        action="store_true",
+        help="run against the slice with routing handed to it -- free, and not a score",
+    )
+    parser.add_argument(
+        "--only",
+        nargs="+",
+        help="run only these dataset entry ids",
+    )
+    parser.add_argument(
+        "--session",
+        default=DEFAULT_SESSION,
+        help="prefix for the session id each row is run under",
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        help=f"write the report here instead of to stdout (baseline: {DEFAULT_BASELINE})",
+    )
+    return parser
+
+
+if __name__ == "__main__":  # pragma: no cover -- the entry point itself
+    raise SystemExit(main())

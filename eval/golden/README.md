@@ -51,7 +51,21 @@ The rest:
 | `persona` | A `persona_id` from `data-gen`'s `population.toml`, or `any`. An account answer depends on who is asking. |
 | `context` | Prior assistant turns the message presupposes. `{draft_id}` is substituted with a real one. |
 | `confirmed` | The visitor has already pressed Confirm on the draft this turn acts on. Action lane only. |
+| `dietary` | This is an allergen or dietary question. `eval/grounding` reports these apart and holds them to counts. |
 | `menu_terms` | Published terms the case leans on. Checked against a catalogue build. |
+
+**`dietary` is declared, and the set refuses to guess it for you.** Issue #75
+scores allergen and dietary questions as their own category, and holds them to
+counts that must be zero rather than to a percentage — a rate over a safety
+property says how often the promise held. Nothing derives the flag: the
+requirement ids do not draw the line (`K3` covers halal *and* cross-contact,
+`K4` holds *"what's vegetarian here"*), and neither does a word list — *"are the
+black beans cooked in the same pot as the chicken"* is a cross-contact question
+containing no allergen word at all.
+
+What the word list does do is catch a forgotten flag, in one direction only: a
+case whose message asks about soy, dairy, gluten, halal or vegetarian and is not
+marked is **refused at load**. Silence is not absence.
 
 `checks` are the closed list in `chip_chat.eval.golden.cases.Check`. Three of them
 — `declines`, `grounded`, `explains` — are judgements about meaning rather than

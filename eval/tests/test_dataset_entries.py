@@ -105,6 +105,27 @@ def test_a_golden_entry_has_no_frame_truth(golden: GoldenSet) -> None:
         assert entry.row()["frame_truth"] == ""
 
 
+def test_the_allergen_category_rides_on_the_row(golden: GoldenSet) -> None:
+    """#75 reports it apart, so an experiment has to be able to group on it.
+
+    Carried as a column rather than derived from ``requirements`` at read time,
+    because the requirement ids do not settle it: K3 covers halal *and*
+    cross-contact, K5 the two allergen ones, and *"what's vegetarian here"* is a
+    K4 case and a dietary question.
+    """
+    entries = golden_entries(golden)
+    dietary = [entry for entry in entries if entry.dietary]
+
+    assert len(dietary) >= 4
+    assert all(entry.row()["dietary"] is entry.dietary for entry in entries)
+    assert {entry.dietary for entry in entries} == {True, False}
+
+
+def test_a_photograph_is_never_in_the_allergen_category(labels: LabeledSet) -> None:
+    """A frame is scored in ``eval/photos``; there is no response to hold to K2."""
+    assert all(not entry.dietary for entry in photo_entries(labels))
+
+
 def test_the_judged_checks_are_carried_apart(golden: GoldenSet) -> None:
     """An online eval attaches a judge to exactly these and to nothing else."""
     for entry in golden_entries(golden):
@@ -131,6 +152,7 @@ def test_a_digest_moves_when_any_field_does(golden: GoldenSet) -> None:
     assert replace(entry, input="something else").digest != entry.digest
     assert replace(entry, requirements=("K9",)).digest != entry.digest
     assert replace(entry, why="a different reason").digest != entry.digest
+    assert replace(entry, dietary=not entry.dietary).digest != entry.digest
 
 
 def test_every_row_is_flat_scalars(golden: GoldenSet, labels: LabeledSet) -> None:

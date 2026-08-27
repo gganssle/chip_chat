@@ -94,6 +94,31 @@ jobs:
       - name: Trajectory eval -- one turn, one trace
         run: make trajectory
 
+      # Issue #75. Neither step calls a model.
+      #
+      # The first blocks, and the clause worth naming is the one about
+      # over-refusal: `over-refusals: 0` over a set holding no question the
+      # corpus can answer prints exactly like a system that never hedges, and
+      # nothing in the arithmetic can tell the difference. The rows have to
+      # carry both directions, in the ordinary category and in the allergen and
+      # dietary one, or half of what #75 promises is unmeasurable.
+      #
+      # The second scores groundedness and citation presence against the slice
+      # with routing handed to it. It gates on a MEASURED gate breach and on a
+      # split trace, and deliberately not on an unmeasured gate. Three of the
+      # five findings are unmeasurable against any deployment in this repository
+      # -- `chip_chat.agent.envelope` is imported by no caller (bead cc-bap) and
+      # no judge is wired (#76) -- so a step that failed on `unmeasured` would be
+      # red about a missing wire on every pull request, and would be switched
+      # off. The report says `unmeasured`, which is neither pass nor fail, and
+      # the log is where a person reads it. `make grounding-baseline` is the
+      # writing one; this leaves the checkout clean.
+      - name: Groundedness eval -- can the dataset carry #75's numbers
+        run: make grounding-check
+
+      - name: Groundedness eval -- the two gates, and what is unmeasured
+        run: make grounding
+
   terraform:
     name: terraform fmt and validate
     runs-on: ubuntu-latest

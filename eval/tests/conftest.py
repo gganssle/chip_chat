@@ -23,7 +23,11 @@ really run at, and a set of thirty is a fixture two other test modules want.
 
 ``rows`` is not a fourth set but a reading of the third: the dataset's routing
 rows as expectations, which is what :mod:`chip_chat.eval.trajectory` scores a
-span tree against.
+span tree against. ``asked`` is a second reading of the same dataset -- its rows
+as the questions :mod:`chip_chat.eval.grounding` scores a *response* against --
+and the two are deliberately not the same fixture: a photograph is a trajectory
+nothing routed to and a question nobody answered in prose, and the two evals
+drop it for two different reasons.
 
 There is deliberately **no** ``chat.turn`` fixture here, unlike
 ``vision/tests/conftest.py``. :func:`~chip_chat.eval.photos.run.run_set` opens
@@ -46,6 +50,7 @@ from chip_chat.eval.adversarial.attacks import (
 from chip_chat.eval.adversarial.attacks import AdversarialSuite
 from chip_chat.eval.dataset.build import Dataset, build_dataset
 from chip_chat.eval.golden.cases import DEFAULT_MANIFEST, GoldenSet
+from chip_chat.eval.grounding.questions import Question, questions
 from chip_chat.eval.photos.__main__ import DEFAULT_MANIFEST as PHOTOS_MANIFEST
 from chip_chat.eval.photos.labels import LabeledSet
 from chip_chat.eval.photos.testing import synthetic_set
@@ -120,6 +125,17 @@ def rows(shipped: Dataset) -> tuple[Expectation, ...]:
     one only if both were taken against the same dataset version.
     """
     return expectations(shipped)
+
+
+@pytest.fixture(scope="session")
+def asked(shipped: Dataset) -> tuple[Question, ...]:
+    """The dataset's rows, as the grounding eval reads them.
+
+    Built from ``shipped`` for the reason ``rows`` is: a groundedness number is
+    comparable with another one only if both were taken against the same
+    dataset version.
+    """
+    return questions(shipped)
 
 
 @pytest.fixture(scope="session")
