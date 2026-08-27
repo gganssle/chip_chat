@@ -231,6 +231,47 @@ adversarial: ## Attack the slice with a model that complies, free
 adversarial-baseline: ## Run the suite against a real deployment and write the baseline
 	$(UV) run python -m chip_chat.eval.adversarial --out eval/adversarial/BASELINE.md
 
+# --- Trajectory and tool selection ------------------------------------------
+#
+# Issue #74, and the metric the whole five-lane architecture exists to get right.
+# Both targets are free and neither calls a model.
+#
+# `trajectory-check` holds the dataset to what #74's report will claim about it:
+# a row in every lane, boundary rows that make a wrong lane nameable, rows where
+# a wrong query is observable at all. An unmet clause is a build failure, or the
+# gap stays.
+#
+# `trajectory` runs those rows through the week-one slice with lane selection
+# HANDED to it and writes the baseline. Read eval/trajectory/BASELINE.md's first
+# paragraph before its table: a model told the answer measures nothing about a
+# model, and what the run actually measures is the wiring at its ceiling.
+#
+# Either run exits non-zero on ONE thing: a turn that arrived as more than one
+# trace.
+# That is issue #103's propagation, it makes every other number in the document
+# meaningless, and it is invisible otherwise -- the tool spans are all still
+# there. The accuracy itself is deliberately not gated, because the slice
+# registers six of the eleven tools and a gate that is red by construction is a
+# gate somebody switches off. `make trace-boundary` is the propagation check
+# itself; this one holds the reader.
+
+.PHONY: trajectory-check trajectory trajectory-baseline
+
+trajectory-check: ## Check the dataset can support #74's numbers, free
+	$(UV) run python -m chip_chat.eval.trajectory --check
+
+trajectory: ## Score trajectories against the slice with routing handed to it, free
+	$(UV) run python -m chip_chat.eval.trajectory --ceiling
+
+trajectory-baseline: ## Refresh eval/trajectory/BASELINE.md from that same free run
+	$(UV) run python -m chip_chat.eval.trajectory --ceiling --out eval/trajectory/BASELINE.md
+
+# The credentialed run is the same command with neither flag. It needs
+# CHIP_CHAT_FOUNDRY_ENDPOINT and CHIP_CHAT_FOUNDRY_API_KEY and costs at least
+# one model call per row, which is why it is not a target here:
+#
+#     uv run python -m chip_chat.eval.trajectory --out eval/trajectory/BASELINE.md
+
 # --- The versioned dataset --------------------------------------------------
 #
 # Issue #72. Both sets, promoted into one dataset with a content hash for a

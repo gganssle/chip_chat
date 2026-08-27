@@ -1,7 +1,8 @@
 # `eval` — measuring the things that are otherwise opinions
 
 Golden set, labeled photo set, adversarial suite, Arize experiments. Three of
-those ship today, and the first two are promoted into one versioned dataset.
+those ship today, the first two are promoted into one versioned dataset, and the
+dataset is what the trajectory eval scores tool selection against.
 
 **The golden set** — issue [#29](https://github.com/gganssle/chip_chat/issues/29).
 Thirty-four questions across the five lanes, each carrying the lane it should
@@ -91,6 +92,33 @@ uv run --with arize python -m chip_chat.eval.dataset --upload
 [`dataset/README.md`](dataset/README.md) is the write-up: what a version is, why
 it is a hash rather than a number, and the three things a publish will not do.
 
+**Tool selection and trajectories** — issue
+[#74](https://github.com/gganssle/chip_chat/issues/74). The headline metric, and
+the only thing in `eval/` that reads the **span tree** rather than a return
+value: which tool was reached for, in what order, and whether that was the lane
+the dataset row expected. PRD §05 sets it at ≥ 95%, the highest bar in the table.
+
+```
+chip_chat.eval.trajectory
+├── expectations  the dataset's rows, and the two tables behind them
+├── trees         a turn's spans, read back as the calls it made
+├── shapes        four ways it was wrong, and the order they are asked in
+├── scoring       per-lane accuracy, and the gap under the target
+├── run           every row through a source
+├── slice         the week-one loop, recorded
+├── coverage      #74's scope, as clauses the rows meet or do not
+└── report        the baseline, as Markdown
+```
+
+```bash
+python -m chip_chat.eval.trajectory --check      # free
+python -m chip_chat.eval.trajectory --ceiling    # free, and the one to run
+```
+
+[`trajectory/README.md`](trajectory/README.md) is the write-up: why the four
+failure shapes are counted apart, why the wrong-query check is deliberately
+weak, and what a split trace does to every number in the document.
+
 All three sets live beside their code — [`golden/`](golden/),
 [`photos/`](photos/) and [`adversarial/`](adversarial/) — each with a
 `README.md` to read before adding an entry and a `BASELINE.md` for what has
@@ -98,6 +126,9 @@ and has not been measured. Adding to the first two changes the dataset's
 version, and `make dataset` is how the committed build catches up; the
 adversarial suite is not in the dataset, because an attack has no expected
 output for an experiment to be scored against.
+
+[`trajectory/`](trajectory/) is on the same terms and holds no set of its own:
+it scores the dataset's rows, so there is nothing there to add an entry to.
 
 ## Where the line between them is
 
@@ -116,6 +147,15 @@ it: one case cannot say whether the salsa was right.
 The golden set therefore holds exactly one vision case — routing — and delegates
 `V2`–`V7` to the photo set by name, with the argument recorded in
 `requirements.DELEGATIONS`.
+
+`eval/trajectory` sits across the golden set rather than beside it. It runs the
+same rows and asks a different question of the same turns: not *was the answer
+right* but *how did the turn get there*, read off the `tool.<tool_name>` spans
+RFC-001 §09 froze. So the golden set can say a turn reached the expected tool,
+and only the trajectory eval can say it reached three when one would do, or that
+the query it sent bore no relation to what was asked. It scores the dataset's
+routing rows and no photographs, for the same reason the golden set holds one
+vision case: a frame the photo set runs directly was never routed to.
 
 `eval/adversarial` is divided from both on a different axis. It does not ask
 *what is the right answer* — it asks *what does it take to get a wrong one*, and

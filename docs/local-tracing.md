@@ -145,6 +145,12 @@ split trace is not a degraded trace, it destroys the parent/child structure ever
 trajectory and tool-selection evaluation attaches to. The command prints the
 headers that were on the wire, which is the first thing to look at.
 
+That evaluation now exists — `chip_chat.eval.trajectory`, issue #74 — and it is
+built to survive this rather than to be fooled by it: a turn that arrives as two
+traces is scored as **unscored**, counted as a split trace, and named with this
+page's command beside it. So a broken boundary shows up as a hole in the report
+rather than as a plausible number over half a tree.
+
 `make agent-image-boundary` is the stronger of the two. It builds the image and
 runs the agent half as `docker run … chip-chat-agent:dev agent-half`, handing the
 carrier over in `TRACEPARENT` / `TRACESTATE` / `BAGGAGE`. Two operating-system

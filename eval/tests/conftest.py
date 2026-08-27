@@ -21,6 +21,10 @@ The synthetic set and the scripted describer ship in
 module's docstring gives: the arithmetic has to be driven at the size it will
 really run at, and a set of thirty is a fixture two other test modules want.
 
+``rows`` is not a fourth set but a reading of the third: the dataset's routing
+rows as expectations, which is what :mod:`chip_chat.eval.trajectory` scores a
+span tree against.
+
 There is deliberately **no** ``chat.turn`` fixture here, unlike
 ``vision/tests/conftest.py``. :func:`~chip_chat.eval.photos.run.run_set` opens
 one turn per frame, and ``chat.turn`` is only permitted at the trace root -- so
@@ -45,6 +49,7 @@ from chip_chat.eval.golden.cases import DEFAULT_MANIFEST, GoldenSet
 from chip_chat.eval.photos.__main__ import DEFAULT_MANIFEST as PHOTOS_MANIFEST
 from chip_chat.eval.photos.labels import LabeledSet
 from chip_chat.eval.photos.testing import synthetic_set
+from chip_chat.eval.trajectory.expectations import Expectation, expectations
 from chip_chat.harvest.blobs import LocalBlobStore
 from chip_chat.otel.testing import SpanRecorder, span_recorder
 
@@ -104,6 +109,17 @@ def photos() -> LabeledSet:
 def shipped(golden: GoldenSet, photos: LabeledSet) -> Dataset:
     """The versioned dataset both shipped manifests build."""
     return build_dataset(golden, photos)
+
+
+@pytest.fixture(scope="session")
+def rows(shipped: Dataset) -> tuple[Expectation, ...]:
+    """The dataset's routing rows, as the trajectory eval reads them.
+
+    Built from ``shipped`` rather than from the golden set, because that is the
+    register #74 scores against: a trajectory number is comparable with another
+    one only if both were taken against the same dataset version.
+    """
+    return expectations(shipped)
 
 
 @pytest.fixture(scope="session")

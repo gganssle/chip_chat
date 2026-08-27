@@ -68,6 +68,32 @@ jobs:
         run: make adversarial
         continue-on-error: true
 
+      # Issue #74. Neither step calls a model.
+      #
+      # The first blocks: a dataset that cannot support the report's claims --
+      # a lane with no rows, no boundary rows to make a wrong lane nameable, no
+      # row where a wrong query is observable -- is a gap in what can be
+      # measured, and a gap nobody fails on is a gap that stays.
+      #
+      # The second runs the trajectory eval against the week-one slice with
+      # lane selection handed to it. It gates on exactly one thing: a turn that
+      # arrived as more than one trace. That is #103's propagation, it is
+      # invisible otherwise -- every tool span is still present, just attached
+      # to a trace the turn knows nothing about -- and it would make every
+      # number in the document a measurement of half a tree.
+      #
+      # What is NOT gated is the accuracy. The slice registers six of the
+      # eleven tools, so its ceiling is 68.8% against a 95% target by
+      # construction, and a step that is red on every pull request until the
+      # remaining lanes land is a step somebody switches off. The report goes
+      # to stdout rather than to the baseline file, so the log holds it and the
+      # checkout stays clean -- `make trajectory-baseline` is the writing one.
+      - name: Trajectory eval -- can the dataset carry #74's numbers
+        run: make trajectory-check
+
+      - name: Trajectory eval -- one turn, one trace
+        run: make trajectory
+
   terraform:
     name: terraform fmt and validate
     runs-on: ubuntu-latest
