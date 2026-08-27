@@ -36,6 +36,17 @@ and substitutes the real draft id into the case's context and message wherever
 they write ``{draft_id}``. A fabricated id in a prose string would test nothing:
 ``place_order`` would refuse it, correctly, and the case would fail for the
 wrong reason.
+
+**The system prompt is the one thing an experiment swaps here.** :attr:`Slice
+Deployment.prompt` is optional and defaults to the revision the agent ships
+with, which is what :class:`~chip_chat.agent.loop.Conversation` opens with on
+its own. Naming another revision opens the conversation by hand instead, with
+that revision's text and the *same* runtime context -- because #60's split is
+exactly that the prompt describes how Cilantro behaves and the context describes
+what is true right now, and an experiment that moved both would not know which
+one moved the score. This is the seam :mod:`chip_chat.eval.experiment` runs two
+prompt versions through, and it is deliberately here rather than in that package:
+a second copy of the loop's opening would be free to drift from the loop's.
 """
 
 from collections.abc import Mapping, Sequence
@@ -44,13 +55,14 @@ from typing import Any, Final
 
 from chip_chat.agent.hardcoded import ACCOUNT, MENU
 from chip_chat.agent.lanes import NO_LANES, Lanes
-from chip_chat.agent.loop import Conversation, TurnResult, run_turn
+from chip_chat.agent.loop import Conversation, TurnResult, run_turn, runtime_context
 from chip_chat.agent.model import ChatModel
 from chip_chat.agent.orders import Draft, OrderDesk
+from chip_chat.agent.prompt import SystemPrompt
 from chip_chat.agent.tools import offered_tools
 from chip_chat.eval.golden.cases import ANY_PERSONA, GoldenCase
 from chip_chat.eval.golden.run import DEFAULT_SESSION, Observation, Signal
-from chip_chat.otel import chat_turn
+from chip_chat.otel import ToolName, chat_turn
 
 __all__ = ["SLICE_PERSONA", "SLICE_SIGNALS", "SliceDeployment"]
 
@@ -87,16 +99,21 @@ class SliceDeployment:
             absent; the same is true of the account and personalization cases
             and their two tools.
         session_prefix: What each case's session id is built from.
+        prompt: The system prompt revision to run under. ``None`` is the one
+            the agent ships with, which is what the loop opens a conversation
+            with unaided. See the module docstring.
     """
 
     model: ChatModel
     lanes: Lanes = NO_LANES
     session_prefix: str = DEFAULT_SESSION
+    prompt: SystemPrompt | None = None
 
     @property
     def name(self) -> str:
         """The deployment, as the report names it."""
-        return f"week-one slice on {self.model.deployment}"
+        under = "" if self.prompt is None else f" under prompt {self.prompt.version}"
+        return f"week-one slice on {self.model.deployment}{under}"
 
     @property
     def reports(self) -> frozenset[Signal]:
@@ -125,8 +142,9 @@ class SliceDeployment:
 
         session_id = f"{self.session_prefix}-{case.case_id}"
         desk = OrderDesk()
+        tools = offered_tools(self.lanes)
         conversation = Conversation(
-            session_id=session_id, tools=offered_tools(self.lanes)
+            session_id=session_id, tools=tools, messages=self._opening(tools)
         )
         draft = self._confirmed_draft(case, session_id, desk)
         draft_id = None if draft is None else draft.draft_id
@@ -146,6 +164,27 @@ class SliceDeployment:
                 confirmed_draft_id=draft_id,
             )
         return self._observed(case, result, conversation.messages[before:])
+
+    def _opening(self, tools: Sequence[ToolName]) -> list[dict[str, Any]]:
+        """The two system messages a conversation opens with, or none.
+
+        Empty where no revision was named, which leaves
+        :meth:`~chip_chat.agent.loop.Conversation.__post_init__` to open the
+        conversation with the shipped prompt -- the ordinary path, and the one
+        every unconfigured run takes.
+
+        Where a revision *is* named, both messages are written here, in the
+        order and with the roles the loop uses. The second one is
+        :func:`~chip_chat.agent.loop.runtime_context` rather than a copy of it,
+        so an experiment swapping the prompt cannot accidentally also swap the
+        facts of the turn.
+        """
+        if self.prompt is None:
+            return []
+        return [
+            {"role": "system", "content": self.prompt.text},
+            {"role": "system", "content": runtime_context(tools)},
+        ]
 
     def _confirmed_draft(
         self, case: GoldenCase, session_id: str, desk: OrderDesk

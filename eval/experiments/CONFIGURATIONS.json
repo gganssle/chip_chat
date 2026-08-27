@@ -1,0 +1,26 @@
+{
+  "configurations": [
+    {
+      "name": "shipped",
+      "prompt_revision": "v1",
+      "why": "The build as it stands. This arm is the baseline the launch criteria in PRD section 12 are checked against, so it names no deployment of its own: it runs on whatever CHIP_CHAT_FOUNDRY_CHAT_DEPLOYMENT says, which is what the product runs on.",
+      "retrieval": { "top": 5, "rerank": true },
+      "matcher": {}
+    },
+    {
+      "name": "lean-lanes",
+      "prompt_revision": "v2-lean",
+      "prompt_directory": "eval/experiments/prompts",
+      "why": "The system prompt with the five-lane section compressed from prose with worked examples into a table. Every other section is byte-identical to v1, so a difference in lane selection is attributable to that one edit. This is the ordinary change somebody makes and then says feels the same, and the arm exists to find out whether it is.",
+      "retrieval": { "top": 5, "rerank": true },
+      "matcher": {}
+    },
+    {
+      "name": "rerank-off",
+      "prompt_revision": "v1",
+      "why": "The shipped prompt with semantic reranking withdrawn. RFC-001 section 08 defends the reranker on cost, and eval/retrieval/BASELINE.md measures what it buys the retriever; this arm is where the whole-turn cost of dropping it would show. Recorded and inert until a knowledge lane is wired, which the report says above its own table rather than leaving somebody to read a flat line as evidence.",
+      "retrieval": { "top": 5, "rerank": false },
+      "matcher": {}
+    }
+  ]
+}
