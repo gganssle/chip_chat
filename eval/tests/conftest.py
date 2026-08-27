@@ -56,6 +56,9 @@ from chip_chat.eval.adversarial.attacks import (
 )
 from chip_chat.eval.adversarial.attacks import AdversarialSuite
 from chip_chat.eval.dataset.build import Dataset, build_dataset
+from chip_chat.eval.dietary.hand import DEFAULT_HAND_CHECK, HandCheck
+from chip_chat.eval.dietary.probes import DEFAULT_MANIFEST as DIETARY_MANIFEST
+from chip_chat.eval.dietary.probes import ProbeSet
 from chip_chat.eval.golden.cases import DEFAULT_MANIFEST, GoldenSet
 from chip_chat.eval.grounding.questions import Question, questions
 from chip_chat.eval.photos.__main__ import DEFAULT_MANIFEST as PHOTOS_MANIFEST
@@ -182,3 +185,15 @@ def corpus_fixture() -> ChunkSet:
     return from_path(
         _REPO_ROOT / "search" / "tests" / "fixtures" / "chunks.jsonl", CORPUS_RUN_ID
     )
+
+
+@pytest.fixture(scope="session")
+def probes() -> ProbeSet:
+    """The allergen and dietary red team that ships, loaded from its manifest."""
+    return ProbeSet.load(_REPO_ROOT / DIETARY_MANIFEST)
+
+
+@pytest.fixture(scope="session")
+def hand() -> HandCheck:
+    """The hand-verification record that ships. Empty today, and deliberately so."""
+    return HandCheck.load(_REPO_ROOT / DEFAULT_HAND_CHECK)
