@@ -608,6 +608,7 @@ source = { editable = "search" }
 dependencies = [
     { name = "azure-identity" },
     { name = "chip-chat-harvest" },
+    { name = "chip-chat-otel" },
     { name = "httpx" },
 ]
 
@@ -615,6 +616,7 @@ dependencies = [
 requires-dist = [
     { name = "azure-identity", specifier = ">=1.19" },
     { name = "chip-chat-harvest", editable = "harvest" },
+    { name = "chip-chat-otel", editable = "otel" },
     { name = "httpx", specifier = ">=0.28" },
 ]
 

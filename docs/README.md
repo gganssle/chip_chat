@@ -18,6 +18,7 @@ contributor — human or agent — has them locally. Read them in this order.
 | [gold-marts.md](gold-marts.md) | The four personalization marts — what every number in them means, how `usual_order.confidence` is defined so a low value hedges honestly, and why no mart reads the table holding the fields a visitor may edit |
 | [recommender.md](recommender.md) | The item-affinity recommender — what it scores, why it refuses to suggest anything a visitor has ever ordered, and why a run only takes the `@champion` alias by beating a popularity baseline on *novel* hits |
 | [retrieval-index.md](retrieval-index.md) | The knowledge lane's index — what a chunk becomes, the one alias write that makes a corpus live, which half of integrated vectorization this estate can have and why, and four things the live service does that its documentation does not say |
+| [retrieval.md](retrieval.md) | The knowledge lane's *query* — why hybrid is not a hedge, the three constraints it refuses to guess at rather than approximate, how a question the corpus cannot answer is made legible instead of paraphrased over, and the 1,000-a-month ceiling that makes retrieval-without-a-reranker a path with a test rather than a fallback |
 | [snowflake-account.md](snowflake-account.md) | The serving layer's account — two X-Small warehouses that suspend in sixty seconds, three roles that are siblings rather than a ladder, the credit ceiling that keeps a runaway from ending the trial early, and the nine Snowflake behaviours that make a security check pass while proving nothing |
 | [snowflake-schema.md](snowflake-schema.md) | The fourteen tables in it — the ten columns RFC-001 §04 does not print and why each is unavoidable, the view that refuses to let a visitor-scoped table forget `demo_id`, and why nothing is clustered |
 | [snowflake-isolation.md](snowflake-isolation.md) | The mechanism that keeps one visitor out of another's rows — two row access policies keyed to a session variable, why default deny is written out rather than inherited, the one table whose policy is open while nothing is bound and why that is narrower than leaving it unprotected, and the three places the coverage question is asked so the guarantee cannot decay quietly |
@@ -67,7 +68,12 @@ guide is the personalization lane's last document and the only one about a
 *model*: what it scores, why it will not suggest anything a visitor has ever
 ordered, and why a training run takes the deployed alias only by beating a
 popularity baseline on hits the visitor had not already had — which is PRD P2's
-"rather than generic popularity" turned into a number rather than a hope.
+"rather than generic popularity" turned into a number rather than a hope. The two
+retrieval guides are a pair, and the seam between them is worth keeping: the
+index guide is about *construction* — what a chunk becomes, and the one write
+that makes a corpus live — while the retrieval guide is about *a question*, and
+turns out to be mostly a document about refusals, because the interesting content
+of a query layer is the constraints it declines to approximate.
 instead of writing a warning nobody reads. The Snowflake account guide is the
 lakehouse catalogue's opposite number on the serving side, and carries the same
 burden of proof: not that the read role is configured to be read-only, but that

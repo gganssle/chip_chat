@@ -322,15 +322,18 @@ this package's chunk schema is `gold.FIELDS`, field for field. `gold.py` on
 skips with that reason and becomes live the moment the merge queue resolves it.
 Tracked as **cc-6rb**.
 
-**Hybrid retrieval and the reranker are #49's.** The index carries the semantic
-configuration and the scoring profile — an index is rebuilt rather than altered,
-so leaving them out would mean #49 could not turn reranking on without
-rebuilding the corpus — but nothing here chooses a query shape. Note the Free
-tier's semantic allowance is **1,000 requests a month and then a billing error**,
-a hard stop rather than an overage, which is what makes #49's
-degrade-to-hybrid-without-reranking path required code.
+**Hybrid retrieval and the reranker are #49's, and they have landed.** The index
+carries the semantic configuration and the scoring profile — an index is rebuilt
+rather than altered, so leaving them out would have meant #49 could not turn
+reranking on without rebuilding the corpus — and nothing *here* chooses a query
+shape. What does is `chip_chat.search.{query,retrieve,allowance,lane}`, written
+up in [retrieval.md](retrieval.md): hybrid always, reranked while the Free
+tier's **1,000 requests a month** last, and hybrid-without-reranking after that,
+because past the ceiling the API returns a billing error rather than a charge.
 
 **Nothing measures recall yet.** The system design's demo for this phase is
 *"top-3 recall on your allergen questions, measured, with numbers"*. That needs
 the golden set (#23) pointed at this index and is retrieval evaluation rather
-than index construction.
+than index construction — #50. It is also what fixes the one number #49 could
+not measure, the reranker score below which a result is reported as low
+confidence; see [retrieval.md](retrieval.md) §5.
