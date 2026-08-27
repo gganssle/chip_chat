@@ -47,7 +47,12 @@ from chip_chat.agent.loop import Conversation, TurnResult, run_turn
 from chip_chat.agent.model import ChatModel
 from chip_chat.agent.orders import OrderDesk
 from chip_chat.api.guard import SpendGuard, TurnBudget
-from chip_chat.api.outcome import Stop
+from chip_chat.api.moderation import (
+    BLOCKED_MESSAGE,
+    ModerationUnavailableError,
+    TextModerator,
+)
+from chip_chat.api.outcome import Stop, StopReason
 
 __all__ = ["FundedTurn", "SpendGate", "UnfundedTurnError"]
 
@@ -160,7 +165,7 @@ class SpendGate:
     still start, serve ``/healthz`` and say what is wrong.
     """
 
-    __slots__ = ("_desk", "_guard", "_lanes", "_model", "_model_factory")
+    __slots__ = ("_desk", "_guard", "_lanes", "_model", "_model_factory", "_moderator")
 
     def __init__(
         self,
@@ -169,6 +174,7 @@ class SpendGate:
         *,
         desk: OrderDesk | None = None,
         lanes: Lanes = NO_LANES,
+        moderator: TextModerator | None = None,
     ) -> None:
         """Assemble the gate.
 
@@ -181,12 +187,19 @@ class SpendGate:
                 nothing wired, which withdraws ``ask_account_question``,
                 ``get_recommendations`` and ``match_meal_from_photo`` -- the
                 honest state for a deployment with none of them behind it.
+            moderator: Screens inbound text (#79). Defaults to one over
+                :class:`~chip_chat.api.moderation.LocalTextAnalyzer`, so a
+                deployment with no Content Safety endpoint still screens rather
+                than silently not screening. **There is no accessor for it**,
+                for the same reason there is none for the model: a second route
+                to the moderator is a second route around it.
         """
         self._guard = guard
         self._model_factory = model_factory
         self._desk = desk if desk is not None else OrderDesk()
         self._lanes = lanes
         self._model: ChatModel | None = None
+        self._moderator = moderator if moderator is not None else TextModerator()
 
     @property
     def guard(self) -> SpendGuard:
@@ -209,21 +222,37 @@ class SpendGate:
 
     @contextmanager
     def turn(
-        self, *, session_id: str, source_address: str
+        self, *, session_id: str, source_address: str, message: str = ""
     ) -> Iterator["FundedTurn | Stop"]:
-        """Check the budget for one turn and, if it holds, open the door.
+        """Check the budget and the content, and only then open the door.
 
-        Must be called inside a ``chat.turn``: ``guard.budget_check`` is a child
-        of it.
+        Must be called inside a ``chat.turn``: ``guard.budget_check`` and
+        ``guard.content_safety`` are both children of it.
+
+        **The order here is the enforcement.** The budget is checked, then the
+        text is moderated, and only after both does a :class:`FundedTurn` come
+        into existence. A ``Stop`` has no ``run``, so neither refused branch can
+        call a model -- not because a later reader remembered to return early,
+        but because there is nothing on the object to call. That is what makes
+        #79's *nothing unmoderated reaches a model* a property of the type
+        rather than of this function's control flow.
+
+        Moderation runs second, after the budget. A turn refused for spend
+        should not pay for a moderation call, and the ceiling is the cheaper
+        check.
 
         Args:
             session_id: The conversation this turn belongs to.
             source_address: The client address the rate limit counts against.
+            message: The visitor's inbound text, screened before the model sees
+                it. Empty screens nothing, which is right for the callers that
+                open a turn around something other than a typed message -- the
+                photo route opens one around an upload it has already moderated
+                as an image.
 
         Yields:
             A :class:`FundedTurn` when the turn may proceed, or the
-            :class:`~chip_chat.api.outcome.Stop` that refused it. A ``Stop`` has
-            no ``run``, so the refused branch cannot accidentally call a model.
+            :class:`~chip_chat.api.outcome.Stop` that refused it.
         """
         with self._guard.turn(
             session_id=session_id, source_address=source_address
@@ -234,7 +263,45 @@ class SpendGate:
                 assert budget.stop is not None
                 yield budget.stop
                 return
+            refusal = self._screen(message, budget)
+            if refusal is not None:
+                yield refusal
+                return
             yield FundedTurn(budget, self._model_for_this_turn(), self._desk, self._lanes)
+
+    def _screen(self, message: str, budget: TurnBudget) -> Stop | None:
+        """Moderate ``message``, or return the ``Stop`` that refuses the turn.
+
+        Two outcomes that look alike and are not. A message Content Safety
+        *flags* is declined with :data:`~chip_chat.api.moderation.BLOCKED_MESSAGE`
+        and the conversation continues. A moderator that could not be *reached*
+        also refuses -- fails closed -- because the alternative on an
+        unauthenticated public endpoint is that a Content Safety outage silently
+        becomes no moderation at all.
+
+        The outage path is caught here rather than left to the request handler:
+        ``app.py`` wraps the turn in a broad ``except Exception`` that would
+        swallow a ``ModerationUnavailableError`` and serve an apology, which
+        looks exactly like failing closed and is not -- the check would simply
+        be skipped again on the retry.
+        """
+        if not message:
+            return None
+        try:
+            verdict = self._moderator.screen(message, subject="user_prompt")
+        except ModerationUnavailableError:
+            return Stop(
+                reason=StopReason.MODERATION_UNAVAILABLE,
+                usage=budget.usage,
+                message=BLOCKED_MESSAGE,
+            )
+        if verdict.blocked:
+            return Stop(
+                reason=StopReason.CONTENT_BLOCKED,
+                usage=budget.usage,
+                message=BLOCKED_MESSAGE,
+            )
+        return None
 
     def _model_for_this_turn(self) -> ChatModel:
         """Build the model on first use and keep it. Private, and stays private.

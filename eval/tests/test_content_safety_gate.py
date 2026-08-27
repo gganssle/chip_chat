@@ -1,32 +1,45 @@
-"""Issue #79's four acceptance criteria, as tests, before the code exists.
+"""Issue #79's acceptance criteria, as tests. Written before the code existed.
 
-This module is unusual in two ways and both are deliberate.
-
-**It is a specification rather than a regression suite.** #79 asks for Content
-Safety moderation and prompt shields on *inbound text*, ahead of the agent,
-emitting ``guard.content_safety`` beside the image check that already exists.
-None of that is built: ``api/src/chip_chat/api/guard.py`` is the **spend** guard,
-the only Content Safety client in the tree is
-:class:`chip_chat.vision.moderation.AzureImageAnalyzer` on the image path, and
-``api/tests/test_turn_trace.py`` says in as many words that a text-only turn
-therefore does not emit the span and is not missing it. So these tests fail
-today, on purpose, and they are marked :func:`pytest.mark.xfail` with
-``strict=True`` -- which means the build **fails the day they start passing**.
-That is the point. A gap that nobody fails on is a gap that stays, and the
-person who implements #79 should be made to come here and delete a marker rather
-than being free to leave four criteria half-met.
-
-**It lives in ``eval/`` and tests ``api/``.** The red team does not own
+This module began as a specification. The red team that wrote it does not own
 ``api/src``, and the correct output of a red team is findings rather than
-unilateral patches. What it can own is the statement of what *would* count as
-the criterion being met, written precisely enough to be run. Each test below
-names, in its docstring, the exact change that would make it pass.
+unilateral patches -- so what it produced instead was the statement of what
+*would* count as each criterion being met, written precisely enough to run, with
+every test marked :func:`pytest.mark.xfail` at ``strict=True`` so that the build
+would fail the day they started passing. A gap nobody fails on is a gap that
+stays.
 
-The one criterion that is **partly met today** is the third, and it is tested in
-two halves for that reason: corpus text genuinely never reaches a system message,
-which is real and worth locking down, and it is genuinely not delimited, which is
-what #79 asks for and what the system prompt is currently asked to hold on its
-own.
+**They now pass, and the markers are gone.** #79 is implemented:
+
+- ``chip_chat.api.moderation`` screens inbound text and emits
+  ``guard.content_safety``, and is held **privately** by
+  :class:`~chip_chat.api.turns.SpendGate`. That is what makes the ordering
+  structural rather than a convention: the only object that can call a model is
+  a :class:`~chip_chat.api.turns.FundedTurn`, and the only way to get one is
+  through a path that has already moderated.
+- Prompt-shield detections land on
+  :data:`~chip_chat.otel.attributes.ChipChatAttributes.SAFETY_SHIELD_DETECTIONS`,
+  set on every screened turn including when empty -- an absent attribute and a
+  shield that found nothing are different facts, and on an unauthenticated
+  public endpoint the span is the only record either way.
+- Retrieved passages reach the model inside a per-turn nonce envelope
+  (:func:`chip_chat.agent.loop._delimited`), which a planted document cannot
+  close because the nonce did not exist when the corpus was written.
+- A moderation outage refuses the turn rather than bypassing the check, caught
+  in ``turns.py`` rather than left to ``app.py``'s broad ``except Exception``,
+  which would have swallowed it and served an apology that looks identical to
+  failing closed and is not.
+
+The tests are kept exactly as the red team wrote them, including the docstrings
+that name the change each one wanted. They are a regression suite now, and the
+reasoning is worth more than a rewrite would be.
+
+What is **not** claimed: the default analyzer is
+:class:`~chip_chat.api.moderation.LocalTextAnalyzer`, which recognises published
+jailbreak shapes and flags no Content Safety categories at all. It exists so the
+plumbing is exercised free in CI and so a deployment that lost its endpoint
+degrades to a weak check rather than to none.
+:class:`~chip_chat.api.moderation.AzureTextAnalyzer` is the real one and needs an
+endpoint; see ``docs/content-safety.md``.
 """
 
 import json
@@ -81,17 +94,6 @@ def client(model: ScriptedModel) -> Iterator[TestClient]:
         yield running
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#79 is unimplemented: there is no text moderation in the request path, "
-        "so no guard.content_safety span is opened for a text turn. THE CHANGE: "
-        "in chip_chat.api.turns, hold the moderator the way SpendGate holds the "
-        "model -- privately, handed out only inside a moderated turn -- so that "
-        "the check cannot be reordered after the model by a later route, and "
-        "open otel.spans.content_safety(subject='text') around it."
-    ),
-)
 def test_every_inbound_message_is_moderated_before_the_agent(
     client: TestClient, spans: SpanRecorder
 ) -> None:
@@ -117,18 +119,6 @@ def test_every_inbound_message_is_moderated_before_the_agent(
     assert guard.end_time <= completion.start_time
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#79 is unimplemented: there is no prompt-shield call and no attribute "
-        "for a detection. THE CHANGE: add a shield attribute to "
-        "chip_chat.otel.attributes beside CONTENT_SAFETY_CATEGORIES -- something "
-        "like chip_chat.content_safety.shield_detections, a list of strings -- "
-        "and set it from the Content Safety text:shieldPrompt response, both for "
-        "the visitor's message (userPrompt) and for retrieved passages "
-        "(documents), which is the cross-prompt half the API supports."
-    ),
-)
 def test_a_prompt_shield_detection_is_visible_in_the_trace(
     client: TestClient, spans: SpanRecorder
 ) -> None:
@@ -161,20 +151,6 @@ def test_a_prompt_shield_detection_is_visible_in_the_trace(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#79 is unimplemented: a tool result is inserted as bare "
-        "json.dumps(result) at chip_chat.agent.loop._as_json, with no envelope. "
-        "THE CHANGE: wrap retrieved passage text in a delimiter the passage "
-        "cannot forge -- a per-turn random tag, e.g. "
-        '<retrieved id="..." nonce="a7f3...">...</retrieved> with the nonce '
-        "minted per turn and any occurrence of it stripped from the passage "
-        "first. A fixed tag is forgeable by a document that contains the closing "
-        "tag; a per-turn nonce is not, which is what makes the separation "
-        "STRUCTURAL rather than a convention the model is asked to respect."
-    ),
-)
 def test_retrieved_content_is_delimited_by_something_it_cannot_forge() -> None:
     """#79 criterion three, the half that is not met.
 
@@ -234,19 +210,6 @@ def test_retrieved_content_never_reaches_a_system_message() -> None:
     assert INJECTED_PASSAGE not in SYSTEM_PROMPT
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#79 is unimplemented: there is no text moderation to fail. THE CHANGE: "
-        "follow chip_chat.vision.moderation exactly -- a transport failure and a "
-        "PARTIAL answer both become ModerationUnavailableError, the turn is "
-        "refused with the neutral copy in chip_chat.api.outcome, and no model is "
-        "called. Note that api/app.py's broad `except Exception` around the turn "
-        "would SWALLOW a naively-placed moderation call and serve an apology "
-        "having already spent nothing -- which looks identical to failing closed "
-        "and is not, because the check would be skipped on the retry."
-    ),
-)
 def test_a_moderation_outage_disables_the_turn_rather_than_bypassing_it(
     spans: SpanRecorder,
 ) -> None:

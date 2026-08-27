@@ -17,11 +17,18 @@ The models are doubles, and only the models. Every span in these recordings was
 opened by production code.
 
 **On ``guard.content_safety``.** RFC-001 section 09 puts it under ``chat.turn``,
-and ``docs/local-tracing.md`` says what it is: *image moderation, before
-inference*. A text-only turn therefore does not emit it and is not missing it.
-Inbound text screening and prompt shields are Phase 8's hardening work
-(``docs/system-design.md``), and a span emitted here to make the tree look
-complete would be a trace claiming a check that never ran.
+and every turn now emits it -- text turns included. That is new. This paragraph
+used to say the opposite: that the span meant *image moderation, before
+inference*, so a text-only turn did not emit it and was not missing it, and that
+emitting one to make the tree look complete would be a trace claiming a check
+that never ran.
+
+That reasoning was right, and issue #79 removed its premise rather than
+contradicting it. Inbound text is now screened by
+:mod:`chip_chat.api.moderation` before the model, so the span here is not
+decoration -- there is a check behind it. The trees below are asserted in full,
+which means a future change that quietly stops moderating text fails these
+tests rather than passing them more quietly.
 """
 
 import json
@@ -120,6 +127,7 @@ def test_a_full_turn_renders_as_the_tree_the_rfc_draws(limits: SpendLimits) -> N
     assert spans.tree_text() == (
         "chat.turn\n"
         "  guard.budget_check\n"
+        "  guard.content_safety\n"
         "  agent.step\n"
         "    llm.completion\n"
         "    tool.search_menu_knowledge\n"
@@ -264,6 +272,7 @@ def test_a_photo_turn_holds_image_description_and_skus_in_one_trace(
     assert spans.tree_text() == (
         "chat.turn\n"
         "  guard.budget_check\n"
+        "  guard.content_safety\n"
         "  agent.step\n"
         "    llm.completion\n"
         "    tool.match_meal_from_photo\n"
@@ -398,6 +407,7 @@ def test_a_real_turn_reaches_both_backends_identically(limits: SpendLimits) -> N
         [
             "chat.turn",
             "guard.budget_check",
+            "guard.content_safety",
             "agent.step",
             "llm.completion",
             "tool.search_menu_knowledge",
@@ -481,6 +491,7 @@ def test_reorder_my_usual_with_extra_guac(limits: SpendLimits) -> None:
     assert drafting == (
         "chat.turn\n"
         "  guard.budget_check\n"
+        "  guard.content_safety\n"
         "  agent.step\n"
         "    llm.completion\n"
         "    tool.get_usual_order\n"
@@ -494,6 +505,7 @@ def test_reorder_my_usual_with_extra_guac(limits: SpendLimits) -> None:
     assert spans.tree_text() == (
         "chat.turn\n"
         "  guard.budget_check\n"
+        "  guard.content_safety\n"
         "  agent.step\n"
         "    llm.completion\n"
         "    tool.place_order\n"

@@ -21,9 +21,10 @@ part designed to be thrown away.
 """
 
 import json
+import secrets
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final
 
 from chip_chat.agent.hardcoded import ACCOUNT, MENU, SIMULATION_NOTICE, STORE
 from chip_chat.agent.lanes import NO_LANES, Lanes
@@ -474,4 +475,61 @@ def _card_from(
 
 
 def _as_json(value: object) -> str:
-    return json.dumps(value, default=str, sort_keys=True)
+    return json.dumps(_delimited(value), default=str, sort_keys=True)
+
+
+_PASSAGE_FIELD: Final = "passages"
+_PASSAGE_TEXT: Final = "text"
+
+
+def _delimited(value: object) -> object:
+    """Return ``value`` with every retrieved passage wrapped in an envelope.
+
+    Issue #79 asks for the instructions-are-data rule to be enforced
+    *structurally* -- "clear delimiting of retrieved content" -- rather than by
+    asking the system prompt to hold the line. A tool result used to reach the
+    model as bare ``json.dumps``, so a corpus document reading *IGNORE ALL
+    PREVIOUS INSTRUCTIONS* arrived in the same undifferentiated soup as the
+    instructions it was addressing.
+
+    The envelope is per-call rather than fixed, and that is the whole point. A
+    constant ``</document>`` is forged by a document containing ``</document>``,
+    and an attacker who can influence the corpus -- which PRD S2 assumes -- can
+    put anything in a document. A nonce minted here is not in the corpus when
+    the corpus is written, so there is nothing for a planted passage to close.
+
+    This narrows what an injection can do; it does not stop one. A passage that
+    corrupts an *answer* still corrupts it, which is the residual risk #81
+    measures and `docs/decisions/corpus-injection-residual.md` accepts
+    deliberately. What it removes is the ambiguity about which bytes were
+    retrieved.
+    """
+    if not isinstance(value, Mapping):
+        return value
+    passages = value.get(_PASSAGE_FIELD)
+    if not isinstance(passages, list):
+        return value
+    nonce = secrets.token_hex(8)
+    wrapped = [_wrap(passage, nonce) for passage in passages]
+    return {**value, _PASSAGE_FIELD: wrapped}
+
+
+def _wrap(passage: object, nonce: str) -> object:
+    """Return one passage with its text between tags it cannot close."""
+    if not isinstance(passage, Mapping):
+        return passage
+    text = passage.get(_PASSAGE_TEXT)
+    if not isinstance(text, str):
+        return passage
+    # Stripped before wrapping rather than escaped after. The passage cannot
+    # know this turn's nonce, so this removes nothing a real document contains
+    # -- it is here so that the invariant is a property of the code rather than
+    # an argument about probability.
+    body = text.replace(nonce, "")
+    identifier = passage.get("id", "")
+    return {
+        **passage,
+        _PASSAGE_TEXT: (
+            f'<retrieved id="{identifier}" nonce="{nonce}">{body}</retrieved:{nonce}>'
+        ),
+    }

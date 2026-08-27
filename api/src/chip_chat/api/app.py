@@ -1386,7 +1386,15 @@ def _run_turn(
             demo_id=admitted.demo_id if admitted is not None else None,
             prompt_version=PROMPT_VERSION,
         ) as turn,
-        service.gate.turn(session_id=session_id, source_address=source_address) as funded,
+        service.gate.turn(
+            session_id=session_id,
+            source_address=source_address,
+            # #79: the text goes to the gate, which moderates it before a
+            # FundedTurn exists. Passing it here rather than screening in
+            # this function is what stops a later route from reordering the
+            # check -- there is no route to a model that skips the gate.
+            message=message,
+        ) as funded,
     ):
         if isinstance(funded, Stop):
             # A Stop has no `run`. The refused branch could not call a model

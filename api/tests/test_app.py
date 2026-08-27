@@ -198,7 +198,8 @@ def test_a_turn_emits_one_readable_span_tree(client: TestClient) -> None:
     with span_recorder("api") as spans:
         say(client, "hello")
     assert spans.tree_text() == (
-        "chat.turn\n  guard.budget_check\n  agent.step\n    llm.completion"
+        "chat.turn\n  guard.budget_check\n  guard.content_safety\n"
+        "  agent.step\n    llm.completion"
         "\n  render.response"
     )
 

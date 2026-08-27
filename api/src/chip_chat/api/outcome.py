@@ -54,6 +54,24 @@ class StopReason(StrEnum):
     SESSION_TOKEN_CAP = "session_token_cap"
     SOURCE_RATE_LIMIT = "source_rate_limit"
 
+    CONTENT_BLOCKED = "content_blocked"
+    """Content Safety flagged the inbound message (#79).
+
+    The conversation is not over: the visitor gets
+    :data:`~chip_chat.api.moderation.BLOCKED_MESSAGE` and may say something
+    else. This is the one stop reason that is not about a ceiling.
+    """
+
+    MODERATION_UNAVAILABLE = "moderation_unavailable"
+    """Content Safety could not be reached, so the turn failed closed (#79).
+
+    A separate token from :attr:`CONTENT_BLOCKED` on purpose. The visitor sees
+    the same neutral sentence either way, but an operator reading traces has to
+    be able to tell "somebody typed something we declined" from "our moderation
+    has been down for an hour and every turn is being refused" -- and those two
+    produce identical visitor-facing behaviour by design.
+    """
+
     UPLOAD_RATE_LIMIT = "upload_rate_limit"
     """Too many uploads, from this session or from this address.
 
