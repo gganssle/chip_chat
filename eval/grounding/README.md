@@ -41,15 +41,29 @@ blocking, and a blocking gate rendered as 99.2% is a gate somebody argues about
 at exactly the wrong moment. `scoring.py` keeps counts and rates in different
 columns for the same reason `eval/golden` does.
 
-## The five findings, and who owns each
+## The six findings, and who owns each
 
 | Finding | Kind | Who fixes it |
 | --- | --- | --- |
 | `cited` | rule | the response format, and whatever built it |
+| `adjacent` | rule | the corpus, and the renderer |
 | `minted` | rule | the model, and D9 already stopped it reaching a visitor |
 | `supported` | rule | retrieval, or the corpus |
 | `grounded` | judgement | the prompt |
 | `refusal` | judgement, both ways | the prompt, in opposite directions |
+
+`adjacent` is PRD K5's stricter half, and it is the half of the
+citation-presentation decision that a span can settle. That decision says an
+allergen answer's citation renders *beside* the claim with `harvested_at` visible
+without interaction, and that the eval asserts the field is **present and
+rendered, not merely available**. Rendering is the renderer's and lives in
+`web/`; what lives here is the precondition without which the renderer has
+nothing to draw. The rule turns on one distinction: a passage carrying a
+`source_url` came out of the harvested corpus, where #48 makes a url and a date
+arrive together or not at all, so one without a `harvested_at` is a **failure** —
+it is exactly the undated allergen claim K5 exists to prevent. A passage carrying
+neither did not come from that corpus, and scoring it would be scoring the
+week-one slice's hardcoded three-item menu, so that one is `unscored`.
 
 `supported` is the one worth explaining, because it is not in the ticket by that
 name. A turn that made a food claim and whose `retriever.search` spans returned
@@ -181,6 +195,20 @@ of a backend — a trace gives the response and the `retriever.search` documents
 a judge supplies what the turn should have done — and calls the same function.
 The findings, the gates and the per-category arithmetic are then the same code,
 which is the only way the live number and the dataset number mean the same thing.
+
+That runner now exists. `chip_chat.eval.online` reads a production span tree into
+a turn carrying the same `Evidence` this module reads, hands it the **same**
+`ModelJudge` with the same two prompts, and fires on what comes back. Two of its
+monitors are this eval's findings against live traffic: the deterministic half of
+the ungrounded-claim monitor is `supported` and `cited` by another name, and the
+refusal monitor is over-refusal, computed from the same two facts — a reply that
+declines on a turn holding passages.
+
+What does **not** cross over is the register. There is no `answer_owed` on a
+stranger's question, so `refusal_owed` cannot be read off a live turn and
+`scoring.score` is never called on one: a live turn produces alerts, and a
+dataset row produces a rate. That is the honest division, and #77 is what moves a
+turn from the first column to the second.
 
 ## What a ceiling run is worth
 

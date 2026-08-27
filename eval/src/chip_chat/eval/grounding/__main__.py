@@ -28,17 +28,29 @@ passages belong to the answer.
 Without either flag it runs the rows against a real deployment and writes the
 baseline. That spends money: at least one model call per row.
 
+``--judge`` puts a model behind :class:`~chip_chat.eval.grounding.run.Judge`, and
+is what turns the two judged findings from ``unscored`` into numbers. It is
+orthogonal to how the turns were produced -- a ceiling run judged is a real
+groundedness measurement of prose a scripted oracle wrote, which is worth exactly
+what :mod:`chip_chat.eval.grounding.testing` says it is and no more, so the
+combination is allowed and the report says which source it scored. It costs two
+model calls per *scoreable* row rather than per row, and the run prints what it
+spent, because #76 makes judge tokens a line in the daily budget rather than a
+cost nobody attributed.
+
 .. code-block:: console
 
     $ python -m chip_chat.eval.grounding --check
     $ python -m chip_chat.eval.grounding --ceiling --out eval/grounding/BASELINE.md
     $ export CHIP_CHAT_FOUNDRY_ENDPOINT=... CHIP_CHAT_FOUNDRY_API_KEY=...
-    $ python -m chip_chat.eval.grounding --out eval/grounding/BASELINE.md
+    $ python -m chip_chat.eval.grounding --judge --out eval/grounding/BASELINE.md
+    $ python -m chip_chat.eval.grounding --judge gpt-4.1-mini
 """
 
 import argparse
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from chip_chat.agent.foundry import FoundryConfig, FoundryConfigError
@@ -48,6 +60,7 @@ from chip_chat.eval.golden.cases import DEFAULT_MANIFEST as GOLDEN_MANIFEST
 from chip_chat.eval.golden.cases import CaseError, GoldenSet
 from chip_chat.eval.golden.run import DEFAULT_SESSION
 from chip_chat.eval.grounding.coverage import RATE_NEEDS, coverage
+from chip_chat.eval.grounding.judge import ModelJudge
 from chip_chat.eval.grounding.questions import Question, QuestionError, questions
 from chip_chat.eval.grounding.report import Report, build_report, render
 from chip_chat.eval.grounding.run import run_turns
@@ -104,12 +117,20 @@ def main(argv: list[str] | None = None) -> int:
         source = adapter.name
         caveat = ""
 
+    try:
+        judge = _judge(args.judge)
+    except FoundryConfigError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
     report = build_report(
         rows,
         turns,
         source=source,
         dataset=dataset.name,
         version=dataset.version,
+        judge=judge,
+        judged_by="" if judge is None else judge.name,
         caveat=caveat,
     )
     document = render(report)
@@ -119,7 +140,40 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote {args.out}")
     else:
         print(document)
+    if judge is not None:
+        # Printed rather than only written into the document, because the person
+        # who ran this is the person deciding whether to run it again. #76 makes
+        # the same number a budget line; here it is a receipt.
+        print(f"judge spend: {judge.spend.summary()}")
     return _exit_status(report)
+
+
+def _judge(deployment: str | None) -> ModelJudge | None:
+    """The judge this run scores with, or ``None`` for the unjudged default.
+
+    ``--judge`` with no value judges on the configured chat deployment;
+    ``--judge <name>`` judges on another. A judge on a *different* deployment
+    from the one that answered is the arrangement worth reaching for -- a model
+    grading its own prose is the one bias in this design nobody can argue away
+    -- but it is not enforced here, because on a subscription with quota for two
+    deployments the alternative to self-judging is often not judging.
+
+    Args:
+        deployment: ``None`` for no judge, ``""`` for the configured chat
+            deployment, or a deployment name.
+
+    Returns:
+        The judge, or ``None``.
+
+    Raises:
+        FoundryConfigError: If the Foundry configuration is absent.
+    """
+    if deployment is None:
+        return None
+    config = FoundryConfig.from_env()
+    if deployment:
+        config = replace(config, chat_deployment=deployment)
+    return ModelJudge(AzureChatModel(config))
 
 
 def _check(dataset: Dataset, rows: Sequence[Question]) -> int:
@@ -194,6 +248,17 @@ def _parser() -> argparse.ArgumentParser:
         "--ceiling",
         action="store_true",
         help="run against the slice with routing handed to it -- free, and not a score",
+    )
+    parser.add_argument(
+        "--judge",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="DEPLOYMENT",
+        help=(
+            "score the two judged findings with a model; bare uses the "
+            "configured chat deployment, or name another. Spends tokens."
+        ),
     )
     parser.add_argument(
         "--only",

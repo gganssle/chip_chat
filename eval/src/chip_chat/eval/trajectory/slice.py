@@ -28,6 +28,7 @@ from dataclasses import dataclass
 
 from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.model import ChatModel
+from chip_chat.agent.prompt import SystemPrompt
 from chip_chat.eval.dataset.entries import GOLDEN_PREFIX
 from chip_chat.eval.golden.cases import GoldenCase, GoldenSet
 from chip_chat.eval.golden.run import DEFAULT_SESSION
@@ -72,12 +73,17 @@ class SliceTraceSource:
             account and personalization lanes withdraw two more tools the same
             way.
         session_prefix: What each row's session id is built from.
+        prompt: The system prompt revision to run under, passed straight
+            through to :class:`~chip_chat.eval.golden.slice.SliceDeployment`.
+            ``None`` is the revision the agent ships with. This is what an
+            experiment varies; see :mod:`chip_chat.eval.experiment`.
     """
 
     golden: GoldenSet
     model: ChatModel
     lanes: Lanes = NO_LANES
     session_prefix: str = DEFAULT_SESSION
+    prompt: SystemPrompt | None = None
 
     @property
     def name(self) -> str:
@@ -101,7 +107,10 @@ class SliceTraceSource:
                 error=f"no case in {self.golden.source} for this row",
             )
         deployment = SliceDeployment(
-            self.model, lanes=self.lanes, session_prefix=self.session_prefix
+            self.model,
+            lanes=self.lanes,
+            session_prefix=self.session_prefix,
+            prompt=self.prompt,
         )
         with span_recorder(RECORDER_COMPONENT) as recorder:
             observation = deployment.turn(case)
