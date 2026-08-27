@@ -64,13 +64,13 @@ CHIP_CHAT.ACCOUNTS           the write path, as four procedures (#46)
   live_order_seq · live_ledger_seq   the ord-9000001 and loy-9000001 bands
 ```
 
-Nine of the seventeen carry `demo_id`. `personas` and `item_affinity` are the
+Ten of the eighteen carry `demo_id`. `personas` and `item_affinity` are the
 two tables in ACCOUNTS and MARTS that do not, and both are exempted by name in
 `sql/09_audit.sql` with the reason beside the exemption. The six catalogue
 tables are exempt wholesale: the catalogue is the real half and has no visitor
 in it at all.
 
-Three of the seventeen are not RFC-001 §04's and arrived with [#46], which could
+Three of the eighteen are not RFC-001 §04's and arrived with [#46], which could
 not be written without them: `rewards` and `rewards_terms` in CATALOGUE, because
 `redeem_points` validates a redemption against a published catalogue and
 `place_order` accrues at a published rate, and `action_receipts` in ACCOUNTS,

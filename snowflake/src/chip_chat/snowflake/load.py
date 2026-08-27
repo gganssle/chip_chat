@@ -107,8 +107,16 @@ def sources(directories: list[Path]) -> list[tuple[schema.Table, Path]]:
     does not hold files for all of them: `catalog/tests/fixtures/catalog`
     carries the four catalogue tables and none of the account ones.
 
+    The file is :meth:`schema.Table.source_name`, not the table name, and the
+    two differ for exactly one table. ``demo_visitor_baseline`` is #47's record
+    of what the generator produced for the five columns a live demo can move,
+    so it is filled from ``demo_visitors.jsonl`` -- the same file, in the same
+    run, as the table it is the baseline for. A baseline loaded from anywhere
+    else would be a second generation, and restoring a visitor to it would put
+    back a state that never existed.
+
     Args:
-        directories: Where to look for ``<table>.jsonl``.
+        directories: Where to look for ``<source>.jsonl``.
 
     Returns:
         One pair per table that has a file, ordered so that a table is loaded
@@ -126,13 +134,13 @@ def sources(directories: list[Path]) -> list[tuple[schema.Table, Path]]:
     found: list[tuple[schema.Table, Path]] = []
     for table in schema.TABLES:
         for directory in directories:
-            path = directory / f"{table.name}.jsonl"
+            path = directory / f"{table.source_name()}.jsonl"
             if path.is_file():
                 found.append((table, path))
                 break
     if not found:
         raise FileNotFoundError(
-            f"no <table>.jsonl for any table of {account.DATABASE} under "
+            f"no <source>.jsonl for any table of {account.DATABASE} under "
             f"{', '.join(str(directory) for directory in directories)}"
         )
     return found
