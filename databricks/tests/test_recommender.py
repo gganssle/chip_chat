@@ -1162,3 +1162,28 @@ def test_the_notebook_asks_the_registry_rather_than_assuming() -> None:
     assert source.index("has_champion = False") < source.index(
         "recommender.takes_the_alias("
     )
+
+
+def test_the_verify_job_asks_whether_a_better_version_exists() -> None:
+    """The failure worth looking for, once the bootstrap exists.
+
+    The verify job used to assert flatly that the champion beat the popularity
+    baseline, and the first live run made that false for a legitimate reason:
+    the first version takes the alias with nothing to beat. Asserting it anyway
+    would have left the job red whenever the honest answer was "there was
+    nothing to compare against".
+
+    So the check became the thing no rule permits -- a champion that did not
+    beat the baseline while another version in the registry did, which is a
+    worse model serving than one already on the shelf. A champion that did not
+    beat it and neither did anything else is printed, not failed, the way a
+    PAUSED schedule is.
+    """
+    source = code(VERIFY)
+    assert "search_model_versions" in source
+    assert "beat or not contenders" in source
+    assert "recommender.takes_the_alias(" not in source, (
+        "the verify job checks the outcome against the registry, not the rule "
+        "against itself -- calling the promotion function here would assert "
+        "that the code agrees with the code"
+    )
