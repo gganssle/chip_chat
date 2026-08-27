@@ -941,8 +941,14 @@ deploy-check: ## Wait until the NEWEST revision is the one actually serving
 	done; \
 	echo "  not serving after 400s -- see docs/deployment.md section 3.3"; exit 1
 
+# `--all` is the whole point of this target and it was missing. Revision mode is
+# Single, so the previous revision is deactivated the moment a new one is
+# created -- and without `--all` the CLI lists only active revisions, which in
+# Single mode is exactly one row: the one you are trying to roll back FROM.
+# `make rollback` tells you to run this to find the image to roll back TO, and
+# until 27 August 2026 it could not tell you. See docs/runbook.md section 4.
 revisions: ## List revisions newest first, with the image each one references
-	@az containerapp revision list -n $(APP) -g $(RG) \
+	@az containerapp revision list -n $(APP) -g $(RG) --all \
 		--query "reverse(sort_by([].{created:properties.createdTime,name:name,active:properties.active,replicas:properties.replicas,image:properties.template.containers[0].image}, &created))" \
 		-o table
 

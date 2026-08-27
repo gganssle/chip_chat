@@ -241,3 +241,24 @@ Phase 9. [`docs/service-inventory.md`](../service-inventory.md) §2.1 and §5, a
 and 5 of *What changed versus the plan*. [`docs/local-tracing.md`](../local-tracing.md)
 for the local half. [`docs/decisions/foundry-agent-shape.md`](foundry-agent-shape.md)
 for why the agent tier costs a version.
+
+## What was confirmed on 25 August 2026, and what was not
+
+Kept from the parallel record written while this one was being written, because the unconfirmed half is the half that goes missing when two documents are merged and somebody keeps the tidier one.
+
+
+**Confirmed 2026-08-25** (evidence in `docs/service-inventory.md`): the AX tier
+structure and quotas above; that Phoenix self-hosts free with no feature gating;
+that both speak OpenInference, so the same instrumentation targets both
+unchanged.
+
+**Not confirmed, and the ticket's own wording asked for it:** whether the AX
+Azure Marketplace listing is genuinely *transactable against this subscription*.
+It has not been tested because AX Free needs no transaction, and the session
+authority for this project excludes Marketplace purchases. If the demo ever needs
+Pro, that question is unanswered.
+
+**Not confirmed either:** whether Foundry's own tracing export and these
+OpenInference spans coexist cleanly or duplicate. The deployed app exports only
+to Application Insights, so the two have never run side by side.
+

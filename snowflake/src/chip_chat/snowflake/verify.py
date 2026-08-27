@@ -747,13 +747,25 @@ def _check_service_users() -> list[Check]:
 def _percentages(value: Any) -> tuple[int, ...]:
     """Return the whole numbers in a ``SHOW RESOURCE MONITORS`` threshold column.
 
-    Snowflake writes the trigger columns as ``50%,80%,100%``, an empty string
-    when there are none, and null when the monitor has none of that kind. All
-    three arrive here as a tuple of ints, so a monitor with no SUSPEND trigger
-    compares unequal to one that has the wrong SUSPEND trigger rather than
-    raising on the way to finding out.
+    Snowflake writes the trigger columns as a comma-separated list of
+    percentages, an empty string when there are none, and null when the monitor
+    has none of that kind. All three arrive here as a tuple of ints, so a
+    monitor with no SUSPEND trigger compares unequal to one that has the wrong
+    SUSPEND trigger rather than raising on the way to finding out.
+
+    **The list is sorted, and that is a fix rather than a tidy-up.** This
+    function used to return the percentages in the order Snowflake printed
+    them, on the assumption -- written into the old docstring as ``50%,80%,100%``
+    -- that the order would be ascending. It is not. On 2026-08-27 the live
+    account returned ``100%,50%,80%`` for ``CHIP_CHAT_SERVING_MONITOR``, which
+    is the same three triggers `05_resource_monitors.sql` asks for, and the
+    monitor check failed on it. A trigger set is a set: two monitors that
+    notify at the same three thresholds are the same guardrail whichever order
+    ``SHOW`` happens to list them in. A check that fails on a fact that is not
+    drift is worse than no check, because the next person reads ``100/101`` and
+    stops reading. See ``docs/cost.md`` section 14.
     """
-    return tuple(int(found) for found in re.findall(r"\d+", str(value or "")))
+    return tuple(sorted(int(found) for found in re.findall(r"\d+", str(value or ""))))
 
 
 def _monitor_rows() -> dict[str, dict[str, Any]]:
