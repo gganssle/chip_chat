@@ -12,15 +12,21 @@ Everything below is `infra/terraform/databricks_recommender.tf`,
 `databricks/src/chip_chat/databricks/recommender_model.py`. Nothing was made by
 hand in the workspace UI.
 
-> **Status.** The code, the declarations, the scoring rule, the promotion rule
-> and the Terraform are here and `make ci` is green over them — including the
-> scoring rule and the two hit rates, which are *run* rather than described.
-> The job has **not** been run against `dbw-chip-chat`: it needs a
-> `terraform apply`, a silver layer built by
-> [#34](https://github.com/gganssle/chip_chat/issues/34) and the gold marts
-> from [#36](https://github.com/gganssle/chip_chat/issues/36), none of which
-> has been run either. §7 says exactly what the live run has to show, and it is
-> a job you run rather than a screenshot you take. Tracked separately.
+> **Status.** Run. `chip-chat-recommender` fitted, evaluated, registered
+> **version 3** in Unity Catalog and moved `@champion` to it on 2026-08-27, then
+> batch-scored 160 recommendations for 138 visitors into
+> `gold_synthetic.recommendations`. §6 has the metrics, including the two that
+> tie and what that says about a ten-item catalogue. `make ci` is green over the
+> rest — including the scoring rule and the two hit rates, which are *run*
+> rather than described.
+>
+> Getting there took five attempts and each failure is recorded where it
+> belongs. Three were Unity Catalog privileges that no test could have
+> predicted, and `databricks_recommender.tf` now names all three and which
+> securable each is on. One was `vars()` on a `slots=True` dataclass, at the
+> registry step, after both hit-rate evaluations. The fifth was the promotion
+> rule having no answer for a first run, which is §6's "The first version has
+> nothing to beat" and is a design gap rather than a slip.
 
 ## 1. The shape
 
@@ -312,6 +318,21 @@ made the gate say something false about a model that genuinely tied. This way
 the metrics above stay on the record, the rule stays where it was, and the
 reason the first version is serving is written down rather than implied by a
 threshold somebody quietly moved.
+
+**`@champion` points at version 3.** Versions 1 and 2 are in the registry with
+their metrics attached and no alias, which is the registry doing what it is for:
+1 was the fit before the bootstrap rule existed, 2 was the run that had it and
+was refused `MANAGE` on the model. Version 3's metrics are identical to version
+1's to six places, over unchanged silver — which is `gold.AS_OF`'s argument
+holding one layer up. It scored **160 recommendations for 138 visitors**.
+
+**138 of 500, and that is the exclusion rule biting.** A visitor gets a row only
+where the model has a candidate they have *never ordered*; on a ten-item
+catalogue most of the population has tried most of the menu, so 362 visitors get
+nothing rather than a suggestion for something they buy weekly. §5 argues that
+absence is the honest output and the serving layer's input; this is the first
+measurement of how often it happens, and on a real menu it would be rare rather
+than usual.
 
 ### The model is fitted twice
 
