@@ -8,8 +8,9 @@ asks for exactly this and says why:
 > enough to debug. […] write down anything that surprised you, because that is
 > the deliverable that makes this issue worth doing early.
 
-Ten things surprised me. They are in section 3, and Phase 8 added an eleventh
-(§3.11) which cost a deploy and is the most expensive lesson in the file.
+Ten things surprised me. They are in section 3, and Phase 8 added two more —
+§3.11, which cost a deploy, and §3.12, which was silently costing every slow
+turn its answer.
 Sections 1 and 2 are the procedure, so that the next deploy is not also an
 investigation; sections 6 and 7 are the measurements and the runbook, added when
 the public demo landed.
@@ -261,6 +262,35 @@ statements enthusiastically. `.github/workflows/deploy.yml` now starts the image
 and curls `/healthz` before it is allowed anywhere near the Container App, so
 the next version of this is a red CI run rather than a restart loop in
 production.
+
+### 3.12 Ingress closes a response that has sent nothing for sixty seconds
+
+Every turn against the deployed app came back to `curl` as *"Error in the HTTP/2
+framing layer"* at **60.19 seconds**, ten times out of ten, to the second
+decimal place. A number that repeatable is a timeout somewhere, and the
+container's own access log settled where: the app had written `POST /api/chat
+HTTP/1.1 200 OK` — it had finished the turn and produced the answer — and the
+connection carrying it was already gone.
+
+Container Apps ingress closes a response that has sent no bytes for sixty
+seconds. A turn that takes longer than that produces the worst failure available
+to this system: the visitor is billed for tokens they never see, and the trace
+records a successful turn nobody read.
+
+That is not a hypothetical regime. §6.3 measures p95 turn latency at 62.7 s.
+
+**This is what makes the streamed shape of `POST /api/chat` load-bearing rather
+than cosmetic.** The frames go out as the turn produces them, and — since the
+turn produces nothing for its whole duration — a `{"type":"waiting"}` heartbeat
+goes out every ten seconds while it runs. The response is never idle, so ingress
+never closes it, and a ninety-second turn arrives. The widget asks for the
+streamed shape; the object shape is still there for a test or a `curl`, and is
+still subject to the sixty seconds.
+
+The first attempt at this was an `{"type":"open"}` frame sent before the turn
+started, on the theory that a response with its headers flushed is a response
+the ingress will wait for. It is not: the stream still died at 60.19 s with one
+frame delivered. The timeout is on *idleness*, not on the response having begun.
 
 ## 4. What it costs
 

@@ -346,6 +346,7 @@ async function send(text, extra) {
   if (text) bubble(text, 'you');
   const answer = bubble('\\u2026', 'them');
   let streamed = '';
+  let waited = 0;
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
@@ -371,6 +372,11 @@ async function send(text, extra) {
           bottom(answer);
         } else if (frame.type === 'card') {
           renderCard(frame.card, frame.receipt);
+        } else if (frame.type === 'waiting' && !streamed) {
+          // The server saying it is still there. Only meaningful before any
+          // prose has arrived; after that the text is its own evidence.
+          waited += 1;
+          answer.textContent = '\u2026'.repeat(Math.min(waited, 3));
         }
       }
     }

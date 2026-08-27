@@ -11,15 +11,19 @@ Every test here is one acceptance criterion, and each names it.
 """
 
 import json
+import threading
 from collections.abc import Iterator
 from typing import Any
+from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
 
 from chip_chat.agent.testing import ScriptedModel, answer, calls_tool
+from chip_chat.api import app as app_module
 from chip_chat.api.app import (
     SESSION_COOKIE,
+    ChatReply,
     Service,
     build_visitors,
     create_app,
@@ -391,6 +395,48 @@ def test_a_turn_can_be_read_as_frames(limits: SpendLimits) -> None:
     assert kinds[0] == "open"
     assert "card" in kinds
     assert kinds[-1] == "end"
+
+
+def test_a_slow_turn_keeps_the_response_alive(limits: SpendLimits) -> None:
+    """Container Apps ingress closes a response that has sent nothing for 60 s.
+
+    A turn against a rate-limited reasoning deployment routinely takes longer
+    than that, and the JSON shape of this route dies at exactly 60.19 s with the
+    answer already written -- the visitor is charged for a turn they never see.
+    So the streamed shape emits a ``waiting`` frame while the turn is still
+    running. Driven here with a heartbeat short enough to observe.
+    """
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow(*args: Any, **kwargs: Any) -> Any:
+        started.set()
+        release.wait(5)
+        return ChatReply(reply="Took a while.")
+
+    model = ScriptedModel(answer("unused"))
+    with (
+        mock.patch.object(app_module, "_run_turn", slow),
+        mock.patch.object(app_module, "_HEARTBEAT_SECONDS", 0.05),
+        TestClient(create_app(build(model, limits))) as visitor,
+    ):
+        with visitor.stream(
+            "POST",
+            "/api/chat",
+            json={"message": "something slow"},
+            headers={"Accept": "application/x-ndjson"},
+        ) as response:
+            lines = []
+            for line in response.iter_lines():
+                if line.strip():
+                    lines.append(json.loads(line))
+                if len(lines) >= 3:
+                    release.set()
+
+    assert started.is_set()
+    kinds = [frame["type"] for frame in lines]
+    assert kinds[0] == "open"
+    assert "waiting" in kinds
 
 
 def test_the_object_and_the_frames_are_the_same_turn(limits: SpendLimits) -> None:

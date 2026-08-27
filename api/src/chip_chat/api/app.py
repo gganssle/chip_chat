@@ -90,6 +90,8 @@ import logging
 import secrets
 import threading
 from collections.abc import Callable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -205,6 +207,12 @@ this one bounds the *request*, before anything is looked up."""
 
 _STREAM_MEDIA_TYPE = "application/x-ndjson"
 """One JSON object per line. See :func:`_frames`."""
+
+_HEARTBEAT_SECONDS = 10.0
+"""How long a streamed turn may go silent before it says it is still there.
+
+Well inside Container Apps ingress' sixty-second idle timeout, and far enough
+inside it that a slow network between the two does not eat the margin."""
 
 _ROBOTS = "User-agent: *\nDisallow: /\n"
 """The demo must never surface on the brand's own search terms."""
@@ -1238,7 +1246,24 @@ def _stream(
     body of :func:`_chunks` and nothing else.
     """
     yield _frame({"type": "open"})
-    payload = _run_turn(service, conversation, body, message, source_address, admitted)
+    # A heartbeat, and it is not cosmetic. Container Apps ingress closes a
+    # response that has sent nothing for sixty seconds, and a turn against a
+    # rate-limited reasoning deployment routinely takes longer than that: the
+    # JSON shape of this route dies at exactly 60.19 s with the answer already
+    # written, which is the worst possible failure -- the visitor is charged for
+    # a turn they never see. So the turn runs on its own thread and this
+    # generator keeps the response alive while it does. See
+    # docs/deployment.md 3.12.
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(
+            _run_turn, service, conversation, body, message, source_address, admitted
+        )
+        while True:
+            try:
+                payload = pending.result(timeout=_HEARTBEAT_SECONDS)
+                break
+            except FutureTimeout:
+                yield _frame({"type": "waiting"})
     yield from _frames(payload)
 
 
