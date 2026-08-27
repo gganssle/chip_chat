@@ -119,6 +119,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
+    if args.render is not None:
+        return _render(args)
+
     if args.compare_recorded:
         return _compare_recorded(args)
 
@@ -196,6 +199,24 @@ def _compare_arms(
     for line in comparison.regressions:
         print(f"regression: {line}", file=sys.stderr)
     return 1 if comparison.regressions and args.fail_on_regression else 0
+
+
+def _render(args: argparse.Namespace) -> int:
+    """Render a recorded result as Markdown, without running anything.
+
+    The recorded JSON is the artefact a comparison reads; this is the readable
+    form of the same numbers. Separating them is what lets a baseline be
+    re-rendered after the report's prose improves without re-running the model
+    calls that produced it -- and a document regenerated from a record cannot
+    disagree with the record, which a second run would be free to do.
+    """
+    try:
+        result = load_result(args.render)
+    except ResultError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    _emit(render_result(result), args.out)
+    return 0
 
 
 def _compare_recorded(args: argparse.Namespace) -> int:
@@ -394,6 +415,12 @@ def _parser() -> argparse.ArgumentParser:
         nargs=2,
         metavar=("BASELINE", "CANDIDATE"),
         help="run both configurations and render the comparison",
+    )
+    parser.add_argument(
+        "--render",
+        type=Path,
+        metavar="RESULT",
+        help="render a recorded result as Markdown, without running anything",
     )
     parser.add_argument(
         "--compare-recorded",

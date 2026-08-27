@@ -134,6 +134,24 @@ arithmetic are the same code — which is the only way the live number and the
 dataset number mean the same thing. `trees.TraceSpan` is six fields and
 `from_readable_spans` is one adapter; a backend fetch is a second one.
 
+That second adapter now exists. `chip_chat.eval.online.signals.read_turn` calls
+`read_trajectory` on a production span tree, so a live turn arrives carrying a
+real `Trajectory` -- the calls, the order, the split-trace check, all of it read
+by this module's own reader. What it does **not** carry is an expectation, and
+that is worth saying plainly rather than papering over: against production there
+is no expected lane, so `scoring.score()` cannot be called on a live turn and
+no monitor in `chip_chat.eval.online` scores tool selection. Every monitor there
+fires on something wrong *on its face*, and *"the model picked the wrong lane"*
+is not one of those — a stranger's question has no right lane written down
+anywhere.
+
+The loop that closes the gap is #77's rather than a judge. A live trajectory that
+looks wrong is promoted into a dataset row, somebody labels the lane it should
+have taken, and from that moment on it is scored here, by this arithmetic, on
+every run forever. That is slower than an online judge and it is the honest
+version: the alternative is a second model inventing the expected lane and this
+document reporting its opinion as tool-selection accuracy.
+
 ## What the ceiling run is worth
 
 [`BASELINE.md`](BASELINE.md) is written by `--ceiling`, which runs the rows

@@ -497,7 +497,7 @@ dataset-upload: ## Create the Arize dataset, or add a version holding the new en
 # model call per row each, plus two judge calls per scoreable row with --judge.
 # It needs CHIP_CHAT_FOUNDRY_ENDPOINT and the two deployment names.
 
-.PHONY: experiment-check experiment-ceiling experiment-baseline experiment-compare
+.PHONY: experiment-check experiment-ceiling experiment-baseline experiment-render experiment-compare
 
 experiment-check: ## Load the configurations and the dataset without running anything, free
 	$(UV) run python -m chip_chat.eval.experiment --check
@@ -509,6 +509,11 @@ experiment-baseline: ## Record the current build as the baseline the launch crit
 	$(UV) run python -m chip_chat.eval.experiment --run shipped --judge \
 		--record eval/experiments/results/shipped.json \
 		--capture eval/experiments/captures/shipped.json \
+		--out eval/experiments/BASELINE.md
+
+experiment-render: ## Re-render a recorded result as Markdown. Free, no model
+	$(UV) run python -m chip_chat.eval.experiment \
+		--render eval/experiments/results/shipped.json \
 		--out eval/experiments/BASELINE.md
 
 experiment-compare: ## Two prompt versions, same dataset, comparison rendered -- #73's demo

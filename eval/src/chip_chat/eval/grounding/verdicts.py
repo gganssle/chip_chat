@@ -91,15 +91,16 @@ class Verdict(StrEnum):
 
 
 class Finding(StrEnum):
-    """The four findings that carry a :class:`Verdict`. See the module docstring.
+    """The findings that carry a :class:`Verdict`. See the module docstring.
 
-    :class:`Refusal` is the fifth and is not here: it has four outcomes rather
-    than a verdict, because *refused where it should have answered* and
+    :class:`Refusal` is the last one and is not here: it has four outcomes
+    rather than a verdict, because *refused where it should have answered* and
     *answered where it should have refused* are two failures and one of them is
     invisible to any scorer that only counts wrong answers.
     """
 
     CITED = "cited"
+    ADJACENT = "adjacent"
     MINTED = "minted"
     SUPPORTED = "supported"
     GROUNDED = "grounded"
@@ -217,12 +218,14 @@ def assess(question: Question, turn: Turn, *, judge: Judge | None = None) -> Jud
     verdicts: dict[Finding, Verdict] = {}
     details: dict[Finding, str] = {}
     cited, cited_line = _cited(question, turn)
+    adjacent, adjacent_line = _adjacent(question, turn)
     minted, minted_line = _minted(turn)
     supported, supported_line = _supported(question, turn)
     grounded, grounded_line = _grounded(question, turn, judge)
     refusal, refusal_line = _refusal(question, turn, judge)
     for finding, verdict, line in (
         (Finding.CITED, cited, cited_line),
+        (Finding.ADJACENT, adjacent, adjacent_line),
         (Finding.MINTED, minted, minted_line),
         (Finding.SUPPORTED, supported, supported_line),
         (Finding.GROUNDED, grounded, grounded_line),
@@ -269,6 +272,63 @@ def _cited(question: Question, turn: Turn) -> tuple[Verdict, str]:
         Verdict.FAIL,
         f"a claim requiring a citation{declared} carried none; PRD K2's target "
         "for this is zero",
+    )
+
+
+def _adjacent(question: Question, turn: Turn) -> tuple[Verdict, str]:
+    """PRD K5's stricter half, checked against the passages rather than the pixels.
+
+    The citation-presentation decision (``docs/decisions/citation-presentation.md``)
+    says an allergen answer's citation renders *beside* the claim with
+    ``harvested_at`` shown without interaction, and that the eval asserts the
+    field is **present and rendered, not merely available**. Half of that is a
+    property of the renderer and lives in ``web/``. The half that lives here is
+    the half without which the renderer has nothing to draw: a passage the turn
+    retrieved has to carry a harvest date at all.
+
+    So the rule reads the evidence rather than the response, and it turns on one
+    distinction that matters more than it looks. A passage carrying a
+    ``source_url`` came out of the harvested corpus, where #48 makes a URL and a
+    date arrive together or not at all -- so such a passage without a
+    ``harvested_at`` is a **failure**, and it is the exact failure that would put
+    an undated allergen claim on screen. A passage carrying neither is not from
+    that corpus -- the week-one slice's hardcoded three-item menu is the case in
+    hand -- and scoring it as a failure would report a fixture as a product
+    defect. That one is ``unscored``.
+    """
+    if not question.adjacent_owed:
+        return Verdict.NOT_ASKED, ""
+    if turn.error is not None:
+        return Verdict.UNSCORED, _NOTHING_CAME_BACK
+    evidence = turn.evidence
+    if evidence is None or not evidence.readable:
+        return (
+            Verdict.UNSCORED,
+            "the turn's retrieval could not be read, so what its citation would "
+            "have had to show is not observable",
+        )
+    if not evidence.passages:
+        return (
+            Verdict.UNSCORED,
+            "the turn retrieved nothing, so there was no source to date; "
+            "`supported` is where that is counted",
+        )
+    citable = [
+        passage for passage in evidence.passages if passage.metadata.get("source_url")
+    ]
+    if not citable:
+        return (
+            Verdict.UNSCORED,
+            "no retrieved passage came from the harvested corpus, so none of "
+            "them carries a harvest date either way",
+        )
+    if any(passage.metadata.get("harvested_at") for passage in citable):
+        return Verdict.PASS, ""
+    return (
+        Verdict.FAIL,
+        f"{len(citable)} retrieved passage(s) came from the harvested corpus and "
+        "none carries a harvest date, so PRD K5's adjacent citation has no date "
+        "to render",
     )
 
 

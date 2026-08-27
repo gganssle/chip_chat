@@ -217,6 +217,15 @@ Running `make trace` against the new endpoint and seeing the same tree is how
 that claim gets checked. Nothing else changes — not a line of the exporter, not a
 span name, not a call site.
 
+That is the app tier's half and it is the easy half. The **agent's** exporter
+variables are immutable per agent version, so repointing the agent is a new
+version and a deployment rather than an edit — two lines of a rendered manifest,
+which [`arize-switch.md`](arize-switch.md) records as a diff, and which
+[`decisions/observability-backend.md`](decisions/observability-backend.md) makes
+the argument for. Read the second before quoting the table above at anybody: the
+switch really is expressed entirely as configuration, and the *unit* of
+configuration is not the same on both tiers.
+
 The endpoint has a default and no more than that. `PHOENIX_PORT` moves the
 container's published port and the endpoint follows it, and an exported
 `OTEL_EXPORTER_OTLP_ENDPOINT` beats both:

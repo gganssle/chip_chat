@@ -310,6 +310,14 @@ python -m chip_chat.eval.promote --drafts capture.json > cases.json
 python -m chip_chat.eval.promote --apply cases.json && make dataset
 ```
 
+**Measured, because the criterion is a stopwatch.** The two commands cost
+**0.7 seconds of machine time** between them on the committed set -- 0.4s to
+draft, 0.4s to validate and append -- which leaves the whole of the two minutes
+for the only part that needs a person: deciding which requirements the case
+covers, what has to be observed for it to count as passed, and why it is worth
+having. That is the split the design is built around, and it is the reason the
+draft refuses to guess the expected tool.
+
 Provenance lives in `eval/dataset/PROVENANCE.json`, **beside** the dataset and
 never inside it: a `provenance` column on a dataset entry would rebase every
 existing digest and move the version for a reason that has nothing to do with the

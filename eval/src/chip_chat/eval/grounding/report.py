@@ -63,6 +63,14 @@ FINDING_MEANS: dict[Finding, str] = {
         "the retriever returned -- so its absence is a fact about a payload. "
         "Target: zero."
     ),
+    Finding.ADJACENT: (
+        "an allergen or dietary answer whose citation has no harvest date to "
+        "render beside the claim. PRD K5's stricter half, and the half of it "
+        "that is checkable from a span: the renderer draws the date, and #48 "
+        "makes a source url and a date arrive together, so a corpus passage "
+        "without one is an undated allergen claim waiting to happen. Target: "
+        "zero."
+    ),
     Finding.MINTED: (
         "the model named a passage the retriever never returned on that turn. "
         "The renderer dropped it rather than showing a source that does not "
