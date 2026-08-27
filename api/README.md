@@ -240,6 +240,112 @@ need columns the catalogue does not carry — the per-item `max_quantity` and th
 aggregate-cap weights — so rule 4 is flattened to one entree or five of anything
 else and rule 9 is not enforced here at all. That is `cc-of1`.
 
+## The connection pool — where the isolation guarantee breaks
+
+`pool.py` is [#44](https://github.com/gganssle/chip_chat/issues/44), and RFC-001
+§05 names it as the risk of the whole design rather than as one more component:
+
+> Session variables and pooled connections are a classic combination for
+> cross-tenant bleed. A connection returned to the pool with `demo_id` still set,
+> then handed to another visitor's request before it's reassigned, defeats every
+> policy above.
+
+Defeats them *quietly*. [#43]'s policies keep filtering correctly, [#45]'s
+procedures keep reading `GETVARIABLE('DEMO_ID')` correctly, no tool signature
+grows a visitor argument — and the answer is somebody else's lunch, with no
+error anywhere in the system.
+
+### The clear is not what makes it safe
+
+The obvious design clears the variable on the way back, and the obvious design
+fails **open**: a clear that silently did not take effect leaves a connection
+that looks returned and is not clean. So the release path here is an
+optimisation, and the load-bearing check is on the other side.
+
+| Step | What it is for |
+| --- | --- |
+| Read `GETVARIABLE('DEMO_ID')` **before** binding | **The guarantee.** A connection carrying anybody is closed, counted, logged and replaced. It is never handed out. |
+| `SET DEMO_ID = ?` | The bind, from the server-side session and never from an argument. |
+| Read it back **before any query runs** | A `SET` that succeeded is not evidence the session holds it. A mismatch refuses the request. |
+| `UNSET` on release, from a `finally` | Gets the variable off at the earliest moment. A connection that will not clear is destroyed, not filed. |
+
+`api/tests/test_pool.py` points a `ForgetfulSession` — one whose `UNSET` reports
+success and changes nothing — at the pool and asserts the next visitor still
+sees only their own rows, `stale_discarded` went up, and the pool said so at
+`ERROR`. That is the difference between a return path that remembers and a
+checkout that cannot forget.
+
+### Four structural facts, and between them there is no unbound query
+
+| Fact | Where |
+| --- | --- |
+| There is no `get_connection()` — two context managers and no accessor | `pool.py` |
+| `for_session` takes a **session id**; no public signature accepts a `demo_id` | `pool.py` |
+| A session with nothing bound raises before a slot is taken | `UnboundSessionError` |
+| A handle stops working when its `with` block ends | `ReleasedConnectionError` |
+
+`VisitorPool.unbound()` is the one deliberately unbound checkout, and it exists
+because [#43]'s `entry_roster` policy requires it: the roster is read *before*
+there is a visitor to bind. It is safe because `visitor_isolation` is default
+deny — an unbound connection reads zero rows from all seven visitor-scoped
+tables, so misusing it is a bug that returns nothing rather than a breach that
+returns somebody.
+
+### The test that matters is concurrent
+
+> Sequential tests will pass regardless.
+
+`api/tests/test_pool_concurrency.py` runs 32 visitors through a pool of 4 for 40
+rounds — 1,280 checkouts, re-synchronised on a barrier every round so the pool
+stays contended from the first request to the last — and asserts every response
+contains only its own visitor's data.
+
+It runs the same assertions twice, because a concurrency test never shown to
+fail has proved nothing. `chip_chat.api.testing.NaivePool` **does what this
+ticket's title says**: it sets on checkout and clears on return, in a `finally`,
+every time. It keeps four connections and rotates through them without tracking
+which are in use, so two requests can hold one connection and the second one's
+`SET` lands between the first one's `SET` and its `SELECT`. Sequentially it is
+perfect. Concurrently it discloses on roughly a thousand of those 1,280
+requests, and the real pool discloses on none.
+
+The fourth assertion is the one that keeps the third honest: the run records
+peak overlap and how many distinct visitors were inside the pool at once, and
+fails if they never interleaved. A round that did not overlap is a sequential
+round wearing threads.
+
+The suite half of this — `disclosure-concurrent-pool-bleed` and the
+`BleedingTarget` that proves the harness catches a bleed — already exists in
+`eval/adversarial` and is checked by `make adversarial-check`. Pointing that
+harness at a deployment is [#82]. Both run on every pull request.
+
+### What was checked against the live account
+
+The trial account answered three questions on 2026-08-27, which is the first
+empirical evidence any layer of this chain has produced:
+
+- `SET DEMO_ID` then `GETVARIABLE('DEMO_ID')` returns exactly the value set;
+  `UNSET` then reading it back returns `NULL`. The pool's readbacks mean what
+  they are written to mean.
+- `visitor_isolation`'s body, evaluated live: bound, a visitor's own row is
+  visible and another's is not; **once cleared, neither is**. The clear provably
+  returns a connection to default deny.
+- `UNSET` on a variable that was never defined is a no-op rather than an error,
+  so skipping the clear on the entry path is a saving rather than a necessity.
+
+What is **not** evidence: no row was filtered, because every visitor-scoped
+table on the account is empty ([#47] is the load). The policies are attached —
+`POLICY_REFERENCES` names all seven plus the two marts — so what remains
+unobserved is the filtering itself, on rows.
+
+### Configuration
+
+`DEFAULT_POOL_SIZE` is four, and it is a constructor argument rather than an
+environment variable because nothing constructs the pool yet — [#66] is the app
+that will, and it is the right place for the knob to grow one. The warehouses
+are X-Small and suspend after sixty seconds, so a larger pool would not serve
+anybody faster and would keep one awake.
+
 ## What is not here yet
 
 Every counter and every draft is process-local, which is honest for the
@@ -253,3 +359,9 @@ re-proposal; it is never a draft placed unconfirmed.
 
 Issue #85 trips the ceiling against the real deployment. `SpendLimits.from_env`
 is how that is done without a code change.
+
+[#43]: https://github.com/gganssle/chip_chat/issues/43
+[#45]: https://github.com/gganssle/chip_chat/issues/45
+[#47]: https://github.com/gganssle/chip_chat/issues/47
+[#66]: https://github.com/gganssle/chip_chat/issues/66
+[#82]: https://github.com/gganssle/chip_chat/issues/82

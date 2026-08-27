@@ -282,11 +282,19 @@ a lane role reports three unprotected marts as protected by not looking at them.
   connections are the classic combination for cross-tenant bleed: a connection
   returned to the pool with `DEMO_ID` still set, then handed to another
   visitor's request, defeats every policy here. [#44] owns setting the variable
-  on checkout and clearing it on return. RFC-001 §05 names this as the risk of
-  the whole design, and nothing in this file can catch it.
-- **It does not red-team itself.** [#82] is the adversarial suite, including the
-  concurrency test that would actually catch a pool failure — sequential tests
-  pass regardless. `verify`'s checks here are the mechanism proving it works;
+  on checkout and clearing it on return, and it has landed:
+  `api/src/chip_chat/api/pool.py`, with its argument in `api/README.md`. RFC-001
+  §05 names this as the risk of the whole design, and nothing in this file can
+  catch it — which is why the check that binds lives on the **checkout** rather
+  than on the return. Clearing on the way back fails open; a connection whose
+  `DEMO_ID` does not read back as `NULL` before a bind is destroyed instead of
+  handed out.
+- **It does not red-team itself.** [#82] is the adversarial suite pointed at a
+  deployment. The concurrency test that would actually catch a pool failure —
+  sequential tests pass regardless — is `api/tests/test_pool_concurrency.py`,
+  which landed with [#44] and runs on every pull request: 32 visitors through a
+  pool of 4, and the same assertions run first against a deliberately broken
+  pool so that a green result means something. `verify`'s checks here are the mechanism proving it works;
   that ticket is somebody trying to break it.
 - **It does not touch tool signatures.** [#61] implements the six read tools,
   none of which takes a visitor identifier. That absence is the other half of

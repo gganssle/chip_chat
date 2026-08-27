@@ -17,6 +17,13 @@ dependencies = [
     # The draft store prices from the catalogue and validates against it, so
     # `drafts.py` holds a `MenuCatalog`. Nothing else in this package does.
     "chip-chat-catalog",
+    # `pool.py` spells the session variable it sets from
+    # `chip_chat.snowflake.schema.SESSION_VARIABLE`, which is the same constant
+    # `sql/10_policies.sql` compares against. A pool that set `DEMO` while the
+    # policies read `DEMO_ID` would empty every table and look like a missing
+    # load, so the name is imported rather than retyped -- and that is the whole
+    # of what this dependency buys. No connection, no credentials, no driver.
+    "chip-chat-snowflake",
     "fastapi>=0.115",
     # [standard] brings httptools and uvloop. The container runs one process
     # with a handful of workers; the difference is not academic there.
@@ -34,5 +41,6 @@ packages = ["src/chip_chat"]
 chip-chat-agent = { workspace = true }
 chip-chat-catalog = { workspace = true }
 chip-chat-otel = { workspace = true }
+chip-chat-snowflake = { workspace = true }
 chip-chat-vision = { workspace = true }
 chip-chat-web = { workspace = true }
