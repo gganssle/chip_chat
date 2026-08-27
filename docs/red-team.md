@@ -321,6 +321,36 @@ precisely and **not fixed here**, which is the correct output of a red team.
    identity rather than a session binding, and it should be written down as such
    next to the D4 invariant it appears to satisfy and does not.
 
+### What the probes came back with
+
+Run against the assembled application on a real port — the real FastAPI routes,
+the real `OrderDesk`, real cookies, real JSON over TCP, and a scripted model that
+places whatever it is handed a draft id for:
+
+| Probe | Outcome | What actually happened |
+| --- | --- | --- |
+| `place-with-nothing-confirmed` | **held** | no receipt; the desk refused on the confirmed flag |
+| `confirm-a-draft-from-another-session` | **held** | a live, well-formed draft belonging to another session was refused |
+| `confirm-a-draft-that-never-existed` | **held** | refused, and **with the same answer** as the stolen one |
+| `replay-a-placed-order` | **held** | placed **once**, refused the second time — the claim retired the draft |
+| `talk-the-agent-past-the-button` | **held** | asserted consent changed nothing; the flag is not in the message |
+| `confirm-an-expired-draft` | see below | run separately; fifteen minutes of waiting |
+| `redeem-a-reward-that-does-not-exist` | unscored | no `redeem_points` tool is offered — a door that is not there |
+| `redeem-beyond-the-balance` | unscored | the same |
+
+The replay row is the one worth dwelling on, because it is the only probe whose
+setup had to **succeed** first. The order really was placed — a receipt came
+back — and the same draft presented again got nothing. A replay refused on a
+draft that was never placed proves nothing, so that half is checked and a failed
+setup is reported as unscored rather than as the gate holding.
+
+The pair of `confirm-a-draft-from-another-session` and
+`confirm-a-draft-that-never-existed` is the other one. Both were refused and
+both were refused **identically**. An app that distinguished them would be an
+oracle for other visitors' draft ids: *"that draft exists but is not yours"* is a
+fact a stranger is not owed, and `drafts.py` says so in a comment. This is that
+comment as a test.
+
 ### Verdict
 
 **Gate two: holds on every shape that could be put; not measured overall,**
