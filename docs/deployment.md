@@ -331,7 +331,40 @@ screen was already loaded before the visitor typed.
 `min_replicas = 0`, so a visitor who opens the link when nobody else has
 recently pays for a container starting from nothing.
 
-MEASURED_COLD_START_PLACEHOLDER
+**The container's contribution is 2.1–2.7 seconds**, and that number is not
+inferred — it is the interval between two lines the platform and the app each
+write for themselves, taken from Log Analytics on 27 August 2026:
+
+| Revision | `ContainerStarted` | `Uvicorn running` | Start |
+| --- | --- | --- | --- |
+| `0000014` | 20:02:51.90 | 20:02:54.61 | **2.71 s** |
+| `0000015` | 20:05:07.83 | 20:05:09.98 | **2.15 s** |
+
+On top of that a node that has never seen the image pays to fetch it — measured
+at **2.46 s and 2.48 s** for the 86.9 MB image, twice, which is the number the
+two-stage Dockerfile buys — and a *new revision* pays about **13 s** of platform
+scheduling between `ContainerCreated` and the first `ContainerStarted`. A
+visitor waking a scaled-to-zero replica of an existing revision pays neither of
+those in full: the image is already on the node, and the replica is scheduled
+rather than provisioned.
+
+So the visitor-visible cold start is **the app's 2–3 seconds plus the
+platform's scheduling**, and on the requests that were served against a revision
+reporting zero replicas the whole thing came back in **0.19 s** — which is
+faster than the container can possibly start, and is the platform answering from
+a sandbox it had kept warm. Both are true and the honest way to quote it is as a
+range: **a couple of hundred milliseconds when Container Apps has a warm sandbox
+to hand, and about three seconds when it does not.**
+
+**What could not be measured, and why it is said rather than smoothed over.**
+The app did not scale to zero on demand during the measurement window — the
+container that came up at 19:45 was still the same process half an hour later,
+with no `Finished server process` between — because something kept sending it
+traffic (several evaluation suites were running against this deployment at the
+time; the same contention shows up as 429s in §6.3). So the end-to-end
+"scaled-to-zero visitor waits *n* seconds" figure is a decomposition here rather
+than a single stopwatch reading. The decomposition is measured; the sum is
+arithmetic.
 
 `make scale-one` removes it entirely while you are actively sharing the link;
 `make scale-zero` gives it back. Section 7.1.
