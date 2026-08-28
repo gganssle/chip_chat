@@ -21,6 +21,7 @@ from chip_chat.search.build import build
 from chip_chat.search.client import ServiceError
 from chip_chat.search.corpus import from_path
 from chip_chat.search.embedding import EmbeddingDeployment
+from chip_chat.search.fusion import SINGLE_RANKER_CEILING, VectorArm, fused_by_both
 from chip_chat.search.query import Halves
 from chip_chat.search.retrieve import (
     MEASURED_GOOD_RERANKER_SCORE,
@@ -422,3 +423,148 @@ def test_a_degraded_arm_that_matched_no_word_is_low_confidence() -> None:
     result = retriever().search(UNANSWERABLE, rerank=False, halves=Halves.VECTOR)
     assert result.passages
     assert result.confidence is Confidence.LOW
+
+
+# --- The vector half that did not run ----------------------------------------
+#
+# chip-wez. The Free tier drops the vector half of a query and returns HTTP 200
+# with an empty vector result, so the response is a well-formed hybrid response
+# that is silently the keyword response. ``FakeSearchService.drop_vector``
+# reproduces exactly that -- a 200 with real passages on it, not an error --
+# because a fake that raised would be modelling an outage, which is the one
+# thing this defect is not.
+
+
+def test_a_healthy_hybrid_query_says_the_vector_half_contributed() -> None:
+    result = retriever().search(ANSWERABLE, rerank=False)
+    assert result.vector_arm is VectorArm.CONTRIBUTED
+    assert not result.degraded
+
+
+def test_a_dropped_vector_half_is_read_off_the_fused_scores() -> None:
+    # Nothing in the response says which ranker found anything. This is the
+    # whole of the signal: no returned document scores above 1/60, so none was
+    # placed by both halves.
+    fake = service()
+    fake.drop_vector = True
+    result = retriever(fake).search(ANSWERABLE, rerank=False)
+    assert result.passages, "the lexical half answers normally, as it does live"
+    # Note the tolerance, and note that it is the whole difficulty. The top
+    # score comes back as 0.01666666753590107, which is single-precision 1/60
+    # widened to a double and therefore *larger* than 1/60. A comparison written
+    # without it would read every degraded response as a healthy one.
+    assert not any(fused_by_both(passage.score) for passage in result.passages)
+    assert max(passage.score for passage in result.passages) == pytest.approx(
+        SINGLE_RANKER_CEILING, abs=1e-6
+    )
+    assert result.vector_arm is VectorArm.DROPPED
+    assert result.degraded
+
+
+def test_a_degraded_result_is_served_rather_than_retried_or_refused() -> None:
+    # docs/decisions/vector-arm-degradation.md. One query out, one query back:
+    # the fault does not clear in minutes, so a retry buys about one recovery in
+    # eight and on the reranked path buys it with a monthly semantic request.
+    fake = service()
+    fake.drop_vector = True
+    before = sum(1 for call in fake.calls if call.startswith("search:"))
+    result = retriever(fake).search(ANSWERABLE, rerank=False)
+    after = sum(1 for call in fake.calls if call.startswith("search:"))
+    assert after - before == 1
+    assert result.answered
+    assert result.passages
+
+
+def test_a_degraded_result_forbids_the_one_claim_it_cannot_support() -> None:
+    # The visitor must never be told the restaurant does not publish something
+    # by a retriever that looked with half of itself.
+    fake = service()
+    fake.drop_vector = True
+    result = retriever(fake).search(UNANSWERABLE, rerank=False)
+    joined = " ".join(result.notes)
+    assert "DEGRADED RETRIEVAL" in joined
+    assert "Do NOT say the restaurant does not publish" in joined
+
+
+def test_a_degraded_result_does_not_carry_the_note_that_contradicts_it() -> None:
+    # "these are the nearest passages in the corpus" and "half the retriever did
+    # not look" are one instruction and its contradiction. Only the true one.
+    fake = service()
+    fake.drop_vector = True
+    result = retriever(fake).search(UNANSWERABLE, rerank=False)
+    assert not any("nearest passages in the corpus" in note for note in result.notes)
+
+
+def test_a_healthy_low_confidence_result_keeps_its_own_note() -> None:
+    # The withholding above is conditional on the defect, not a deletion.
+    result = retriever().search(UNANSWERABLE, rerank=False)
+    assert any("nearest passages in the corpus" in note for note in result.notes)
+
+
+def test_the_tool_boundary_distinguishes_degraded_from_low_confidence() -> None:
+    # Three different states the agent has to be able to tell apart: declined,
+    # low confidence, and answered-with-half-a-retriever. The third is the one
+    # #49's payload could not previously express.
+    fake = service()
+    fake.drop_vector = True
+    payload = retriever(fake).search(ANSWERABLE, rerank=False).as_tool_result()
+    assert payload["degraded"] is True
+    assert payload["vector_arm"] == "dropped"
+    assert "declined" not in payload
+    healthy = retriever().search(ANSWERABLE, rerank=False).as_tool_result()
+    assert healthy["degraded"] is False
+    assert healthy["vector_arm"] == "contributed"
+
+
+def test_the_vector_arm_of_the_ablation_reads_its_own_emptiness() -> None:
+    # A vector-only query has no fusion to read, so the returned count is the
+    # signal -- and that is the reading #50's sweeps recorded as 7%.
+    fake = service()
+    fake.drop_vector = True
+    result = retriever(fake).search(ANSWERABLE, rerank=False, halves=Halves.VECTOR)
+    assert result.passages == ()
+    assert result.vector_arm is VectorArm.DROPPED
+
+
+def test_the_keyword_arm_is_never_reported_as_degraded() -> None:
+    # It asked for no vector half, so it lost nothing. Reporting it degraded
+    # would put a defect on the one arm of the ablation that cannot have it.
+    fake = service()
+    fake.drop_vector = True
+    result = retriever(fake).search(ANSWERABLE, rerank=False, halves=Halves.KEYWORD)
+    assert result.vector_arm is VectorArm.NOT_SENT
+    assert not result.degraded
+
+
+def test_an_unanswerable_question_on_a_healthy_service_is_not_a_wolf() -> None:
+    # The negative set is eight questions the corpus cannot answer, and it is a
+    # real part of #50's measurement. A detector that called those degraded
+    # would make restraint unmeasurable -- and would be wrong, because a
+    # nearest-neighbour search returns neighbours for any question it is asked.
+    result = retriever().search(UNANSWERABLE, rerank=False)
+    assert result.passages
+    assert result.confidence is Confidence.LOW
+    assert not result.degraded
+
+
+def test_a_filter_that_matches_nothing_is_a_finding_rather_than_a_fault() -> None:
+    fake = FakeSearchService()
+    fake.create_index({"name": "corpus-empty"})
+    fake.set_alias(schema.ALIAS, "corpus-empty")
+    result = retriever(fake).search("anything under 100 calories")
+    assert result.constraints.filtered
+    assert result.vector_arm is VectorArm.UNDETERMINED
+    assert not result.degraded
+
+
+def test_an_empty_response_is_not_attributed_to_the_vector_half() -> None:
+    # An empty index produces this, and so does a lexical half that matched
+    # nothing beside a dropped vector half. DROPPED is claimed from the
+    # arithmetic or not at all; see chip_chat.search.fusion.
+    fake = FakeSearchService()
+    fake.create_index({"name": "corpus-empty"})
+    fake.set_alias(schema.ALIAS, "corpus-empty")
+    result = retriever(fake).search(ANSWERABLE)
+    assert result.passages == ()
+    assert result.vector_arm is VectorArm.UNDETERMINED
+    assert not result.degraded

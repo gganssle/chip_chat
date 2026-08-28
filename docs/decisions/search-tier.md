@@ -72,6 +72,14 @@ by re-running an ablation.* `docs/cost.md` §8 is where that lives in the cost
 argument, because a cost review that only looked at the bill would have recorded
 this line as a clean win.
 
+**And the same day, the word *silently* was removed.**
+`docs/decisions/vector-arm-degradation.md` is the follow-on record: the fault is
+detected from the fusion arithmetic at the retrieval boundary, said on the
+`retriever.search` span, said at the tool boundary so the agent can report a
+half-working lookup instead of a confident absence, and refused a score in
+`eval/retrieval`. The tier is still Free and the fault is still there. What is
+gone is the part that made it expensive — that nobody could tell.
+
 ## Revisit trigger
 
 Basic settles all three of these at once — the 1,000/month ceiling, the missing

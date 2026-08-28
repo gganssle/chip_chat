@@ -50,6 +50,7 @@ directly, string for string.
 """
 
 import re
+import struct
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -67,6 +68,22 @@ the fused scores of a good query and a hopeless query differ in the third
 decimal place, which is the property the retrieval layer is written against."""
 
 _WORD = re.compile(r"[a-z0-9]+")
+
+
+def _single_precision(value: float) -> float:
+    """Narrow a score the way the service's own JSON does, and not by rounding.
+
+    Azure AI Search answers in single precision: the live alias sends ``1/60``
+    as ``0.01666666753590107``, a float32 widened back to a double. This fake
+    used to round to six places instead, which sends ``0.016667`` — a number
+    *above* ``1/60`` rather than at it, so a response with the vector half
+    dropped read as one where two rankers contributed.
+
+    That is worth the four lines. The fake's tidiness would have hidden exactly
+    the defect :mod:`chip_chat.search.fusion` exists to find, in the test suite
+    written to prove it is found.
+    """
+    return float(struct.unpack("<f", struct.pack("<f", value))[0])
 
 
 def _words(text: str) -> set[str]:
@@ -106,6 +123,12 @@ class FakeSearchService:
         """Every search body received, so a test can assert on the query itself."""
         self.semantic_refusal: str | None = None
         """Set to make semantic queries fail, as a spent monthly allowance does."""
+        self.drop_vector = False
+        """Set to reproduce ``chip-wez``: the vector half of every query is
+        answered as though it had matched nothing, and the request otherwise
+        succeeds. Not an exception and not an error key — the whole difficulty
+        of that defect is that the response is a well-formed 200, so a fake that
+        raised would be modelling an outage instead."""
 
     def index_names(self) -> list[str]:
         self.calls.append("index_names")
@@ -180,9 +203,10 @@ class FakeSearchService:
             raise ServiceError(self.semantic_refusal)
         documents = list(self.docs[index].values())
         lexical = "search" in query
-        vector = bool(query.get("vectorQueries"))
+        asked_vector = bool(query.get("vectorQueries"))
+        vector = asked_vector and not self.drop_vector
         text = str(query.get("search", "*") or "*")
-        if not lexical and vector:
+        if not lexical and asked_vector:
             # #50's vector-only ablation. The request carries no `search` key at
             # all, and the query text the vector half is embedding is the one on
             # the `vectorQueries` entry -- which is the same string, but reading
@@ -190,6 +214,10 @@ class FakeSearchService:
             # half rather than with one nobody noticed.
             text = str(query["vectorQueries"][0].get("text", "*") or "*")
         top = int(query.get("top", 50))
+        if asked_vector and not lexical and self.drop_vector:
+            # A vector-only query with no vector half has no ranker left, and
+            # the service reports that as `{"value": []}` with a 200.
+            return {"@odata.count": 0, "value": []}
         if text == "*":
             ranked = [(1.0, document) for document in documents]
         else:
@@ -223,6 +251,15 @@ def _ranked(
     reciprocal rank fusion over one order is ``1 / (k + rank)``, which preserves
     that order exactly and keeps the score on the same scale as the hybrid arm's.
     Two arms whose scores were on different scales would look like a finding.
+
+    The rank is **zero-based**, which is what the live service does — measured
+    on 2026-08-27, where a hybrid query whose vector half had been dropped
+    returned exactly ``1/60, 1/61, 1/62, 1/63, 1/64``. It changes no ordering
+    and therefore no assertion about ranking; what it changes is that a
+    single-half response from this fake lands on the same ceiling
+    :data:`chip_chat.search.fusion.SINGLE_RANKER_CEILING` tests against, so the
+    detector can be exercised here against scores of the shape it will actually
+    meet.
     """
     orders: list[Sequence[Mapping[str, Any]]] = []
     if lexical:
@@ -239,7 +276,7 @@ def _ranked(
         orders.append(sorted(documents, key=lambda document: str(document["chunk_id"])))
     scores: dict[str, float] = {}
     for order in orders:
-        for rank, document in enumerate(order, start=1):
+        for rank, document in enumerate(order):
             key = str(document["chunk_id"])
             scores[key] = scores.get(key, 0.0) + 1.0 / (RRF_K + rank)
     by_id = {str(document["chunk_id"]): document for document in documents}
@@ -256,7 +293,7 @@ def _hit(
     semantic: bool,
 ) -> dict[str, Any]:
     """Return one search hit, with the scores the query asked for."""
-    hit: dict[str, Any] = {**document, "@search.score": round(score, 6)}
+    hit: dict[str, Any] = {**document, "@search.score": _single_precision(score)}
     if semantic:
         # The reranker's 0-4 scale, driven by how much of the query the document
         # actually contains -- so a test can produce a confident hit and a

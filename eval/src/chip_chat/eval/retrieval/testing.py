@@ -53,10 +53,11 @@ It is not, and does not substitute for, the credentialed run.
 """
 
 import re
+import struct
 from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
-from chip_chat.search import chunks
+from chip_chat.search import chunks, fusion
 from chip_chat.search.client import ServiceError
 from chip_chat.search.corpus import ChunkSet
 from chip_chat.search.schema import ALIAS
@@ -73,13 +74,18 @@ filters has to print that table as unscored. A violation count taken here would
 be a count of the fixture's omission wearing a safety number's clothes.
 """
 
-RRF_K: Final = 60
+RRF_K: Final = fusion.RRF_K
 """Reciprocal rank fusion's smoothing constant, as Azure AI Search uses it.
 
 The real number rather than a convenient one: it is what makes the fused score
 of a good query and a hopeless one differ in the third decimal place, which is
 the property :mod:`chip_chat.search.retrieve` refuses to threshold and the
 reason the degrade path has a lexical floor instead.
+
+Re-exported from :data:`chip_chat.search.fusion.RRF_K` rather than restated, so
+that the fixture and the detector cannot come to hold different constants — and
+the detector's threshold is a function of this one. The rank it is added to is
+**zero-based**, matching the live service; see :func:`_ranked`.
 """
 
 _WORD: Final = re.compile(r"[a-z0-9]+")
@@ -106,9 +112,15 @@ class OfflineIndex:
     reason attached.
     """
 
-    __slots__ = ("_alias", "_rows", "queries")
+    __slots__ = ("_alias", "_drop_vector", "_rows", "queries")
 
-    def __init__(self, corpus: ChunkSet, *, alias: str = ALIAS) -> None:
+    def __init__(
+        self,
+        corpus: ChunkSet,
+        *,
+        alias: str = ALIAS,
+        drop_vector: bool = False,
+    ) -> None:
         """Point an index at a corpus release.
 
         Args:
@@ -116,9 +128,18 @@ class OfflineIndex:
                 that the fixture and the real build cannot disagree about what
                 a corpus is.
             alias: The alias the retriever will ask for.
+            drop_vector: Reproduce ``chip-wez``. Every ``vectorQueries`` entry
+                is answered as if it had matched nothing, and the request is
+                otherwise handled normally and returns HTTP 200 — which is
+                exactly what the Free tier does and exactly why nothing
+                downstream noticed for three sweeps. The one thing this fixture
+                can offer that the live service cannot is doing it *on demand*,
+                so the harness's unscored path is covered by a test rather than
+                by waiting for a bad afternoon.
         """
         self._rows = tuple(corpus.rows)
         self._alias = alias
+        self._drop_vector = drop_vector
         self.queries: list[Mapping[str, Any]] = []
         """Every request body received, so a test can assert on the query itself."""
 
@@ -178,10 +199,19 @@ class OfflineIndex:
         self.queries.append(dict(query))
 
         lexical = "search" in query
-        vector = bool(query.get("vectorQueries"))
+        asked_vector = bool(query.get("vectorQueries"))
+        vector = asked_vector and not self._drop_vector
         text = str(query.get("search", "") or "")
-        if not lexical and vector:
+        if not lexical and asked_vector:
             text = str(query["vectorQueries"][0].get("text", "") or "")
+        if asked_vector and not lexical and self._drop_vector:
+            # A vector-only query whose vector half was dropped has no ranker
+            # left. The service returns `{"value": []}` with HTTP 200 rather
+            # than an error, and reproducing the status code is the entire
+            # point of the flag -- an exception here would be caught by the
+            # sweep's own error path and reported as an outage, which is the
+            # one thing this defect is not.
+            return {"@odata.count": 0, "value": []}
         semantic = query.get("queryType") == "semantic"
         top = int(query.get("top", 50))
         # `skip` is honoured because `chip_chat.eval.retrieval.corpus.from_index`
@@ -197,6 +227,19 @@ class OfflineIndex:
             "@odata.count": len(ranked),
             "value": [_hit(row, score, words, semantic) for score, row in window],
         }
+
+
+def _single_precision(value: float) -> float:
+    """Narrow a score the way the service's own JSON does, and not by rounding.
+
+    Azure AI Search answers in single precision: the live alias sends ``1/60``
+    as ``0.01666666753590107``, a float32 widened back to a double. Rounding to
+    six places instead sends ``0.016667`` — a number *above* ``1/60`` rather
+    than at it, which is enough to make a response with the vector half dropped
+    read as one where both rankers contributed. See
+    :mod:`chip_chat.search.fusion`.
+    """
+    return float(struct.unpack("<f", struct.pack("<f", value))[0])
 
 
 def _words(text: str) -> set[str]:
@@ -246,7 +289,14 @@ def _ranked(
         return [(1.0, row) for row in rows]
     scores: dict[str, float] = {}
     for order in orders:
-        for rank, row in enumerate(order, start=1):
+        # Zero-based, which is what the live service does -- measured on
+        # 2026-08-27, where a degraded hybrid query returned exactly
+        # `1/60, 1/61, 1/62, 1/63, 1/64`. It changes no ordering and therefore
+        # no number in a report; what it changes is that this fixture's single-
+        # ranker ceiling is now the same value as the real one, so
+        # `chip_chat.search.fusion` can be exercised offline against scores that
+        # are the shape it will meet in production rather than one step below.
+        for rank, row in enumerate(order):
             key = str(row.get(chunks.CHUNK_ID, ""))
             scores[key] = scores.get(key, 0.0) + 1.0 / (RRF_K + rank)
     by_id = {str(row.get(chunks.CHUNK_ID, "")): row for row in rows}
@@ -260,7 +310,7 @@ def _hit(
     row: Mapping[str, Any], score: float, query_words: set[str], semantic: bool
 ) -> dict[str, Any]:
     """One search hit, with the scores the query asked for and nothing else."""
-    hit: dict[str, Any] = {**row, "@search.score": round(score, 6)}
+    hit: dict[str, Any] = {**row, "@search.score": _single_precision(score)}
     if semantic:
         hit["@search.rerankerScore"] = round(4.0 * _matched(query_words, row), 3)
         hit["@search.captions"] = [

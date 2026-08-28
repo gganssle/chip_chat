@@ -6,6 +6,14 @@
     rollback   point the alias back at the index before this one
     verify     hold the live service to #48.3 and #48.4
     retrieve   ask the live alias a question and print what came back
+    vector-arm drive hybrid queries until the Free tier drops the vector half
+
+``vector-arm`` is ``chip-wez``'s, and it is the only command here that exists to
+reproduce a defect rather than to run the product. It sends a burst of hybrid
+queries through the ordinary retriever and reports, per query, what
+:mod:`chip_chat.search.fusion` read off the fused scores — so a run of it is the
+evidence that the detector fires against the live service and a measurement of
+the rate on the day. It costs no semantic requests: reranking is off throughout.
 
 ``retrieve`` is #49's, and it is the cheapest way to see the whole knowledge
 lane work: it prints the passages, every score that ranked them, the citation on
@@ -46,6 +54,7 @@ from chip_chat.search.embedding import (
     HttpEmbedder,
 )
 from chip_chat.search.errors import SearchError
+from chip_chat.search.fusion import SINGLE_RANKER_CEILING
 from chip_chat.search.retrieve import Retriever
 
 VECTORIZER_KEY_VARIABLE = "CHIP_CHAT_SEARCH_VECTORIZER_KEY"
@@ -102,6 +111,89 @@ forgot on every invocation would be a counter of one.
 """
 
 
+VECTOR_ARM_PROBES = 40
+"""Hybrid queries ``vector-arm`` sends unless told otherwise.
+
+Chosen off the measurement rather than for round numbers.
+``docs/retrieval.md`` §9 found that a rested service answers roughly the first
+twenty vector queries and then mostly stops, so a probe of ten would sample only
+the healthy prefix and report a service that works. Forty crosses the knee, and
+the run prints its own first-half and second-half rates so the reader can see
+whether it did on the day.
+"""
+
+VECTOR_ARM_QUESTIONS: tuple[str, ...] = (
+    "what is in a chicken burrito bowl",
+    "how do rewards points work",
+    "which items are marked as containing dairy",
+    "how many calories are in a steak burrito",
+    "can I cancel an order after placing it",
+    "what comes on a lifestyle bowl",
+    "is the sofritas vegan",
+    "what are the ingredients in barbacoa",
+)
+"""Questions ``vector-arm`` rotates through. Eight, and rotated rather than
+repeated, because a single question asked forty times would let a response cache
+answer thirty-nine of them and report a service that never degraded."""
+
+
+def _vector_arm(retriever: Retriever, repeat: int) -> dict[str, object]:
+    """Send ``repeat`` hybrid queries and report what the vector half did.
+
+    The point of this command is that it is the *product's* reading being
+    exercised and not a second one written for the report: every probe goes
+    through :meth:`chip_chat.search.retrieve.Retriever.search` and the verdict
+    printed is :attr:`chip_chat.search.retrieve.Retrieval.vector_arm`. A probe
+    that computed the tell itself would be a test of the probe.
+
+    Reranking is off throughout, so a forty-query run spends **none** of the
+    month's 1,000 semantic requests. That costs nothing that matters here: the
+    fused ``@search.score`` the reading is taken from is the same number on both
+    paths — verified against the live alias, where a reranked response carried
+    two-ranker scores at ranks four and five under a single-ranker top hit.
+
+    Args:
+        retriever: The retriever to probe, pointed at the live alias.
+        repeat: How many queries to send.
+
+    Returns:
+        A JSON-ready summary: the per-arm counts, the two halves of the run
+        separately, and one line per probe.
+    """
+    probes: list[dict[str, object]] = []
+    for index in range(repeat):
+        question = VECTOR_ARM_QUESTIONS[index % len(VECTOR_ARM_QUESTIONS)]
+        result = retriever.search(question, rerank=False)
+        probes.append(
+            {
+                "n": index + 1,
+                "query": question,
+                "vector_arm": result.vector_arm.value,
+                "returned": len(result.passages),
+                "top_score": round(
+                    max((p.score for p in result.passages), default=0.0), 6
+                ),
+                "confidence": result.confidence.value,
+            }
+        )
+    dropped = [probe for probe in probes if probe["vector_arm"] == "dropped"]
+    half = len(probes) // 2
+    return {
+        "alias": retriever.alias,
+        "queries": len(probes),
+        "single_ranker_ceiling": round(SINGLE_RANKER_CEILING, 6),
+        "dropped": len(dropped),
+        "dropped_rate": round(len(dropped) / len(probes), 3) if probes else None,
+        "dropped_first_half": sum(
+            1 for probe in probes[:half] if probe["vector_arm"] == "dropped"
+        ),
+        "dropped_second_half": sum(
+            1 for probe in probes[half:] if probe["vector_arm"] == "dropped"
+        ),
+        "probes": probes,
+    }
+
+
 def _service(
     arguments: argparse.Namespace, batch: int = UPLOAD_BATCH_LIMIT
 ) -> tuple[HttpSearchService, object]:
@@ -146,7 +238,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m chip_chat.search")
     parser.add_argument(
         "command",
-        choices=("schema", "status", "build", "rollback", "verify", "retrieve"),
+        choices=(
+            "schema",
+            "status",
+            "build",
+            "rollback",
+            "verify",
+            "retrieve",
+            "vector-arm",
+        ),
     )
     parser.add_argument("--landing", default="landing", help="the landing zone root")
     parser.add_argument("--chunks", default="", help="read chunks from here instead")
@@ -169,6 +269,12 @@ def main(argv: list[str] | None = None) -> int:
         "--no-rerank",
         action="store_true",
         help="run `retrieve` on the degrade path, without the semantic ranker",
+    )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=VECTOR_ARM_PROBES,
+        help="hybrid queries to send, for `vector-arm`",
     )
     arguments = parser.parse_args(argv)
     if arguments.command == "retrieve" and not arguments.query:
@@ -204,6 +310,17 @@ def main(argv: list[str] | None = None) -> int:
             arguments,
             VERIFY_BATCH if arguments.command == "verify" else UPLOAD_BATCH_LIMIT,
         )
+        if arguments.command == "vector-arm":
+            print(
+                json.dumps(
+                    _vector_arm(
+                        Retriever(service, alias=arguments.alias, top=arguments.top),
+                        arguments.repeat,
+                    ),
+                    indent=2,
+                )
+            )
+            return 0
         if arguments.command == "retrieve":
             retriever = Retriever(
                 service,
@@ -220,6 +337,8 @@ def main(argv: list[str] | None = None) -> int:
                         "query": result.query,
                         "confidence": result.confidence.value,
                         "reranked": result.reranked,
+                        "degraded": result.degraded,
+                        "vector_arm": result.vector_arm.value,
                         "floor": result.floor,
                         "constraints": result.constraints.as_dict(),
                         "notes": list(result.notes),

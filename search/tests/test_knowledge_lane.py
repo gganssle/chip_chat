@@ -33,7 +33,7 @@ from chip_chat.search.build import build
 from chip_chat.search.client import ServiceError
 from chip_chat.search.corpus import from_path
 from chip_chat.search.embedding import EmbeddingDeployment
-from chip_chat.search.lane import DECLINED, KnowledgeLane
+from chip_chat.search.lane import DECLINED, LEXICAL_ONLY_TAG, KnowledgeLane
 from chip_chat.search.retrieve import Confidence, Retriever
 
 FIXTURE = Path(__file__).parent / "fixtures" / "chunks.jsonl"
@@ -169,6 +169,59 @@ def test_a_low_confidence_retrieval_is_tagged_for_slicing(
 
 
 def test_a_grounded_retrieval_is_not_tagged(spans: SpanRecorder) -> None:
+    lane(corpus_service()).search(QUESTION)
+    assert "tag.tags" not in spans.attributes_of("retriever.search")
+
+
+# --- The vector half that did not run ----------------------------------------
+
+
+def test_a_lexical_only_result_is_legible_on_the_span(spans: SpanRecorder) -> None:
+    # chip-wez. An operator reading a trace has to be able to see that this
+    # hybrid query was hybrid in name only -- the arithmetic is already in the
+    # per-document scores and nobody reads scores that way.
+    fake = corpus_service()
+    fake.drop_vector = True
+    lane(fake).search(QUESTION)
+    metadata = json.loads(str(spans.attributes_of("retriever.search")["metadata"]))
+    assert metadata["degraded"] is True
+    assert metadata["vector_arm"] == "dropped"
+    tags = spans.attributes_of("retriever.search")["tag.tags"]
+    assert isinstance(tags, Sequence)
+    assert LEXICAL_ONLY_TAG in list(tags)
+
+
+def test_the_lexical_only_span_is_not_marked_failed(spans: SpanRecorder) -> None:
+    # The service answered 200 and the lane returned real passages. Marking the
+    # span failed would put this in the same bucket as an outage, which has a
+    # different remedy and a different blast radius.
+    fake = corpus_service()
+    fake.drop_vector = True
+    lane(fake).search(QUESTION)
+    statuses = {
+        span.name: span.status.status_code.name for span in spans.finished_spans()
+    }
+    assert statuses["retriever.search"] != "ERROR"
+
+
+def test_each_document_says_whether_the_vector_half_placed_it(
+    spans: SpanRecorder,
+) -> None:
+    # The roll-up says "some document was placed by both". The per-document
+    # reading says which, which is what a trace is for.
+    lane(corpus_service()).search(QUESTION, rerank=False)
+    recorded = documents_on(spans)
+    assert recorded
+    readings = {
+        json.loads(str(document["document.metadata"]))["fused_by_both"]
+        for document in recorded
+    }
+    assert True in readings
+
+
+def test_a_healthy_hybrid_retrieval_carries_no_lexical_only_tag(
+    spans: SpanRecorder,
+) -> None:
     lane(corpus_service()).search(QUESTION)
     assert "tag.tags" not in spans.attributes_of("retriever.search")
 

@@ -27,6 +27,10 @@ either way.
 :mod:`chip_chat.search.retrieve`
     the single interface the tool layer calls: passages, every score that
     ranked them, and how much the corpus actually had to say.
+:mod:`chip_chat.search.fusion`
+    whether the vector half of a hybrid query actually answered, read off the
+    fused scores — because on the Free tier it sometimes does not, and the
+    service returns HTTP 200 either way.
 :mod:`chip_chat.search.allowance`
     the Free tier's 1,000 semantic requests a month, counted — because past
     them there is no bill, only a refusal.

@@ -31,10 +31,14 @@ from chip_chat.search.retrieve import Retrieval, Retriever
 
 
 def sweep(
-    questions: RetrievalSet, corpus: ChunkSet, only: Sequence[str] | None = None
+    questions: RetrievalSet,
+    corpus: ChunkSet,
+    only: Sequence[str] | None = None,
+    *,
+    drop_vector: bool = False,
 ) -> tuple[OfflineIndex, tuple[Answer, ...]]:
     """Run the whole ablation against an in-memory index over ``corpus``."""
-    index = OfflineIndex(corpus)
+    index = OfflineIndex(corpus, drop_vector=drop_vector)
     source = RetrieverSource(Retriever(index), name="offline")
     return index, run_sweep(questions, source, only=only)
 
@@ -125,8 +129,10 @@ def test_the_serving_arm_is_the_one_the_product_sends() -> None:
 # --- the report --------------------------------------------------------------
 
 
-def report_text(questions: RetrievalSet, corpus: ChunkSet) -> str:
-    _, answers = sweep(questions, corpus)
+def report_text(
+    questions: RetrievalSet, corpus: ChunkSet, *, drop_vector: bool = False
+) -> str:
+    _, answers = sweep(questions, corpus, drop_vector=drop_vector)
     return render(
         build_report(
             questions,
@@ -197,3 +203,79 @@ def test_the_report_records_the_unmeasured_floor(
 ) -> None:
     document = report_text(retrieval_questions, corpus_fixture)
     assert "Reranker floor: `1.5`" in document
+
+
+# --- A sweep whose vector half died ------------------------------------------
+#
+# chip-wez, end to end at full size. `drop_vector` answers every vectorQueries
+# entry as though it had matched nothing and otherwise succeeds -- which is what
+# the Free tier does, and why three committed sweeps reported it as a finding.
+
+
+def test_a_healthy_sweep_says_the_vector_half_ran(
+    retrieval_questions: RetrievalSet, corpus_fixture: ChunkSet
+) -> None:
+    # The section is printed on a clean run too. "The vector half answered on
+    # all forty questions" is a fact a reader needs stated, and a section that
+    # appears only on a bad day is one whose absence means nothing.
+    document = report_text(retrieval_questions, corpus_fixture)
+    assert "## Did the vector half actually run" in document
+    assert "Every arm ran the configuration its name claims" in document
+
+
+def test_a_dead_vector_half_stops_the_sweep_reporting_a_clean_ablation(
+    retrieval_questions: RetrievalSet, corpus_fixture: ChunkSet
+) -> None:
+    document = report_text(retrieval_questions, corpus_fixture, drop_vector=True)
+    assert "**NO**" in document
+    assert "are not measurements and their rows are not comparable" in document
+    # Named, one per question, because a count moving tells a reader something
+    # happened and the name tells them what.
+    assert "Degraded under `hybrid`" in document
+    assert "Degraded under `vector only`" in document
+
+
+def test_the_precondition_is_printed_above_the_tables_it_invalidates(
+    retrieval_questions: RetrievalSet, corpus_fixture: ChunkSet
+) -> None:
+    document = report_text(retrieval_questions, corpus_fixture, drop_vector=True)
+    assert document.index("## Did the vector half actually run") < document.index(
+        "## The demo bar"
+    )
+
+
+def test_a_dead_vector_half_leaves_the_keyword_arm_alone(
+    retrieval_questions: RetrievalSet, corpus_fixture: ChunkSet
+) -> None:
+    # The one arm of the ablation that cannot have this defect, because it asked
+    # for no vector half. Reporting it degraded would be crying wolf on the
+    # control.
+    _, answers = sweep(retrieval_questions, corpus_fixture, drop_vector=True)
+    resolution = resolve(retrieval_questions, corpus_fixture)
+    arms = {
+        arm.arm.name: arm
+        for arm in build_report(
+            retrieval_questions,
+            resolution,
+            answers,
+            ABLATION,
+            source="offline",
+            measured=False,
+            floor=1.5,
+            evaluates_filters=EVALUATES_FILTERS,
+        ).arms
+    }
+    assert arms["keyword only"].comparable
+    assert arms["keyword only"].degraded == ()
+    assert not arms["hybrid"].comparable
+    assert not arms["vector only"].comparable
+    assert not arms["hybrid + reranker"].comparable
+
+
+def test_a_dead_vector_half_is_not_reported_as_an_outage(
+    retrieval_questions: RetrievalSet, corpus_fixture: ChunkSet
+) -> None:
+    # The service answered 200 with real passages on the hybrid arms. An error
+    # here would send somebody to look at availability, which is the wrong page.
+    _, answers = sweep(retrieval_questions, corpus_fixture, drop_vector=True)
+    assert all(answer.error is None for answer in answers)
