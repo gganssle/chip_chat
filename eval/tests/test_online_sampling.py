@@ -182,7 +182,9 @@ def test_a_slow_turn_alone_does_not_buy_a_judge() -> None:
 def test_an_escalating_monitor_still_buys_a_judge() -> None:
     """The narrowing is per monitor, not a retreat from the rule."""
     disclosing = next(
-        drill.turn for drill in drills() if drill.monitor.name == "cross_visitor_disclosure"
+        drill.turn
+        for drill in drills()
+        if drill.monitor.name == "cross_visitor_disclosure"
     )
 
     run = run_online([disclosing], policy=SamplingPolicy(rate=0.0))

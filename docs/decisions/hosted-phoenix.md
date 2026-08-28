@@ -367,9 +367,10 @@ Everything below was run against the deployed estate on 28 August 2026.
 
 ### Real turns through the live app, arriving as complete span trees
 
-Three turns driven through
-`https://ca-chip-chat-web.whitesea-eea6e4c0.eastus2.azurecontainerapps.io`, read
-back out of Phoenix's REST API: **34 spans, 3 traces, 0 split**.
+Turns driven through
+`https://ca-chip-chat-web.whitesea-eea6e4c0.eastus2.azurecontainerapps.io` and
+read back out of Phoenix's REST API: **142 spans across 16 traces, 0 split**.
+One of them, node for node:
 
 ```
 chat.turn  [CHAIN]
@@ -379,37 +380,41 @@ chat.turn  [CHAIN]
     llm.completion  [LLM]
     tool.search_menu_knowledge  [TOOL]
       retriever.search  [RETRIEVER]
-  agent.step  [AGENT]
-    llm.completion  [LLM]
-    tool.get_points_balance  [TOOL]
-    tool.get_usual_order  [TOOL]
+    tool.search_menu_knowledge  [TOOL]
+      retriever.search  [RETRIEVER]
   agent.step  [AGENT]
     llm.completion  [LLM]
   render.response  [CHAIN]
 ```
 
-RFC-001 §09 node for node, with the span kinds Phoenix reads an agent run from,
-and the root carrying `session.id`, `chip_chat.demo.id`, `chip_chat.tokens.total`
-and the OpenInference `input.value` / `output.value`. Each turn is **one** trace,
-which is the thing `make trace-boundary` exists to catch and the thing every
-trajectory and grounding number depends on.
+RFC-001 §09, with the span kinds Phoenix reads an agent run from — and those
+kinds come from the OpenInference attributes `otel/` sets rather than from
+anything Phoenix inferred. The root carries `session.id`, `chip_chat.demo.id`,
+`chip_chat.tokens.total`, `chip_chat.persona.id`, `chip_chat.prompt.version` and
+the OpenInference `input.value` / `output.value`. Each turn is **one** trace,
+which is what `make trace-boundary` exists to catch and what every trajectory and
+grounding number depends on.
 
 ### Application Insights, still receiving the same trees
 
+| trace id | spans in Phoenix | spans in App Insights |
+| --- | ---: | ---: |
+| `dc1fd3f1e4659072ddb943fdcdf7cef2` | 12 | 12 |
+| `b228f67b48c9d55fa1f3ddc06990526c` | 13 | 13 |
+| `445ff6a52afd00b65a54315d1d4da08c` | 9 | 9 |
+| `51a8925fa5de9b79be98e02b60b41ec0` | 9 | 9 |
+
 ```console
 $ az monitor app-insights query --app appi-chip-chat -g rg-chip-chat \
-    --analytics-query "union dependencies, requests | where timestamp > ago(60m)
+    --analytics-query "union dependencies, requests | where timestamp > ago(45m)
                        | summarize spans=count() by operation_Id"
-f0b40401375a88b3b29f1af95021ace4   14
-cf24f787fe124a1c37edbf2093d02c0c   10
-fb1053f97561cfb4632b15428892ceea   10
 ```
 
-The **same three trace ids** and the **same three span counts** Phoenix returned
-(14, 10, 10). This is the fan-out asserted end to end rather than in a unit test:
-one tracer provider, two exporters, identical span ids in both backends. Losing
-App Insights would have taken the latency and cost measurements with it, and it
-was not lost.
+Same trace ids, same counts, both backends. This is the fan-out asserted end to
+end on production traffic rather than in a unit test: one tracer provider, two
+exporters, the same spans in both. Losing App Insights would have taken the
+latency and cost measurements with it — and, since *Persistence*, the archive as
+well. It was not lost.
 
 ### Traces do not survive a restart, and that was found rather than assumed
 
@@ -422,78 +427,135 @@ either (`DeletePending`, *"marked for deletion by an SMB client"*). The full
 sequence is under *Persistence* above; the storage account has been removed and
 the working directory is container-local.
 
-### A monitor firing on a real trace
+### Monitors firing on real traces
 
-The scheduled job, run against the twenty minutes of traffic above:
+The scheduled job, run against the last twenty minutes of production traffic:
 
 ```
-3 turn(s), 3 judged, 0 unreadable
-  [dashboard] latency_or_cost_breach f0b40401…: the turn took 23127 ms against a 6000 ms target
-  [dashboard] latency_or_cost_breach fb1053f9…: the turn took 11824 ms against a 6000 ms target
-  [ticket]    ungrounded_menu_claim_judged cf24f787…: the judge found a claim the turn's
-              2 retrieved passage(s) do not support
-  [dashboard] refusal_where_the_corpus_answered cf24f787…: the reply declined while holding
-              2 retrieved passage(s)
-  [dashboard] latency_or_cost_breach cf24f787…: the turn took 52641 ms against a 6000 ms target
-budget: Ceiling 2,000,000 tokens/day. At 20% sampling and 1,057 tokens per judged turn,
-        500 turns cost the judges 105,700 tokens — 5.3% of the day's ceiling.
+10 turn(s), 4 judged, 0 unreadable
+sampling: {'rate': 3, 'dietary': 1, 'flagged': 0, 'ungrounded': 0,
+           'not_sampled': 6, 'unreadable': 0}
+  [ticket]    ungrounded_menu_claim_judged 445ff6a5…: the judge found a claim the turn's
+              0 retrieved passage(s) do not support
+  [ticket]    ungrounded_menu_claim_judged b228f67b…: (the same, on another turn)
+  [ticket]    ungrounded_menu_claim_judged 51a8925f…: (and another)
+  [dashboard] refusal_where_the_corpus_answered dc1fd3f1…: the reply declined while holding
+              5 retrieved passage(s); a system that hedges everything scores beautifully
+  [dashboard] latency_or_cost_breach ×10: 13.3 s, 19.7 s, 24.3 s, 24.6 s, 30.9 s,
+              33.4 s, 42.1 s, 47.4 s, 64.6 s, 66.0 s — all against a 6,000 ms target
+budget: Ceiling 2,000,000 tokens/day. At 20% sampling and 959 tokens per judged turn,
+        500 turns cost the judges 95,900 tokens — 4.8% of the day's ceiling.
 ```
 
-Three findings in that output are worth more than the fact that it ran.
+Four things in that output are worth more than the fact that it ran.
+`'flagged': 0` is one of them, and it is there because of the third section below.
 
 ---
 
-## Three things the first live run found
+## Four things the first live runs found
 
 ### The over-refusal monitor caught the thing nobody predicted
 
 #76's demo criterion is *"at least one monitor has caught something that was not
-predicted"*, and this is it. The third turn asked how many calories are in the
-steak burrito. There is no steak burrito on the published menu, so the model
-declined — **while holding two retrieved passages**, and while volunteering the
-Barbacoa Burrito's calorie count from one of them. `refusal_where_the_corpus_
-answered` fired, and so did `ungrounded_menu_claim_judged` on the same trace.
+predicted"*, and this is it — twice, on two separate runs.
 
-That is not a monitor confirming a fixture. Nobody wrote that question, the
+The first was a turn asking how many calories are in the steak burrito. There is
+no steak burrito on the published menu, so the model declined — **while holding
+two retrieved passages**, and while volunteering the Barbacoa Burrito's calorie
+count from one of them. `refusal_where_the_corpus_answered` fired, and
+`ungrounded_menu_claim_judged` fired on the same trace. The second, on the run
+quoted above, was `dc1fd3f1…`: a reply that declined **while holding five
+retrieved passages**.
+
+That is not a monitor confirming a fixture. Nobody wrote those questions, the
 condition arrived out of a real deployment answering a real request, and the
-monitor found it within fifteen minutes of the turn happening. It is also the
-same shape `eval/grounding/BASELINE.md` records four of offline — which is the
-comparison the online loop was built to make possible.
+monitor found it within fifteen minutes of the turn happening. It is the same
+shape `eval/grounding/BASELINE.md` records four of offline — which is exactly the
+comparison the online loop was built to make possible, and which no batch of
+questions somebody wrote down could have produced.
 
 ### Every turn breaches the latency target, by a lot
 
-11.8 s, 23.1 s and 52.6 s against a 6,000 ms target. Not a tail: **all three**.
+Ten turns, ten breaches: 13.3, 19.7, 24.3, 24.6, 30.9, 33.4, 42.1, 47.4, 64.6 and
+66.0 seconds against a 6,000 ms target. Not a tail — **all of them**, by between
+two and eleven times.
+
 The monitor is doing exactly its job and the finding belongs to the product
-rather than to observability — but it is worth saying plainly, because the
-latency target in `chip_chat.eval.online.monitors.LATENCY_CEILING_MS` is PRD
-§05's, and the deployed app is currently between two and nine times over it on
-every turn served.
+rather than to observability, but it is worth saying plainly: the target in
+`chip_chat.eval.online.monitors.LATENCY_CEILING_MS` is PRD §05's, and the
+deployed app does not meet it on any turn. Some of those seconds are a model
+under rate-limit pressure from four agents sharing one 10K-TPM `gpt-5-mini`
+deployment, which a quiet day would not have; that is a reason to re-measure
+before acting, not a reason to disbelieve the monitor.
+
+### Three ungrounded-claim tickets on turns that retrieved nothing
+
+`ungrounded_menu_claim_judged` fired on three traces whose retrieved-passage
+count was **zero** — the knowledge lane reports `not_wired` on the currently
+deployed image, so the model answered menu questions from its own weights and the
+judge said so. Whether that is the lane's problem or the prompt's is somebody
+else's ticket. What it demonstrates here is the loop working on the failure #76
+puts first, on real traffic, without anybody constructing the condition.
 
 ### The 20% sampling rate had been switched off by accident
 
-This one was a bug and is fixed. `SamplingPolicy` judges every turn *a
-deterministic monitor already fired on* — a good rule, written on the assumption
-that deterministic alerts are rare. In production the latency monitor fires on
-**every** turn, so "judge anything that fired" became "judge everything": the
-first run judged 3 of 3, at a realised rate of 100% against a policy of 20%, and
-the budget line printed 5.3% of the daily ceiling while the loop was on course to
-spend five times that.
+This one was a bug and is fixed, and it is the sharpest argument in this document
+for why online evals are not the same thing as offline ones.
+
+`SamplingPolicy` judges every turn *a deterministic monitor already fired on* — a
+good rule, written on the assumption that deterministic alerts are rare. In
+production the latency monitor fires on **every** turn, so "judge anything that
+fired" became "judge everything". The first run judged 3 of 3, a realised rate of
+100% against a policy of 20%, and the budget line printed 5.3% of the daily
+ceiling while the loop was on course to spend five times that.
 
 The fix is `Monitor.escalates`, false on `latency_or_cost_breach` alone. It is a
 narrowing with an argument rather than a threshold raised until the noise
 stopped: the judge answers exactly two questions — was this claim supported by
 what the turn retrieved, and did the reply decline — and neither is a thing you
 learn about a slow turn. The breach still fires and still routes to the
-dashboard, where it means something as a rate. `eval/tests/test_online_sampling.py::test_a_slow_turn_alone_does_not_buy_a_judge`
-is the regression.
+dashboard, where it means something as a rate.
+`eval/tests/test_online_sampling.py::test_a_slow_turn_alone_does_not_buy_a_judge`
+is the regression, and the run above shows it holding: `'flagged': 0`,
+`'not_sampled': 6`, four judged out of ten.
 
-**This is the argument for online evals in one paragraph.** The policy was
-reasoned about carefully, documented at length, unit tested, and wrong in a way
-that only fifteen minutes of real traffic could show — because the thing that
-broke it was a property of the deployment (the app is slow) rather than of the
-code.
+**The policy was reasoned about carefully, documented at length, unit tested, and
+wrong** — in a way only real traffic could show, because the thing that broke it
+was a property of the deployment rather than of the code. That is the whole case
+for PRD §12 putting online evals before the URL is shared rather than after.
 
 ---
+
+---
+
+## A hazard this work found the hard way
+
+**`terraform apply -target=azurerm_container_app.web` deletes every environment
+variable and every Container Apps secret that was set outside Terraform.** It is
+not a Phoenix problem and it will bite the next person regardless of what they
+are changing, so it is written here because here is where it was found.
+
+The Container App's `template` and `configuration.secrets` are wholly owned by
+the resource. `lifecycle.ignore_changes` covers the *image* and the revision
+suffix and nothing else — so an `az containerapp update --set-env-vars` or an
+`az containerapp secret set` made between applies is invisible to the plan and
+gone after it. During this work, one `terraform apply` on the web app removed
+eight `SNOWFLAKE_*` entries and the `capp-ca-chip-chat-web` secret that another
+piece of work had set imperatively, and the account and personalization lanes
+went down with them. They were restored from
+`az containerapp revision show --revision <previous>` plus the Key Vault entry
+`snowflake-app-private-key`, and `/healthz/lanes` reported `up` again — but the
+window was minutes and nothing warned.
+
+Two consequences worth acting on:
+
+- **Anything the deployed app needs belongs in `compute.tf`.** An environment
+  variable that only exists because somebody ran an `az` command is a variable
+  with a half-life of one `terraform apply`.
+- **Read the plan for `azurerm_container_app.web` before applying it**, and
+  specifically read the `env` block rather than skimming the summary. The plan
+  renders env changes as a confusing sequence of renames because the list is
+  ordered, and a removal at the end looks like a rename in the middle.
 
 ## What this record does not decide
 

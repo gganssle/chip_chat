@@ -1,10 +1,31 @@
 # Repointing the exporter at Arize AX
 
-**Issue:** [#78](https://github.com/gganssle/chip_chat/issues/78) · **Written:** 27 August 2026
+**Issue:** [#78](https://github.com/gganssle/chip_chat/issues/78) · **Written:** 27 August 2026 · **Superseded in part:** 28 August 2026
 **Decision record:** [`decisions/observability-backend.md`](decisions/observability-backend.md)
+**Overtaken by:** [`decisions/hosted-phoenix.md`](decisions/hosted-phoenix.md)
 **Depends on:** [`decisions/foundry-agent-shape.md`](decisions/foundry-agent-shape.md) (D8, and why the agent tier costs a version)
 
 ---
+
+> ## The exporter was repointed, and not at Arize AX
+>
+> **28 August 2026.** AX was never bought. AX Free is \$0 but it is not free of a
+> *signup* — an account at arize.com with an email address, a password and a
+> Terms of Service acceptance — and the repository owner's instruction is free
+> tier only with no third-party account created on their behalf. The exporter now
+> points at a **self-hosted Phoenix in `cae-chip-chat`**, PRD §12's launch
+> criterion is met, and [`decisions/hosted-phoenix.md`](decisions/hosted-phoenix.md)
+> is the record of that deviation including what is lost by it.
+>
+> **This document is still live and still correct.** Everything in it is the
+> procedure for the day AX *is* bought, and one thing in it got stronger rather
+> than weaker: the claim that switching backends is configuration has now been
+> cashed against a deployed backend receiving production traffic, not only
+> against a test. `var.otlp_endpoint` survives as the override that would make
+> the switch below, and nothing was deleted to make room for Phoenix.
+>
+> Read the two rows marked **overtaken** in the table, and then read the rest as
+> written.
 
 ## Status, stated first because it is the thing to know
 
@@ -21,12 +42,12 @@ What *is* established, and can be read without an AX account:
 
 | Claim | Established by | Verdict |
 | --- | --- | --- |
-| No instrumentation code changes | `otel/tests/test_export_configuration.py`, and the empty diff below | **proved** |
-| The switch is expressed entirely as configuration | the variable table and the version diff below | **proved** |
+| No instrumentation code changes | `otel/tests/test_export_configuration.py`, and the empty diff below — **and now a deployed repoint that touched no line of `otel/`** | **proved twice** |
+| The switch is expressed entirely as configuration | the variable table below, and one env entry in `compute.tf` on the live app | **proved twice** |
 | The agent side is a new version whose only diff is those variables | `make agent-version`, rendered twice, diffed | **proved** |
-| App Insights export is unchanged and working throughout | `test_both_backends_are_configured_from_one_instrumentation`, and the live container app's environment | **proved** |
-| AX receives complete span trees identical in shape to Phoenix's | — | **blocked on the purchase** |
-| AX cost at observed traffic added to the cost dashboard | the modelling is in the decision record; the observation is not | **blocked on the purchase** |
+| App Insights export is unchanged and working throughout | `test_both_backends_are_configured_from_one_instrumentation`, and — since 28 August — the same three trace ids with the same three span counts in App Insights *and* in the OTLP backend | **proved end to end** |
+| AX receives complete span trees identical in shape to Phoenix's | — | **overtaken**: Phoenix receives them, in `cae-chip-chat`; AX still unverified |
+| AX cost at observed traffic added to the cost dashboard | the modelling is in the decision record; the observation is not | **overtaken**: the hosted backend's cost is modelled in `decisions/hosted-phoenix.md` |
 
 ---
 
@@ -72,9 +93,13 @@ There is no `if backend == …`, and moving from Phoenix to AX changes the value
 +otlp_endpoint = "https://otlp.arize.com/v1"
 ```
 
-`infra/terraform/compute.tf` already carries this through: `var.otlp_endpoint`, when
-non-empty, becomes `OTEL_EXPORTER_OTLP_ENDPOINT` in `local.web_env`, which is injected
-into the Container App. `terraform apply` rolls a new revision.
+`infra/terraform/compute.tf` already carries this through, and it still does after
+the Phoenix work: `local.otlp_endpoint` is `var.otlp_endpoint` when that is
+non-empty and the internal Phoenix address otherwise, and it becomes
+`OTEL_EXPORTER_OTLP_ENDPOINT` in `local.web_env`, which is injected into the
+Container App. `terraform apply` rolls a new revision. **Empty no longer means
+"nowhere"; it means "the Phoenix in this environment", and setting this variable
+is still the whole of the switch.**
 
 **One gap, and #78 asks for it to be written down rather than quietly patched.** There
 is no Terraform path for `OTEL_EXPORTER_OTLP_HEADERS`, and AX needs `api_key` and

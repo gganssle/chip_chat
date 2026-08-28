@@ -167,7 +167,9 @@ def test_fail_on_turns_a_severe_alert_into_an_exit_status(
     from chip_chat.eval.online.testing import drills
 
     disclosure = next(
-        drill.turn for drill in drills() if drill.monitor.name == "cross_visitor_disclosure"
+        drill.turn
+        for drill in drills()
+        if drill.monitor.name == "cross_visitor_disclosure"
     )
     monkeypatch.setattr(entry, "read_live_turns", lambda *a, **k: (disclosure,))
 
@@ -183,7 +185,9 @@ def test_without_fail_on_a_run_that_found_something_still_exits_zero(
     from chip_chat.eval.online.testing import drills
 
     disclosure = next(
-        drill.turn for drill in drills() if drill.monitor.name == "cross_visitor_disclosure"
+        drill.turn
+        for drill in drills()
+        if drill.monitor.name == "cross_visitor_disclosure"
     )
     monkeypatch.setattr(entry, "read_live_turns", lambda *a, **k: (disclosure,))
 
