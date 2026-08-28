@@ -515,11 +515,21 @@ variable "model_deployments" {
     # the hosted agent runtime (docs/decisions/foundry-agent-shape.md) needs.
     # Cheapest input token of anything with quota here, and input is where an
     # agent loop spends: every tool result is replayed into the next request.
+    #
+    # Capacity 200 rather than the default 10, and the reason is chip-901. Ten is
+    # ten thousand tokens a minute, and a reasoning model that replays every tool
+    # result into every step exceeds that with two visitors in flight: the three
+    # live write-gate runs on 28 August 2026 lost eight turns of thirty-four to
+    # `openai.RateLimitError`, which the visitor reads as "Something went wrong on
+    # my side just then" and a red-team probe reads as unscored. This is a
+    # throughput allocation out of a subscription limit of 500, not a purchase --
+    # GlobalStandard bills per token either way, so the raise costs nothing that
+    # is not spent, and it buys the headroom to be wrong about concurrency.
     "gpt-5-mini" = {
       model_name    = "gpt-5-mini"
       model_version = "2025-08-07"
       sku_name      = "GlobalStandard"
-      capacity      = 10
+      capacity      = 200
     }
 
     # The photo lane's model. Non-reasoning on purpose: describing a burrito bowl

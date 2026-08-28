@@ -224,11 +224,25 @@ this one bounds the *request*, before anything is looked up."""
 _STREAM_MEDIA_TYPE = "application/x-ndjson"
 """One JSON object per line. See :func:`_frames`."""
 
+_OBJECT_MEDIA_TYPE = "application/json"
+"""One JSON object, sent incrementally. See :func:`_object`."""
+
 _HEARTBEAT_SECONDS = 10.0
-"""How long a streamed turn may go silent before it says it is still there.
+"""How long a turn may go silent before its response says it is still there.
 
 Well inside Container Apps ingress' sixty-second idle timeout, and far enough
 inside it that a slow network between the two does not eat the margin."""
+
+_OBJECT_HEARTBEAT = b" "
+"""What the object shape sends while its turn is still running.
+
+A space, and the reason it is a space rather than a frame is RFC 8259 §2:
+whitespace is insignificant *before* a JSON value, so a document preceded by any
+number of them decodes to exactly the object it would have decoded to on its own.
+``json.loads``, ``response.json()``, ``jq`` and every other parser this route has
+ever been read by are unaffected, which is what lets the object shape be held
+open without becoming a different protocol that its callers would have to be
+taught. See :func:`_object`."""
 
 _ROBOTS = "User-agent: *\nDisallow: /\n"
 """The demo must never surface on the brand's own search terms."""
@@ -1050,6 +1064,17 @@ def create_app(service: Service | None = None) -> FastAPI:
         :class:`ChatReply` object, which is what a test, a curl and an eval
         harness want. Both are the same turn and the same fields -- see
         :func:`_frames`.
+
+        **Both shapes are sent incrementally, and for the object shape that is
+        the whole of chip-901's fix.** Container Apps ingress closes a response
+        that has sent nothing for sixty seconds; a fifth of this app's turns take
+        longer than that. The streamed shape survived it from the day it was
+        written because a ``waiting`` frame keeps the response busy, and the
+        object shape did not, so every caller that was not the browser -- the
+        write-gate red team, ``curl``, anything holding this route as an API --
+        lost one turn in five to ``RemoteDisconnected``. It now goes out the same
+        way: whitespace while the turn runs, then the object. See
+        :func:`_held_open`.
         """
         session_id = _session_id(request)
         source_address = _source_address(request)
@@ -1064,36 +1089,21 @@ def create_app(service: Service | None = None) -> FastAPI:
             lanes=resolved.gate.lanes,
         )
         message = _with_photo(resolved, session_id, body)
-        response: Response
-        if _wants_stream(request):
-            response = StreamingResponse(
-                _stream(resolved, conversation, body, message, source_address, admitted),
-                media_type=_STREAM_MEDIA_TYPE,
-            )
-        else:
-            # Off the event loop, and this is not a nicety. A turn is a model
-            # call and several seconds of blocking work; run in the handler it
-            # would hold the only loop this process has, and the first thing
-            # that stops being answered is `/healthz` -- so Container Apps
-            # concludes the container is dead and restarts it *in the middle of
-            # the visitor's turn*. That is not a hypothetical: it is what the
-            # first deployment of this route did to every conversation.
-            # `_run_turn`'s own docstring says it is synchronous on the strength
-            # of FastAPI putting a `def` handler on a worker thread -- but this
-            # handler is `async def`, because it has to read the request before
-            # deciding which shape to answer in, so the threadpool has to be
-            # asked for explicitly. The streaming branch above gets it for free:
-            # Starlette iterates a synchronous generator on a worker thread.
-            payload = await run_in_threadpool(
-                _run_turn,
-                resolved,
-                conversation,
-                body,
-                message,
-                source_address,
-                admitted,
-            )
-            response = JSONResponse(payload.model_dump())
+        # Off the event loop, and this is not a nicety. A turn is a model call
+        # and several seconds of blocking work; run in the handler it would hold
+        # the only loop this process has, and the first thing that stops being
+        # answered is `/healthz` -- so Container Apps concludes the container is
+        # dead and restarts it *in the middle of the visitor's turn*. That is not
+        # a hypothetical: it is what the first deployment of this route did to
+        # every conversation. Both branches below hand the work to a
+        # `StreamingResponse` over a synchronous generator, which Starlette
+        # iterates on a worker thread, so neither shape can block the loop.
+        streaming = _wants_stream(request)
+        shape = _stream if streaming else _object
+        response: Response = StreamingResponse(
+            shape(resolved, conversation, body, message, source_address, admitted),
+            media_type=_STREAM_MEDIA_TYPE if streaming else _OBJECT_MEDIA_TYPE,
+        )
         _set_session_cookie(response, session_id, secure=_is_https(request))
         return response
 
@@ -1412,14 +1422,104 @@ def _stream(
     body of :func:`_chunks` and nothing else.
     """
     yield _frame({"type": "open"})
-    # A heartbeat, and it is not cosmetic. Container Apps ingress closes a
-    # response that has sent nothing for sixty seconds, and a turn against a
-    # rate-limited reasoning deployment routinely takes longer than that: the
-    # JSON shape of this route dies at exactly 60.19 s with the answer already
-    # written, which is the worst possible failure -- the visitor is charged for
-    # a turn they never see. So the turn runs on its own thread and this
-    # generator keeps the response alive while it does. See
-    # docs/deployment.md 3.12.
+    for held in _held_open(
+        service,
+        conversation,
+        body,
+        message,
+        source_address,
+        admitted,
+        idle=_frame({"type": "waiting"}),
+    ):
+        if isinstance(held, bytes):
+            yield held
+        else:
+            yield from _frames(held)
+
+
+def _object(
+    service: Service,
+    conversation: Conversation,
+    body: ChatRequest,
+    message: str,
+    source_address: str,
+    admitted: VisitorSession | None,
+) -> Iterator[bytes]:
+    """Yield one turn as one JSON object, preceded by however much whitespace.
+
+    The shape a test, a ``curl`` and the adversarial write-gate harness get, and
+    -- until chip-901 -- the shape that could not survive a slow turn. It is one
+    :class:`ChatReply` serialised exactly as :class:`~fastapi.responses.JSONResponse`
+    would have serialised it, with :data:`_OBJECT_HEARTBEAT` written every
+    :data:`_HEARTBEAT_SECONDS` while the turn runs so that ingress never sees the
+    response go idle.
+
+    Two things are given up for that and both are worth saying out loud. The
+    response is chunked rather than carrying a ``Content-Length``, because the
+    length is not known when the headers go out; nothing in this tree reads that
+    header, and a caller that did was already reading it off a response that
+    could be truncated at sixty seconds. And a failure that occurs *after* the
+    first heartbeat cannot become a 4xx or 5xx status, because the status line
+    has already been sent -- which costs nothing here, since :func:`_run_turn`
+    answers every failure with a 200 and a reply the visitor reads rather than
+    with a status code.
+    """
+    for held in _held_open(
+        service,
+        conversation,
+        body,
+        message,
+        source_address,
+        admitted,
+        idle=_OBJECT_HEARTBEAT,
+    ):
+        if isinstance(held, bytes):
+            yield held
+        else:
+            # The arguments Starlette's own `JSONResponse` renders with, spelled
+            # out rather than inherited, so that the bytes on the wire did not
+            # change when the response stopped being a `JSONResponse`. A reply
+            # with an accent in it is still one UTF-8 document, not an escape.
+            yield json.dumps(
+                held.model_dump(),
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+
+
+def _held_open(
+    service: Service,
+    conversation: Conversation,
+    body: ChatRequest,
+    message: str,
+    source_address: str,
+    admitted: VisitorSession | None,
+    *,
+    idle: bytes,
+) -> Iterator[bytes | ChatReply]:
+    """Run one turn on a worker thread, yielding ``idle`` until it finishes.
+
+    The heartbeat, and it is not cosmetic. Container Apps ingress closes a
+    response that has sent nothing for sixty seconds, and a turn against a
+    rate-limited reasoning deployment routinely takes longer than that: the
+    unheld shape of this route dies at exactly 60.19 s with the answer already
+    written, which is the worst possible failure -- the visitor is charged for a
+    turn they never see. Measured on the deployment on 28 August 2026, a fifth of
+    turns were over the line: eight of thirty-four, p95 72.8 s, longest 95.2 s,
+    and every one of the eight is a turn the container's access log never
+    recorded a response for while ``/healthz`` went on answering beside it. See
+    docs/deployment.md §3.12 and §3.13.
+
+    Yields ``idle`` -- bytes -- for each heartbeat, and finally the
+    :class:`ChatReply` itself, leaving the caller to decide how a reply is
+    rendered in its own shape. That split is what lets the frames and the object
+    share one timer rather than two implementations of it.
+
+    Args:
+        idle: What to write while the turn is still running. A ``waiting`` frame
+            for the streamed shape, a space for the object shape.
+    """
     with ThreadPoolExecutor(max_workers=1) as pool:
         pending = pool.submit(
             _run_turn, service, conversation, body, message, source_address, admitted
@@ -1427,10 +1527,11 @@ def _stream(
         while True:
             try:
                 payload = pending.result(timeout=_HEARTBEAT_SECONDS)
-                break
             except FutureTimeout:
-                yield _frame({"type": "waiting"})
-    yield from _frames(payload)
+                yield idle
+                continue
+            yield payload
+            return
 
 
 def _frames(payload: ChatReply) -> Iterator[bytes]:
