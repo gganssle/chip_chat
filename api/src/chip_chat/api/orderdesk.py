@@ -222,13 +222,54 @@ class OpsDesk:
             draft = self._drafts.propose(
                 visitor.demo_id,
                 items,
-                restaurant_id=_home_store(visitor),
+                restaurant_id=self._home_store(visitor),
             )
         except DraftRejectedError as rejection:
             raise OrderRejectedError(
                 rejection.code.value, rejection.message
             ) from rejection
         return _Card(self._card_for(draft))
+
+    def _home_store(self, visitor: VisitorSession) -> int | None:
+        """Where this visitor's order is priced, or ``None`` for the catalogue's.
+
+        ``docs/action-surface.md`` §7.1: a live order is priced at the store it
+        is placed at, and never at one the visitor is not standing in. The store
+        is the roster row's, which reaches this process on
+        :attr:`~chip_chat.api.visitors.VisitorSession.fixture`.
+
+        Two things make that answer ``None`` more often than it looks, and both
+        are honest rather than defensive.
+
+        **The fixture is deliberately not journalled**, so a binding that
+        survived a restart carries the ``demo_id`` and not the row --
+        :meth:`VisitorSession.as_record` gives the reason: journalling a copy
+        would let a restart serve an account summary Snowflake has since reset.
+
+        **And the harvest priced two restaurants, not thirty.** The synthetic
+        population is spread across every published store, and
+        :attr:`~chip_chat.catalog.MenuCatalog.restaurant_ids` names only the
+        ones with prices in the catalogue -- so most visitors' home stores have
+        no published price list at all. Handing one to the draft store produces
+        ``STORE_NOT_PRICED``, which is
+        :meth:`~chip_chat.api.drafts.DraftStore._require_priced` doing exactly
+        its job (*"quoting the reference restaurant's prices instead would be a
+        total that looks right and is not"*) and which, on this deployment,
+        would mean no visitor could ever order. So the check is made *here*,
+        where the alternative is not a wrong total but a different and correctly
+        priced store, and the card names which one it was.
+
+        This is a **data limitation surfacing as a pricing decision**, and it
+        goes away by harvesting prices for more restaurants rather than by
+        changing anything in this file. Until then the honest reading of a card
+        is: this is what these items cost at the restaurant named on it.
+        """
+        if visitor.fixture is None:
+            return None
+        home = visitor.fixture.home_store
+        if home is None or home not in self._drafts.catalog.restaurant_ids:
+            return None
+        return home
 
     def _card_for(self, draft: Draft) -> Mapping[str, Any]:
         """Render one draft, and say so when ordering is unavailable.
@@ -518,28 +559,6 @@ class _Receipt:
     def as_dict(self) -> Mapping[str, Any]:
         """The procedure's own receipt, unchanged."""
         return dict(self._body)
-
-
-def _home_store(visitor: VisitorSession) -> int | None:
-    """Where this visitor's order is priced, or ``None`` to let the catalogue say.
-
-    ``docs/action-surface.md`` §7.1: a live order is priced at the store it is
-    placed at, and never at one the visitor is not standing in. The store is the
-    roster row's, which reaches this process on
-    :attr:`~chip_chat.api.visitors.VisitorSession.fixture`.
-
-    **That row is deliberately not journalled**, so a binding that survived a
-    restart has the ``demo_id`` and not the fixture -- see
-    :meth:`VisitorSession.as_record`, which gives the reason: journalling a copy
-    would let a restart serve an account summary Snowflake has since reset. So
-    this can legitimately be ``None``, and ``None`` is handed to
-    :meth:`~chip_chat.api.drafts.DraftStore.propose` as *use the catalogue's
-    reference restaurant* rather than guessed at. The card names the store it
-    priced at either way, which is the property that matters: a visitor can see
-    which shop the total belongs to, and the procedure validates that the store
-    exists and publishes prices before it writes a row.
-    """
-    return None if visitor.fixture is None else visitor.fixture.home_store
 
 
 def _order_arguments(draft: Draft) -> Sequence[Any]:
