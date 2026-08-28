@@ -384,7 +384,7 @@ explicit that a lane may fail and the conversation may not fail with it, so
 Container Apps stays pointed at `/healthz`, which answers for the process and
 nothing else.
 
-Asked of the live deployment on 27 August 2026:
+Asked of the live deployment on 27 August 2026, **before** `cc-lpy4`:
 
 ```json
 {"healthy": true, "down": [], "stale": [],
@@ -396,10 +396,36 @@ Asked of the live deployment on 27 August 2026:
             "detail": "no ops API configured; drafts are proposed and nothing is written"}]}
 ```
 
-`healthy: true` with five `not_wired` lanes is the correct answer and not a
-contradiction: nothing is broken, and nothing is connected. `build_service` is
-called with `NO_LANES` on every deployment, deliberately and at length in its
-own docstring — see §9 below for what that costs a visitor.
+`healthy: true` with five `not_wired` lanes was the correct answer and not a
+contradiction: nothing was broken, and nothing was connected. `build_service` was
+called with `NO_LANES` and `connect=None` on every deployment, deliberately and at
+length in its own docstring, because nothing in the workspace implemented
+`pool.py`'s `SessionConnection`.
+
+The same request against revision `0000023`, on the same day:
+
+```json
+{"healthy": true, "down": [], "stale": [],
+ "lanes": [{"lane": "knowledge",       "state": "not_wired", ...},
+           {"lane": "account",         "state": "up",
+            "tools": ["ask_account_question", "get_points_balance"]},
+           {"lane": "personalization", "state": "up",
+            "tools": ["get_usual_order", "get_recommendations"],
+            "derived_at": "2026-08-27T18:54:51.019911+00:00", "stale": false},
+           {"lane": "photo",           "state": "not_wired", ...},
+           {"lane": "action",          "state": "not_wired", ...}]}
+```
+
+Two lanes moved, and they moved together because they are one connection.
+`up` here is not a claim about configuration — the probe checks a connection out
+of the pool by session id, runs the account lane's fixed points read and the
+habit-mart read, and reports what came back. `derived_at` with `stale: false` is
+the nightly publish's timestamp, read from the mart on that checkout.
+
+`healthy: true` still sits beside three `not_wired` lanes, and it is still the
+right answer: knowledge is `cc-e1sr`, photo is `cc-mpd`, and the action lane is
+`not_wired` because no ops API is configured on this deployment rather than
+because one is down.
 
 ## 9. The one thing that is still true and worth saying
 

@@ -195,7 +195,12 @@ an identifier, so anything you say about their points, their spending, their
 history or their usual order comes from a tool result on this turn and from
 nowhere else. Never state a store, a balance or an order from memory, from this
 message or from an earlier turn. Where a tool has not given you a figure, leave
-it out -- do not announce that it is missing."""
+it out -- do not announce that it is missing.
+
+"Say what the visitor is holding" is already done and it was not done by you.
+The application shows the visitor a sentence describing their account before
+your first reply is written, so do not open by naming their persona, their store
+or their balance again. Answer what they asked."""
 """What is true once #43's policies and #44's pool are actually in the path.
 
 The second paragraph is the load-bearing one and it is a *consequence* of the
@@ -205,12 +210,30 @@ it prevents is the softer failure -- a model that has been told a store in a
 system message repeating it beside a balance a tool returned, which is one
 sentence containing two visitors.
 
-The last sentence is there because an earlier draft did not have it. Listing
+Its last sentence is there because an earlier draft did not have it. Listing
 what the tools cover ("their home store, their points balance, ...") made the
 model report the ones no tool had answered on that turn, and the live reply
 opened *"You're signed into a persona with no home store set"* -- accurate,
 obedient and a worse first impression than the sentence it replaced. A model
 told to prefer tool results should be told to say less, not to narrate the gap.
+
+**The third paragraph overrides an instruction in the versioned prompt, and does
+it here rather than there on purpose.** ``prompts/system-v1.md`` says *"Your
+first message names the persona they were given -- home store, points balance,
+and a characteristic order"*, which was written for a tier where the model was
+the only thing that could say it. It is not any more:
+:func:`chip_chat.web.persona.opening_message` writes that sentence from the
+assigned fixture and the visitor has read it before a model is called. Obeying
+the prompt therefore produces the same sentence twice, and on a wired deployment
+the second copy is assembled from tool results while the first was assembled
+from the roster -- which is how *"AL Town 1 Mall, 397 points on the card"* and
+*"1,363 points"* end up in one screen.
+
+Editing ``system-v1.md`` would be the tidier fix and it is the wrong file to
+reach for from here: the prompt is versioned, ``PROMPT_VERSION`` is recorded on
+every ``chat.turn``, and ``eval/`` holds baselines against it. This is a *fact
+about this deployment* -- the app writes the opening -- which is precisely what
+the runtime context is for, and it costs no version.
 """
 
 
