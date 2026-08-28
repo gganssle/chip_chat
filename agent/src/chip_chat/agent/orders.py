@@ -28,8 +28,11 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Any
 
+from chip_chat.agent.desk import ActionOutcome
 from chip_chat.agent.hardcoded import MENU, SIMULATION_NOTICE, STORE, MenuItem
+from chip_chat.otel import OpsAction
 
 __all__ = [
     "DEFAULT_DRAFT_TTL_SECONDS",
@@ -58,6 +61,7 @@ class RejectionCode:
     """
 
     ITEM_NOT_ORDERABLE = "ITEM_NOT_ORDERABLE"
+    ACTION_NOT_AVAILABLE = "ACTION_NOT_AVAILABLE"
     QUANTITY_EXCEEDS_MAX = "QUANTITY_EXCEEDS_MAX"
     DRAFT_NOT_FOUND = "DRAFT_NOT_FOUND"
     DRAFT_NOT_CONFIRMED = "DRAFT_NOT_CONFIRMED"
@@ -179,6 +183,58 @@ class OrderDesk:
         )
         self._lock = threading.Lock()
         self._drafts: dict[str, Draft] = {}
+
+    @property
+    def writes_here(self) -> bool:
+        """True: this desk *is* the write, so the agent emits ``ops.<action>``.
+
+        :mod:`chip_chat.agent.desk` gives the argument. The counterpart is the
+        deployed ops API, where the span is opened in the other process as a
+        child of the tool span this one is called inside.
+        """
+        return True
+
+    def offers_every_write(self) -> bool:
+        """False. Three hardcoded items are not an account to cancel against.
+
+        ``cancel_order``, ``redeem_points`` and ``update_preferences`` name rows
+        in ``CHIP_CHAT.ACCOUNTS`` -- an order, a published reward, a visitor's
+        stored preferences -- and there is no honest stand-in for any of them
+        here. A hardcoded redemption would be a points balance moving in a
+        fixture, reported to a visitor as their own, which is the plausible
+        number PRD A4 forbids in a different costume.
+        """
+        return False
+
+    def orderable_item_ids(self) -> tuple[str, ...]:
+        """The three ids ``propose_order``'s schema is narrowed to."""
+        return tuple(sorted(MENU))
+
+    def available(self) -> bool:
+        """True. An in-process dictionary is not a service that can be down."""
+        return True
+
+    def act(
+        self, session_id: str, action: OpsAction, arguments: Mapping[str, Any]
+    ) -> ActionOutcome:
+        """Refuse the three writes this desk has no rows for.
+
+        Unreachable on any deployment, because
+        :func:`chip_chat.agent.tools.offered_tools` asks
+        :meth:`offers_every_write` and does not offer a tool this desk would
+        only refuse. It exists so that the refusal is a typed rejection the
+        model could read rather than an ``AttributeError`` -- the same reason
+        :func:`chip_chat.agent.tools._not_implemented` exists one layer up.
+
+        Raises:
+            OrderRejectedError: Always.
+        """
+        del session_id, arguments
+        raise OrderRejectedError(
+            RejectionCode.ACTION_NOT_AVAILABLE,
+            f"{action.value} needs the ops API, and this deployment runs the "
+            "week-one order desk against three hardcoded items",
+        )
 
     def propose(self, session_id: str, items: Sequence[Mapping[str, object]]) -> Draft:
         """Mint a draft for ``items``, or refuse it.

@@ -364,6 +364,35 @@ class ConfirmationLedger:
             self._forget_locked(record)
             return record
 
+    def find(
+        self, demo_id: str, action: OpsAction, reference_id: str
+    ) -> Confirmation | None:
+        """Return this visitor's live record for one action and reference.
+
+        The non-raising twin of :meth:`claim`, and the reason it exists is the
+        two-call shape the three writes without a draft have: a tool that is
+        asked to redeem a reward has to find out whether there is already a
+        confirmed card for that reward *without* retiring one if there is not.
+        :meth:`claim` cannot answer that -- it raises, and it consumes -- so a
+        caller using it to ask the question would spend the record it was asking
+        about.
+
+        Returns:
+            The record, confirmed or not, or ``None`` where there is none. A
+            caller reads :attr:`Confirmation.confirmed` to tell the two apart,
+            and must still :meth:`claim` before writing: this method deliberately
+            does not retire anything, so it is not a gate and cannot be mistaken
+            for one.
+        """
+        with self._lock:
+            confirmation_id = self._by_reference.get((demo_id, action, reference_id))
+            if confirmation_id is None:
+                return None
+            try:
+                return self._live_locked(demo_id, confirmation_id)
+            except ConfirmationRejectedError:
+                return None
+
     def get(self, demo_id: str, confirmation_id: str) -> Confirmation | None:
         """Return a live record belonging to ``demo_id``, or ``None``.
 

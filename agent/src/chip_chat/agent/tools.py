@@ -62,13 +62,15 @@ handed a sentence it can say. A visitor asking about their points in the next
 breath is served by a lane that never heard about it.
 """
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from typing import Any, Final
 
+from chip_chat.agent.desk import ActionOutcome, Desk
 from chip_chat.agent.hardcoded import ACCOUNT, MENU, SIMULATION_NOTICE, search_menu
 from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.model import ToolInvocation, UnknownToolError
-from chip_chat.agent.orders import OrderDesk, OrderRejectedError
+from chip_chat.agent.orders import OrderRejectedError
 from chip_chat.agent.surface import ToolCallRejectedError, spec
 from chip_chat.otel import (
     ConfirmationState,
@@ -80,7 +82,7 @@ from chip_chat.otel import (
     retriever_search,
     tool_call,
 )
-from chip_chat.otel.spans import ToolRecorder
+from chip_chat.otel.spans import OpsRecorder, ToolRecorder
 from chip_chat.search.lane import KnowledgeLane
 from chip_chat.snowflake.lane import AccountLane, PersonalizationLane
 from chip_chat.vision.describe import DescribeError
@@ -89,6 +91,7 @@ from chip_chat.vision.matcher import Outcome, Resolution
 from chip_chat.vision.store import PHOTO_REF_ARGUMENT, BlobRef
 
 __all__ = [
+    "DESK_WRITES",
     "PHOTO_UNAVAILABLE_MESSAGE",
     "TOOLS",
     "TOOL_SCHEMAS",
@@ -119,39 +122,78 @@ and :func:`offered_tools` is what a call site should ask.
 """
 
 
-def _narrowed_to_the_hardcoded_menu(definition: dict[str, Any]) -> dict[str, Any]:
-    """Pin ``propose_order``'s item ids to the three items that exist here.
+DESK_WRITES: tuple[ToolName, ...] = (
+    ToolName.CANCEL_ORDER,
+    ToolName.REDEEM_POINTS,
+    ToolName.UPDATE_PREFERENCES,
+)
+"""The three write tools that are offered only when a desk can answer them.
+
+PRD T1 requires all four -- *place an order, cancel a pending order, redeem
+points, and update stated preferences* -- and for a long time this list was the
+distance between that sentence and the deployment. They are conditional for
+exactly the reason :data:`chip_chat.agent.lanes.CONDITIONAL_TOOLS` is: each names
+a row in ``CHIP_CHAT.ACCOUNTS`` that only the ops API can reach, there is no
+honest stand-in for a points balance moving, and a tool the model can see and
+nothing can answer is worse than an absent one.
+
+``place_order`` is deliberately **not** here. It is answerable by either desk --
+the week-one one simulates it against three hardcoded items and says so in the
+receipt's own notice -- so withdrawing it on a deployment without an ops API
+would take the confirmation gate off the only path a visitor has to it, which is
+the one thing the week-one slice was built to keep.
+"""
+
+
+def _narrowed_to_the_orderable_menu(
+    definition: dict[str, Any], item_ids: Sequence[str] | None
+) -> dict[str, Any]:
+    """Pin ``propose_order``'s item ids to what the desk can actually price.
 
     RFC-001 D3 says the model may describe food and may never name a SKU. The
     real enforcement is the deterministic matcher (#54) and the ops API's
-    catalogue check (#63); the second does not exist yet. What does exist is a
-    three-item draft store and a schema, so the vocabulary goes in the schema:
-    an item id that is not on this menu is not expressible.
+    catalogue check (#63). The schema narrowing is a third and cheaper layer: an
+    item id the desk cannot price is not expressible rather than merely
+    rejected.
 
-    The narrowing is the *slice's* and not the surface's, which is why it lives
-    here rather than in :mod:`chip_chat.agent.surface`. It is also why it is
-    unaffected by a knowledge lane being wired: retrieval over the real corpus
-    can name a real item long before :class:`~chip_chat.agent.orders.OrderDesk`
-    can price one, and widening the enum before then would let the model propose
-    an order the desk must reject. When the real catalogue reaches the desk, the
-    enum is generated from it and this is the function that does it.
+    The vocabulary comes from the **desk** rather than from this module, which
+    is the change ``cc-jqs`` had left as a sentence. It used to be pinned to the
+    three items in :data:`chip_chat.agent.hardcoded.MENU` with a note saying
+    *"when the real catalogue reaches the desk, the enum is generated from it and
+    this is the function that does it"*. The real catalogue has reached the desk
+    -- ``CHIP_CHAT.CATALOGUE.menu_items`` is ten published rows, small enough to
+    enumerate in a tool definition and large enough that pinning it to three
+    would now be the thing that breaks ordering, because ``get_usual_order``
+    answers off the real marts and names real ids the model could not then
+    propose.
+
+    Args:
+        definition: One tool definition, as the surface composed it.
+        item_ids: What the desk can price, or ``None`` to leave the schema open.
+
+    Returns:
+        The definition, narrowed where it is ``propose_order`` and there is a
+        vocabulary to narrow it to. The mapping is modified in place, which is
+        safe because :func:`_definition` builds a fresh one per call.
     """
-    if definition["function"]["name"] != ToolName.PROPOSE_ORDER.value:
+    if definition["function"]["name"] != ToolName.PROPOSE_ORDER.value or not item_ids:
         return definition
     line = definition["function"]["parameters"]["properties"]["items"]["items"]
     line["properties"]["item_id"] = {
         **line["properties"]["item_id"],
-        "enum": sorted(MENU),
+        "enum": sorted(item_ids),
     }
     return definition
 
 
-def _definition(name: ToolName) -> Mapping[str, Any]:
-    """Return one tool definition, narrowed where the slice narrows it."""
-    return _narrowed_to_the_hardcoded_menu(spec(name).as_tool_definition())
+def _definition(name: ToolName, item_ids: Sequence[str] | None) -> Mapping[str, Any]:
+    """Return one tool definition, narrowed to what the desk can price."""
+    return _narrowed_to_the_orderable_menu(spec(name).as_tool_definition(), item_ids)
 
 
-TOOL_SCHEMAS: tuple[Mapping[str, Any], ...] = tuple(_definition(name) for name in TOOLS)
+TOOL_SCHEMAS: tuple[Mapping[str, Any], ...] = tuple(
+    _definition(name, sorted(MENU)) for name in TOOLS
+)
 """The unconditional tool definitions, and what ``llm.completion`` records so
 Arize's tool-selection evals can compare choice against offer.
 
@@ -173,34 +215,51 @@ comes back as a tool *result* the model can read and act on, the span is marked
 failed, and the visitor gets asked a question rather than an error."""
 
 
-def offered_tools(lanes: Lanes = NO_LANES) -> tuple[ToolName, ...]:
+def offered_tools(
+    lanes: Lanes = NO_LANES, desk: Desk | None = None
+) -> tuple[ToolName, ...]:
     """The tools that can actually be answered, given what is wired.
 
     Args:
         lanes: The backing services this deployment has.
+        desk: The action lane. ``None`` and a desk that answers only
+            ``place_order`` are the same answer here, which is what keeps the
+            week-one slice's tool list byte-identical to what it was.
 
     Returns:
-        :data:`TOOLS`, plus whichever of
-        :data:`chip_chat.agent.lanes.CONDITIONAL_TOOLS` have a lane behind them.
+        :data:`TOOLS`, plus :data:`DESK_WRITES` where the desk can answer them,
+        plus whichever of :data:`chip_chat.agent.lanes.CONDITIONAL_TOOLS` have a
+        lane behind them.
+
+    The order is fixed and it matters: ``chip_chat.agent.loop.run_turn`` raises
+    :class:`~chip_chat.agent.threads.ToolRegistrationError` when the list a
+    conversation was opened with differs from the list a turn offers, and it
+    compares tuples. Every call site therefore has to pass both arguments or
+    neither -- and the failure is loud rather than a model politely declining a
+    lane it can in fact reach.
     """
-    return (*TOOLS, *lanes.conditional_tools())
+    writes = DESK_WRITES if desk is not None and desk.offers_every_write() else ()
+    return (*TOOLS, *writes, *lanes.conditional_tools())
 
 
-def offered_schemas(lanes: Lanes = NO_LANES) -> tuple[Mapping[str, Any], ...]:
+def offered_schemas(
+    lanes: Lanes = NO_LANES, desk: Desk | None = None
+) -> tuple[Mapping[str, Any], ...]:
     """The tool definitions to offer the model, aligned with :func:`offered_tools`.
 
     Derived from the surface for the same reason :data:`TOOL_SCHEMAS` is: the
     schema the model is shown and the schema its arguments are checked against
     have to be the same object.
     """
-    return tuple(_definition(name) for name in offered_tools(lanes))
+    item_ids = sorted(MENU) if desk is None else desk.orderable_item_ids()
+    return tuple(_definition(name, item_ids) for name in offered_tools(lanes, desk))
 
 
 def dispatch(
     invocation: ToolInvocation,
     *,
     session_id: str,
-    desk: OrderDesk,
+    desk: Desk,
     lanes: Lanes = NO_LANES,
     record_spend: Callable[[TokenUsage], None] | None = None,
 ) -> Mapping[str, Any]:
@@ -257,7 +316,7 @@ def _dispatch_inside_span(
     arguments: Mapping[str, Any],
     *,
     session_id: str,
-    desk: OrderDesk,
+    desk: Desk,
     lanes: Lanes,
     recorder: ToolRecorder,
     record_spend: Callable[[TokenUsage], None] | None = None,
@@ -271,11 +330,11 @@ def _dispatch_inside_span(
     property of the call path -- a model that emits ``demo_id`` gets a refusal
     it can read, and no tool body is ever offered the extra field.
     """
-    if tool not in offered_tools(lanes):
+    if tool not in offered_tools(lanes, desk):
         # Checked before the arguments are, because "that lane is not available
         # on this deployment" is a more useful thing to tell a model than "your
         # blob_ref is missing" for a tool that would not have run either way.
-        return _not_implemented(tool, lanes=lanes)
+        return _not_implemented(tool, lanes=lanes, desk=desk)
     try:
         bound = spec(tool).bind(arguments)
     except ToolCallRejectedError as rejection:
@@ -341,7 +400,7 @@ def _run(
     arguments: Mapping[str, Any],
     *,
     session_id: str,
-    desk: OrderDesk,
+    desk: Desk,
     lanes: Lanes,
 ) -> Mapping[str, Any] | PhotoMatch:
     """Body of one tool, inside its span.
@@ -374,15 +433,41 @@ def _run(
             return _propose_order(arguments.get("items"), session_id, desk)
         case ToolName.PLACE_ORDER:
             return _place_order(str(arguments.get("draft_id", "")), session_id, desk)
+        case ToolName.CANCEL_ORDER:
+            return _act(
+                OpsAction.CANCEL_ORDER,
+                str(arguments.get("order_id", "")),
+                {"order_id": arguments.get("order_id")},
+                session_id,
+                desk,
+            )
+        case ToolName.REDEEM_POINTS:
+            return _act(
+                OpsAction.REDEEM_POINTS,
+                str(arguments.get("reward_id", "")),
+                {"reward_id": arguments.get("reward_id")},
+                session_id,
+                desk,
+            )
+        case ToolName.UPDATE_PREFERENCES:
+            return _act(
+                OpsAction.UPDATE_PREFERENCES,
+                "(the preferences on the card)",
+                {"prefs": arguments.get("prefs") or {}},
+                session_id,
+                desk,
+            )
         case ToolName.MATCH_MEAL_FROM_PHOTO if lanes.photo is not None:
             return _match_meal_from_photo(
                 str(arguments.get(PHOTO_REF_ARGUMENT, "")), lanes.photo
             )
         case _:  # pragma: no cover - dispatch refuses these before _run is reached
-            return _not_implemented(tool, lanes=lanes)
+            return _not_implemented(tool, lanes=lanes, desk=desk)
 
 
-def _not_implemented(tool: ToolName, *, lanes: Lanes) -> Mapping[str, Any]:
+def _not_implemented(
+    tool: ToolName, *, lanes: Lanes, desk: Desk | None = None
+) -> Mapping[str, Any]:
     """A real tool of the eleven that this deployment cannot answer.
 
     A typed refusal the model can read and act on, not an exception: it needs to
@@ -392,7 +477,7 @@ def _not_implemented(tool: ToolName, *, lanes: Lanes) -> Mapping[str, Any]:
         "rejected": "TOOL_NOT_IMPLEMENTED",
         "detail": (
             f"{tool.value} is not available on this deployment. Tools available "
-            f"now: {', '.join(name.value for name in offered_tools(lanes))}."
+            f"now: {', '.join(name.value for name in offered_tools(lanes, desk))}."
         ),
     }
 
@@ -661,7 +746,7 @@ def _photo_items(resolution: Resolution) -> list[Mapping[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _propose_order(items: Any, session_id: str, desk: OrderDesk) -> Mapping[str, Any]:
+def _propose_order(items: Any, session_id: str, desk: Desk) -> Mapping[str, Any]:
     """Mint a draft. A draft is not a write, so it nests no ``ops`` span."""
     lines: Sequence[Mapping[str, Any]] = items if isinstance(items, list) else []
     draft = desk.propose(session_id, lines)
@@ -674,20 +759,111 @@ def _propose_order(items: Any, session_id: str, desk: OrderDesk) -> Mapping[str,
     }
 
 
-def _place_order(draft_id: str, session_id: str, desk: OrderDesk) -> Mapping[str, Any]:
-    """Place a confirmed draft. Nests ``ops.place_order``, which is the write.
+def _place_order(draft_id: str, session_id: str, desk: Desk) -> Mapping[str, Any]:
+    """Place a confirmed draft. ``ops.place_order`` is nested under this call.
 
     The ops span is opened even when the write is refused, because a refusal is
     exactly the thing an eval needs to see: ``confirmation_state=rejected`` on
     this span is a launch-gate violation, and a turn that quietly emitted no
     span would hide it.
+
+    **Which process opens it depends on which desk this is**, and that is not a
+    detail. A local desk performs the write here, so the span is opened here; a
+    remote desk posts to the deployed ops API, which opens its own
+    ``ops.place_order`` as a child of *this* ``tool.place_order`` from the trace
+    context on the request. Opening one on both sides would put two gate
+    decisions in one trace -- and worse, the ops API's edge refuses any write
+    whose parent span is not a tool span, so an ops span opened here would make
+    every remote write fail with ``TRACE_CONTEXT_REQUIRED``.
+    :attr:`chip_chat.agent.desk.Desk.writes_here` is the flag and
+    :func:`_ops_span` is where the choice is made once.
     """
-    with ops_write(OpsAction.PLACE_ORDER, reference_id=draft_id or "(none)") as ops:
+    with _ops_span(desk, OpsAction.PLACE_ORDER, draft_id or "(none)") as ops:
         try:
             receipt = desk.place(session_id, draft_id)
         except OrderRejectedError:
-            ops.record_confirmation(ConfirmationState.REJECTED)
+            if ops is not None:
+                ops.record_confirmation(ConfirmationState.REJECTED)
             raise
-        ops.record_confirmation(ConfirmationState.CONFIRMED)
-        ops.record_receipt(receipt.as_dict())
-    return {"receipt": receipt.as_dict(), "notice": SIMULATION_NOTICE}
+        body = receipt.as_dict()
+        if ops is not None:
+            ops.record_confirmation(ConfirmationState.CONFIRMED)
+            ops.record_receipt(body)
+    return {"receipt": body, "notice": SIMULATION_NOTICE}
+
+
+@contextmanager
+def _ops_span(
+    desk: Desk, action: OpsAction, reference_id: str
+) -> Iterator[OpsRecorder | None]:
+    """Open ``ops.<action>`` here, or leave it to the process that writes.
+
+    Yields ``None`` for a remote desk, and the yield being ``None`` rather than a
+    no-op recorder is deliberate: a recorder that silently accepted
+    ``record_confirmation`` would let a reader of this module believe a
+    confirmation state was written somewhere, when for a remote desk it is
+    written by ``api/functions/function_app.py`` off the record it actually
+    claimed. Nothing here is in a position to know that answer.
+    """
+    if not desk.writes_here:
+        yield None
+        return
+    with ops_write(action, reference_id=reference_id) as recorder:
+        yield recorder
+
+
+def _act(
+    action: OpsAction,
+    reference_id: str,
+    arguments: Mapping[str, Any],
+    session_id: str,
+    desk: Desk,
+) -> Mapping[str, Any]:
+    """Offer or perform one of the three writes that name a row.
+
+    One tool call, two possible answers, and the model is told which it got in a
+    sentence it can act on. The first call finds no confirmation and comes back
+    with a card; the visitor presses Confirm, which is a request carrying their
+    session and nothing the model can compose; the second call finds the
+    confirmation and writes.
+
+    That the model is *told to call again* is worth being precise about, because
+    it looks like the gate asking to be talked past and is the opposite. The
+    second call succeeds only if a confirming request arrived in between. A model
+    that calls twice in one turn gets the same card twice, which is what
+    ``agent/tests/test_sabotage.py`` establishes has no other outcome available
+    to it: there is no argument on any of these three tools through which a
+    confirmation can be asserted.
+    """
+    with _ops_span(desk, action, reference_id) as ops:
+        try:
+            outcome = desk.act(session_id, action, arguments)
+        except OrderRejectedError:
+            if ops is not None:
+                ops.record_confirmation(ConfirmationState.REJECTED)
+            raise
+        if ops is not None:
+            ops.record_confirmation(
+                ConfirmationState.CONFIRMED
+                if outcome.confirmed
+                else ConfirmationState.REJECTED
+            )
+            if outcome.receipt is not None:
+                ops.record_receipt(outcome.receipt)
+    return _act_result(action, outcome)
+
+
+def _act_result(action: OpsAction, outcome: ActionOutcome) -> Mapping[str, Any]:
+    """What the model is handed back for one of the three. See :func:`_act`."""
+    if outcome.receipt is not None:
+        return {"receipt": outcome.receipt, "notice": SIMULATION_NOTICE}
+    return {
+        "card": outcome.card,
+        "requires_confirmation": True,
+        "next_step": (
+            "Show the visitor what is on the card and ask them to press "
+            f"Confirm. Call {action.value} again only after they have; nothing "
+            "is written until then."
+        ),
+        "notice": SIMULATION_NOTICE,
+    }

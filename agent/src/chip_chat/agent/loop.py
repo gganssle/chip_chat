@@ -26,10 +26,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
 
+from chip_chat.agent.desk import Desk
 from chip_chat.agent.hardcoded import ACCOUNT, MENU, SIMULATION_NOTICE, STORE
 from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.model import ChatModel, ModelReply
-from chip_chat.agent.orders import OrderDesk
 from chip_chat.agent.prompt import load
 from chip_chat.agent.tools import TOOLS, dispatch, offered_schemas, offered_tools
 from chip_chat.otel import (
@@ -351,7 +351,7 @@ def run_turn(
     message: str,
     *,
     model: ChatModel,
-    desk: OrderDesk,
+    desk: Desk,
     lanes: Lanes = NO_LANES,
     confirmed_draft_id: str | None = None,
     max_steps: int = DEFAULT_MAX_STEPS,
@@ -383,7 +383,7 @@ def run_turn(
         ToolRegistrationError: If ``conversation`` was opened believing a
             different set of tools was registered than ``lanes`` implies.
     """
-    offered = offered_tools(lanes)
+    offered = offered_tools(lanes, desk)
     if tuple(conversation.tools) != offered:
         # The runtime context is written once, when the conversation opens, and
         # names the registered tools. A lane wired after that -- or a
@@ -407,7 +407,7 @@ def run_turn(
     card: Mapping[str, Any] | None = None
     receipt = False
 
-    schemas = offered_schemas(lanes)
+    schemas = offered_schemas(lanes, desk)
 
     for step_index in range(max_steps):
         with agent_step(index=step_index) as step:

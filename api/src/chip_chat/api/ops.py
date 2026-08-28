@@ -69,6 +69,7 @@ from chip_chat.api.confirmations import (
 )
 from chip_chat.api.drafts import Draft, DraftRejectedError, DraftStore, OrderType
 from chip_chat.api.drafts import RejectionCode as DraftCode
+from chip_chat.api.grants import Grant, GrantCode, GrantRejectedError, GrantSigner
 from chip_chat.otel import ConfirmationState, OpsAction, ops_write
 from chip_chat.snowflake.procedures import Procedure, procedure
 
@@ -117,6 +118,19 @@ Functions host maps this to a ``demo_id`` and hands it to
 at all.
 """
 
+GRANT_KEY_HINT: Final = (
+    "CHIP_CHAT_OPS_KEY is unset or unresolved on this deployment, so there is "
+    "no key to check a confirmation against"
+)
+"""What a caller is told when a grant arrives at a service that cannot check it.
+
+Named rather than written inline because it is the sentence somebody will read
+at two in the morning, and because ``docs/ops-api.md`` records what an
+*unresolved* Key Vault reference does: the setting arrives holding the literal
+``@Microsoft.KeyVault(...)`` string, every request is refused, and nothing about
+the refusal says which of the two ends is misconfigured. This one says.
+"""
+
 _ATTEMPTS: Final = 2
 """How many times one procedure call is made before the write path is called down.
 
@@ -155,6 +169,21 @@ none is in any procedure's own list, deliberately: the database is never asked
 whether the visitor confirmed, because the flag lives where the model cannot
 reach it and the database is not that place. A trace showing one of these is a
 write that was refused by the gate rather than by the catalogue.
+
+**Still six after confirmation grants, and that is a decision rather than an
+oversight.** A grant that does not verify is not a seventh kind of failure: it
+is *this visitor has no confirmed record for this write*, established by
+signature instead of by lookup, and it deserves the code that already means
+that. :func:`_as_record_rejection` maps the two
+:class:`~chip_chat.api.grants.GrantCode` values onto the draft or confirmation
+vocabulary depending on which record the write would otherwise have claimed
+from, and carries the grant's own sentence through as the detail -- so an
+operator reading a refused write still learns that the two tiers disagreed about
+a secret, and every consumer that enumerates this tuple keeps enumerating a
+complete list. ``eval/adversarial/gate2.py``'s siege is one such consumer and it
+is the reason this is worth being deliberate about: it asserts that every code
+here is provoked by a probe, which is a good rule and would have been quietly
+weakened by two codes nothing attacks.
 """
 
 _GATE_VIOLATIONS: Final = frozenset(
@@ -334,7 +363,7 @@ class OpsService:
     caller can be forgotten by the next route somebody adds.
     """
 
-    __slots__ = ("_attempts", "_backend", "_confirmations", "_drafts")
+    __slots__ = ("_attempts", "_backend", "_confirmations", "_drafts", "_grants")
 
     def __init__(
         self,
@@ -342,6 +371,7 @@ class OpsService:
         drafts: DraftStore,
         confirmations: ConfirmationLedger,
         *,
+        grants: GrantSigner | None = None,
         attempts: int = _ATTEMPTS,
     ) -> None:
         """Assemble the service.
@@ -354,6 +384,22 @@ class OpsService:
                 on its most consequential write.
             confirmations: The ledger the other three claim from. Required for
                 the same reason.
+            grants: The verifier for confirmations minted in *another* process.
+                ``None`` -- the default, and what every in-process caller wants
+                -- means this service claims only from the two ledgers above,
+                which is the behaviour it has always had. A deployment where the
+                app and the ops API are two processes supplies one; see
+                :mod:`chip_chat.api.grants` for why that is a verification
+                rather than a shared store.
+
+                It is a *keyword* argument with a default and the two ledgers
+                are not, and the asymmetry is deliberate. A service with no
+                ledgers would be a service with no gate, which must be
+                unstateable; a service with no verifier is a service that
+                refuses every grant, which is a smaller surface rather than a
+                missing rule -- :meth:`OpsSession.place_order` and its three
+                siblings reject a presented grant outright when there is
+                nothing to check it with.
             attempts: How many times one procedure call is made before the write
                 path is called down. See :data:`_ATTEMPTS`.
 
@@ -365,6 +411,7 @@ class OpsService:
         self._backend = backend
         self._drafts = drafts
         self._confirmations = confirmations
+        self._grants = grants
         self._attempts = attempts
 
     def session(self, demo_id: str) -> "OpsSession":
@@ -399,6 +446,46 @@ class OpsService:
         """The ledger the other three claim from, for the app to offer into."""
         return self._confirmations
 
+    def claim_from_grant(
+        self, demo_id: str, action: OpsAction, reference_id: str, token: str
+    ) -> Grant:
+        """Verify a confirmation minted in another process, or refuse the write.
+
+        The out-of-process half of the gate, and the one sentence worth being
+        precise about: this checks a *proof* that a request carrying the
+        visitor's session claimed a confirmed record, rather than looking that
+        record up. :mod:`chip_chat.api.grants` carries the whole argument,
+        including what an attacker who has compromised the model can and cannot
+        do under it.
+
+        Args:
+            demo_id: The bound visitor, from the session the app resolved.
+            action: Which write, from the route rather than from the body.
+            reference_id: What the call named.
+            token: What arrived on :data:`~chip_chat.api.grants.GRANT_HEADER`.
+
+        Returns:
+            The verified grant, whose arguments the procedure is called with.
+
+        Raises:
+            GrantRejectedError: Including when this service has no verifier at
+                all. A presented confirmation that cannot be checked is refused
+                rather than ignored: ignoring it would fall through to the
+                in-process claim, find nothing, and report ``DRAFT_NOT_FOUND``
+                for a request whose real problem was a deployment missing its
+                shared secret -- which is the confusing hour ``docs/ops-api.md``
+                already records one version of.
+        """
+        if self._grants is None:
+            raise GrantRejectedError(
+                GrantCode.INVALID,
+                "this deployment cannot verify a confirmation minted elsewhere; "
+                f"{GRANT_KEY_HINT}",
+            )
+        return self._grants.verify(
+            token, action=action, demo_id=demo_id, reference_id=reference_id
+        )
+
     # --- the write path, once, for all four --------------------------------
 
     def _write(
@@ -432,7 +519,11 @@ class OpsService:
         with ops_write(action, reference_id=reference_id) as ops:
             try:
                 retry_key, rest = claim()
-            except (DraftRejectedError, ConfirmationRejectedError) as rejection:
+            except (
+                DraftRejectedError,
+                ConfirmationRejectedError,
+                GrantRejectedError,
+            ) as rejection:
                 code = rejection.code.value
                 ops.record_confirmation(
                     ConfirmationState.REJECTED
@@ -502,7 +593,7 @@ class OpsSession:
         self._service = service
         self._demo_id = demo_id
 
-    def place_order(self, draft_id: str) -> Receipt:
+    def place_order(self, draft_id: str, confirmation: str | None = None) -> Receipt:
         """Place a confirmed draft, and return its receipt.
 
         The draft is claimed from :class:`~chip_chat.api.drafts.DraftStore`,
@@ -526,12 +617,15 @@ class OpsSession:
         """
 
         def claim() -> tuple[str, Sequence[object]]:
+            if confirmation is not None:
+                granted = self._granted(OpsAction.PLACE_ORDER, draft_id, confirmation)
+                return granted.grant_id, granted.arguments
             draft = self._service.drafts.claim(self._demo_id, draft_id)
             return draft.draft_id, _order_arguments(draft)
 
         return self._service._write(self._demo_id, OpsAction.PLACE_ORDER, draft_id, claim)
 
-    def cancel_order(self, order_id: str) -> Receipt:
+    def cancel_order(self, order_id: str, confirmation: str | None = None) -> Receipt:
         """Cancel an order the visitor placed, and return its receipt.
 
         Models an affordance the real product refuses -- see
@@ -554,6 +648,9 @@ class OpsSession:
         """
 
         def claim() -> tuple[str, Sequence[object]]:
+            if confirmation is not None:
+                granted = self._granted(OpsAction.CANCEL_ORDER, order_id, confirmation)
+                return granted.grant_id, granted.arguments
             record = self._claim(OpsAction.CANCEL_ORDER, order_id)
             return record.confirmation_id, (order_id,)
 
@@ -561,7 +658,7 @@ class OpsSession:
             self._demo_id, OpsAction.CANCEL_ORDER, order_id, claim
         )
 
-    def redeem_points(self, reward_id: str) -> Receipt:
+    def redeem_points(self, reward_id: str, confirmation: str | None = None) -> Receipt:
         """Redeem a published reward, and return the receipt and new balance.
 
         The point cost sent to the procedure is the one that was **on the card**,
@@ -586,6 +683,9 @@ class OpsSession:
         """
 
         def claim() -> tuple[str, Sequence[object]]:
+            if confirmation is not None:
+                granted = self._granted(OpsAction.REDEEM_POINTS, reward_id, confirmation)
+                return granted.grant_id, granted.arguments
             record = self._claim(OpsAction.REDEEM_POINTS, reward_id)
             return record.confirmation_id, (reward_id, record.payload.get("point_cost"))
 
@@ -593,7 +693,9 @@ class OpsSession:
             self._demo_id, OpsAction.REDEEM_POINTS, reward_id, claim
         )
 
-    def update_preferences(self, prefs: Mapping[str, Any]) -> Receipt:
+    def update_preferences(
+        self, prefs: Mapping[str, Any], confirmation: str | None = None
+    ) -> Receipt:
         """Store a preference edit, and return the acknowledgement.
 
         ``prefs`` names no row, so what identifies it is its own content:
@@ -622,6 +724,11 @@ class OpsSession:
         reference_id = preferences_reference(prefs)
 
         def claim() -> tuple[str, Sequence[object]]:
+            if confirmation is not None:
+                granted = self._granted(
+                    OpsAction.UPDATE_PREFERENCES, reference_id, confirmation
+                )
+                return granted.grant_id, granted.arguments
             record = self._claim(OpsAction.UPDATE_PREFERENCES, reference_id)
             shown = record.payload.get("prefs", {})
             return record.confirmation_id, (_plain(shown),)
@@ -633,6 +740,62 @@ class OpsSession:
     def _claim(self, action: OpsAction, reference_id: str) -> Confirmation:
         """Claim the confirmation for one of the three writes without a draft."""
         return self._service.confirmations.claim(self._demo_id, action, reference_id)
+
+    def _granted(self, action: OpsAction, reference_id: str, token: str) -> Grant:
+        """Verify a confirmation minted in another process.
+
+        The out-of-process twin of :meth:`_claim`, and it is deliberately the
+        *same shape*: both consume something the visitor was shown, both raise
+        rather than return where nobody agreed to the write, and both raise in
+        the **same vocabulary** -- so :meth:`OpsService._write` handles them
+        identically, the four methods above each have one gate rather than two,
+        and :data:`PRECONDITION_REJECTIONS` stays the complete list it is
+        published as.
+
+        The retry key it yields is the grant's own single-use id, which is the
+        property that makes a replayed grant replay a receipt instead of writing
+        twice -- :mod:`chip_chat.api.grants` has the argument.
+
+        Raises:
+            DraftRejectedError: For ``place_order``, whose record is a draft.
+            ConfirmationRejectedError: For the other three.
+        """
+        try:
+            return self._service.claim_from_grant(
+                self._demo_id, action, reference_id, token
+            )
+        except GrantRejectedError as refused:
+            raise _as_record_rejection(action, refused) from refused
+
+
+def _as_record_rejection(
+    action: OpsAction, refused: GrantRejectedError
+) -> DraftRejectedError | ConfirmationRejectedError:
+    """Say a grant refusal in the vocabulary of the record it stands in for.
+
+    Two codes become four, chosen by which store the action would otherwise have
+    claimed from, and the grant's own sentence is carried through unchanged as
+    the detail. That sentence is where the diagnosis lives -- *"the confirmation
+    was not signed by this app"* is a very different afternoon from *"the visitor
+    never pressed Confirm"* -- and putting it in the detail rather than in a new
+    code is what lets both facts be true at once without lengthening a published
+    list. :data:`PRECONDITION_REJECTIONS` has the rest of that argument.
+
+    The expiry split is the one :data:`_GATE_VIOLATIONS` already draws, and it
+    survives the move intact: a grant that did not verify is a write nobody
+    agreed to and marks the span ``rejected``; one that merely aged out marks it
+    ``unconfirmed``, which is not an accusation.
+    """
+    expired = refused.code is GrantCode.EXPIRED
+    if action is OpsAction.PLACE_ORDER:
+        return DraftRejectedError(
+            DraftCode.DRAFT_EXPIRED if expired else DraftCode.DRAFT_NOT_CONFIRMED,
+            refused.message,
+        )
+    return ConfirmationRejectedError(
+        ConfirmationCode.EXPIRED if expired else ConfirmationCode.NOT_CONFIRMED,
+        refused.message,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -675,7 +838,7 @@ def offer_redemption(
     reward_id: str,
     *,
     name: str,
-    point_cost: int,
+    point_cost: int | None,
 ) -> Confirmation:
     """Offer to redeem a reward, and return the card to render.
 
@@ -687,7 +850,11 @@ def offer_redemption(
         demo_id: The visitor, resolved from the session by the app.
         reward_id: The published reward's slug.
         name: Its published name, for the card.
-        point_cost: What it costs, as read when the card was composed.
+        point_cost: What it costs, as read when the card was composed, or
+            ``None`` where the published reward catalogue could not be read.
+            ``sql/12_procedures.sql`` treats a null ``QUOTED_POINT_COST`` as
+            *skip the check*, so a card with no figure on it is honest about
+            what it could not quote rather than quoting a number nobody read.
 
     Returns:
         The unconfirmed record.
