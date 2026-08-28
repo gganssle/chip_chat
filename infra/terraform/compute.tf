@@ -64,7 +64,47 @@ locals {
       CHIP_CHAT_KILL_SWITCH = var.kill_switch
     },
     var.otlp_endpoint == "" ? {} : { OTEL_EXPORTER_OTLP_ENDPOINT = var.otlp_endpoint },
+    local.snowflake_env,
   )
+
+  # The read connection (cc-lpy4). Names only -- the private key is a Container
+  # Apps secret below, not an entry here, which is why this merge is a separate
+  # block rather than five more lines in the map above.
+  #
+  # All of it is conditional on var.snowflake_account, and that is the switch
+  # rather than a feature flag in code: an app told the name of an account it has
+  # no key for would open a pool that fails every checkout, which reads as an
+  # outage instead of as a deployment nobody finished. Empty means the app takes
+  # `connect is None` and runs on the roster shipped in its image.
+  snowflake_env = var.snowflake_account == "" ? {} : {
+    SNOWFLAKE_ACCOUNT = var.snowflake_account
+
+    # CHIP_CHAT_APP on CHIP_CHAT_READ, which is refused an INSERT by the account
+    # itself. Both are defaulted in `chip_chat.api.connect` off
+    # `chip_chat.snowflake.account.USERS`, and both are spelled here anyway: what
+    # a deployed tier runs as should be readable in the deployment and not only
+    # in the code it deploys.
+    SNOWFLAKE_APP_USER  = "CHIP_CHAT_APP"
+    SNOWFLAKE_READ_ROLE = "CHIP_CHAT_READ"
+
+    # X-Small, suspends after sixty seconds. CHIP_CHAT_PUBLISH_WH is the other
+    # one and only the nightly publish may name it.
+    SNOWFLAKE_WAREHOUSE = "CHIP_CHAT_SERVING_WH"
+    SNOWFLAKE_DATABASE  = "CHIP_CHAT"
+
+    # ACCOUNTS, because the entry roster reads `FROM persona_fixtures`
+    # unqualified -- the one read in the system that happens before there is a
+    # visitor, and the one #43's `entry_roster` policy was written for.
+    SNOWFLAKE_SCHEMA = "ACCOUNTS"
+
+    # Where the account lane posts. Derived from the locator when unset; see
+    # var.snowflake_host.
+    SNOWFLAKE_HOST = (
+      var.snowflake_host != ""
+      ? var.snowflake_host
+      : "${var.snowflake_account}.snowflakecomputing.com"
+    )
+  }
 }
 
 resource "azurerm_container_app" "web" {
@@ -83,6 +123,28 @@ resource "azurerm_container_app" "web" {
   registry {
     server   = one(azurerm_container_registry.main[*].login_server)
     identity = azurerm_user_assigned_identity.app.id
+  }
+
+  # The one secret this app holds: CHIP_CHAT_APP's private key.
+  #
+  # A Key Vault *reference* and not a value. The id is deliberately versionless,
+  # so rotating the secret in the vault is one `az keyvault secret set` and a
+  # revision restart rather than a Terraform change; the platform resolves it
+  # with the user-assigned identity below, which already holds Key Vault Secrets
+  # User on the vault (foundation.tf). Nothing about the key reaches a plan, the
+  # state file or the image.
+  #
+  # This is also why `chip_chat.api.connect` prefers the environment over its own
+  # Key Vault client. The read happens before the process exists, so the app pays
+  # nothing for it on a start-up path that a liveness probe is waiting behind —
+  # which is the trap docs/deployment.md §3.11 is a write-up of.
+  dynamic "secret" {
+    for_each = var.snowflake_account == "" ? [] : ["snowflake"]
+    content {
+      name                = "snowflake-private-key"
+      key_vault_secret_id = "${azurerm_key_vault.main.vault_uri}secrets/${var.snowflake_app_key_secret}"
+      identity            = azurerm_user_assigned_identity.app.id
+    }
   }
 
   ingress {
@@ -136,6 +198,19 @@ resource "azurerm_container_app" "web" {
         content {
           name  = env.key
           value = env.value
+        }
+      }
+
+      # The private key, by reference to the secret above rather than by value.
+      # `secret_name` and `value` are mutually exclusive, which is why this is a
+      # second block and not another entry in local.web_env — a map cannot carry
+      # the distinction and a key that ended up in the value column would be a
+      # key in `az containerapp show`.
+      dynamic "env" {
+        for_each = var.snowflake_account == "" ? [] : ["snowflake"]
+        content {
+          name        = "SNOWFLAKE_PRIVATE_KEY"
+          secret_name = "snowflake-private-key"
         }
       }
 

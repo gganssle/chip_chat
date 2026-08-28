@@ -55,6 +55,7 @@ from chip_chat.api.app import (
     Service,
     SessionStore,
     VisitorProfile,
+    build_lanes,
     build_service,
     build_visitors,
     create_app,
@@ -68,6 +69,13 @@ from chip_chat.api.confirmations import (
     ConfirmationLedger,
     ConfirmationRejectedError,
     preferences_reference,
+)
+from chip_chat.api.connect import (
+    ConnectorConnection,
+    KeyPairJwt,
+    PrivateKey,
+    SnowflakeSettings,
+    snowflake_connect,
 )
 from chip_chat.api.drafts import (
     DEFAULT_DRAFT_TTL_SECONDS,
@@ -168,6 +176,7 @@ __all__ = [
     "ConfirmationCode",
     "ConfirmationLedger",
     "ConfirmationRejectedError",
+    "ConnectorConnection",
     "Draft",
     "DraftLine",
     "DraftRejectedError",
@@ -178,6 +187,7 @@ __all__ = [
     "FileJournal",
     "FileKillSwitch",
     "FundedTurn",
+    "KeyPairJwt",
     "KillSwitch",
     "LocalTextAnalyzer",
     "ManualKillSwitch",
@@ -190,6 +200,7 @@ __all__ = [
     "OrderType",
     "PersonaFixture",
     "PersonaRoster",
+    "PrivateKey",
     "Receipt",
     "RejectionCode",
     "Reservation",
@@ -198,6 +209,7 @@ __all__ = [
     "SessionJournal",
     "SessionStore",
     "SnowflakeRoster",
+    "SnowflakeSettings",
     "SourceRateLimiter",
     "SpendGate",
     "SpendGuard",
@@ -221,6 +233,7 @@ __all__ = [
     "WriteSession",
     "__version__",
     "any_of",
+    "build_lanes",
     "build_service",
     "build_visitors",
     "clean_display_name",
@@ -232,6 +245,7 @@ __all__ = [
     "offer_redemption",
     "preferences_reference",
     "service_name",
+    "snowflake_connect",
     "unavailable_card",
 ]
 

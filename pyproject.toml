@@ -195,14 +195,27 @@ module = ["arize.*"]
 ignore_missing_imports = true
 
 # The Functions host is the one file in the tree that runs only on a Functions
-# worker. `azure-functions` is the runtime's own SDK and `snowflake-connector-python`
-# is the driver -- both are in `api/functions/requirements.txt`, which is what that
-# host installs, and deliberately not in this lockfile: adding either would put a
-# dependency into every developer's virtualenv to satisfy a file nothing here
-# imports. `api/tests/test_ops_host.py` reads it as text, the way the notebooks and
+# worker. `azure-functions` is the runtime's own SDK, it is in
+# `api/functions/requirements.txt`, which is what that host installs, and it is
+# deliberately not in this lockfile: adding it would put a dependency into every
+# developer's virtualenv to satisfy a file nothing here imports.
+# `api/tests/test_ops_host.py` reads that file as text, the way the notebooks and
 # the Terraform are already read.
 [[tool.mypy.overrides]]
-module = ["azure.functions", "snowflake.connector"]
+module = ["azure.functions"]
+ignore_missing_imports = true
+
+# `snowflake-connector-python` used to be listed beside `azure-functions` above,
+# on the same argument, and the argument was right: on 27 August 2026 nothing in
+# this workspace imported the driver, `build_service` was called with
+# `connect=None` on every deployment, and the only file that reached for it was
+# the Functions host. That is no longer true and the entry has been split out
+# rather than left where a reader would infer the old reason still applies.
+# `chip_chat.api.connect` is the read connection the pool hands out, so the
+# driver is now a declared dependency of `api/` and is installed here -- but it
+# ships no `py.typed`, so mypy still has to be told about it rather than shown.
+[[tool.mypy.overrides]]
+module = ["snowflake.connector", "snowflake.connector.*"]
 ignore_missing_imports = true
 
 # `chip_chat.databricks.recommender_model` is the MLflow half of gh-37 and is the

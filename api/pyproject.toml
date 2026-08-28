@@ -29,6 +29,25 @@ dependencies = [
     # this package opens a Snowflake connection, and `WriteBackend` is the seam
     # where the Functions host supplies one.
     "chip-chat-snowflake",
+    # The driver, and the one line in this file that reverses a decision the
+    # repository had written down. The root `pyproject.toml` argued -- correctly
+    # -- that `snowflake-connector-python` belonged in
+    # `api/functions/requirements.txt` and nowhere else, because nothing in the
+    # workspace imported it and adding it would put a large dependency into every
+    # developer's virtualenv to satisfy a file no test ran. That argument held for
+    # exactly as long as `build_service` was called with `connect=None`.
+    # `chip_chat.api.connect` now opens the read connection the pool hands out, so
+    # the deployed image imports the driver on the conversational path and a
+    # dependency it is not allowed to declare is a dependency that is missing.
+    # `api/tests/test_connect.py` runs against the adapter without it; the import
+    # is inside the factory, so `make ci` still does not need an account.
+    "snowflake-connector-python>=3.12",
+    # How the private key reaches a process that has no file system worth writing
+    # one to. The deployed container is handed the key as a Container Apps secret
+    # sourced from Key Vault, so this is the *second* path and not the first --
+    # see `chip_chat.api.connect.KeyVaultKey` for when each is taken, and why the
+    # vault is never read on the start-up path.
+    "azure-keyvault-secrets>=4.9",
     "fastapi>=0.115",
     # [standard] brings httptools and uvloop. The container runs one process
     # with a handful of workers; the difference is not academic there.

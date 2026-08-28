@@ -111,6 +111,12 @@ from chip_chat.agent.health import probe
 from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.loop import PROMPT_VERSION, Conversation
 from chip_chat.agent.tools import offered_tools
+from chip_chat.api.connect import (
+    KeyPairJwt,
+    PrivateKey,
+    SnowflakeSettings,
+    snowflake_connect,
+)
 from chip_chat.api.guard import SpendGuard
 from chip_chat.api.killswitch import (
     CachedKillSwitch,
@@ -143,6 +149,14 @@ from chip_chat.otel import (
     render_response,
     shutdown_tracing,
 )
+from chip_chat.snowflake.cortex import (
+    HOST_VARIABLE,
+    AnalystError,
+    HttpAnalystTransport,
+    host_from_env,
+    pooled_client,
+)
+from chip_chat.snowflake.lane import AccountLane, PersonalizationLane
 from chip_chat.vision import (
     AzureBlobStore,
     AzureImageAnalyzer,
@@ -175,6 +189,7 @@ __all__ = [
     "SessionStore",
     "SwitchRequest",
     "VisitorProfile",
+    "build_lanes",
     "build_photos",
     "build_service",
     "create_app",
@@ -560,10 +575,12 @@ class Service:
     pool: VisitorPool | None = None
     """The connection pool, where one is configured.
 
-    ``None`` on a deployment with no Snowflake connection factory, which is
-    every deployment today: ``pool.py``'s :class:`SessionConnection` is a
-    protocol and nothing in this lockfile implements it. See
-    :func:`build_service`.
+    ``None`` on a deployment with no Snowflake credential, which used to be
+    every deployment: ``pool.py``'s :class:`SessionConnection` was a protocol
+    that nothing in this lockfile implemented.
+    :class:`chip_chat.api.connect.ConnectorConnection` implements it now, so a
+    deployment carrying an account and a private key gets a real pool and the
+    two Snowflake-backed lanes over it. See :func:`build_service`.
     """
 
     @property
@@ -628,8 +645,97 @@ def build_visitors(
     return VisitorDesk(roster, store=store), pool
 
 
+def build_lanes(pool: VisitorPool | None) -> Lanes:
+    """Assemble the Snowflake-backed lanes over ``pool``, or return none at all.
+
+    Two of the five, and the two that were the whole of ``cc-lpy4``. The other
+    three are somebody else's ticket and are deliberately untouched here:
+    *knowledge* needs one :class:`~chip_chat.search.retrieve.Retriever` against
+    the live alias (``cc-e1sr``), and *photo* needs the upload route and a
+    production catalogue loader (``cc-mpd``).
+
+    **A pool is the precondition, and it is the only one.** Both lanes take
+    :meth:`~chip_chat.api.pool.VisitorPool.for_session` and nothing else --
+    :data:`chip_chat.snowflake.reads.SessionCheckout` is that method's shape,
+    which ``api/tests/test_read_lane_seam.py`` has been holding since before
+    either end had a caller. So there is no configuration here beyond the
+    connection: a deployment that can check a connection out can answer
+    ``get_points_balance`` and ``get_usual_order`` from this visitor's own rows,
+    and one that cannot has ``pool is None`` and gets :data:`NO_LANES`.
+
+    **The account lane needs one thing the pool does not give it**, which is a
+    REST host for Cortex Analyst, and one thing the container cannot give it,
+    which is the ``snow`` CLI that :class:`~chip_chat.snowflake.cortex.CliJwt`
+    shells out to. :class:`~chip_chat.api.connect.KeyPairJwt` is the
+    :class:`~chip_chat.snowflake.cortex.TokenSource` that module anticipated,
+    signing with the same key the connection authenticates with.
+
+    Args:
+        pool: The connection pool, or ``None`` on a deployment with no
+            Snowflake credential.
+
+    Returns:
+        The lanes. :data:`NO_LANES` where there is no pool, which is the
+        week-one slice and is an honest state rather than a hole.
+    """
+    if pool is None:
+        return NO_LANES
+    settings = SnowflakeSettings.from_env()
+    if settings is None:  # pragma: no cover - a pool implies settings
+        return NO_LANES
+    key = PrivateKey()
+    # Built once per process and held for its life, for the reason
+    # `chip_chat.search.client.pooled_client` measures: a client per turn is a
+    # TLS handshake per turn. Neither call touches the network here.
+    transport = HttpAnalystTransport(
+        _analyst_host(settings), pooled_client(), KeyPairJwt(settings, key)
+    )
+    return Lanes(
+        account=AccountLane(pool.for_session, transport),
+        personalization=PersonalizationLane(pool.for_session),
+    )
+
+
+def _analyst_host(settings: SnowflakeSettings) -> str:
+    """Where ``ask_account_question`` posts, from the environment or the locator.
+
+    :func:`~chip_chat.snowflake.cortex.host_from_env` refuses to guess and gives
+    the reason: *"an account identifier assembled here and wrong is a lane that
+    fails on every turn with a DNS error, and there is no defensible default."*
+    That argument was about assembling one from the CLI's configuration file. It
+    is not about this: ``SNOWFLAKE_ACCOUNT`` is the locator this same process is
+    already opening connections with, and ``<locator>.snowflakecomputing.com``
+    is that account's own REST host. Both forms were checked against the live
+    account on 27 August 2026 and both answer ``200``.
+
+    So the environment wins where it is set -- ``infra/terraform/compute.tf``
+    sets it, and the organisation form is the one Snowflake's own documentation
+    prints -- and the locator is the fallback rather than a refusal. The
+    alternative is a deployment where one unset variable silently withdraws
+    ``ask_account_question`` and puts ``get_points_balance`` back on the fixture,
+    which is precisely the contradiction ``docs/public-demo.md`` §9 recorded.
+
+    Args:
+        settings: The connection this process is already using.
+
+    Returns:
+        The REST host, without a scheme.
+    """
+    try:
+        return host_from_env()
+    except AnalystError:
+        derived = f"{settings.account}.snowflakecomputing.com"
+        _log.info(
+            "%s is unset; the account lane will post to %s, derived from %s",
+            HOST_VARIABLE,
+            derived,
+            settings.account,
+        )
+        return derived
+
+
 def build_service(
-    lanes: Lanes = NO_LANES,
+    lanes: Lanes | None = None,
     connect: Callable[[], SessionConnection] | None = None,
 ) -> Service:
     """Assemble the real service from the environment.
@@ -637,44 +743,49 @@ def build_service(
     Every ceiling comes from :meth:`~chip_chat.api.limits.SpendLimits.from_env`
     and every model deployment from
     :meth:`~chip_chat.agent.foundry.FoundryConfig.from_env`, so changing either
-    on the Container App is a restart rather than a build.
+    on the Container App is a restart rather than a build. As of ``cc-lpy4`` the
+    Snowflake connection is the same kind of value, which is what closed the gap
+    this docstring used to describe: it said *"nothing supplies any of them
+    yet"*, and the reason nothing did was that there was no connection factory to
+    supply them with.
 
     Args:
-        lanes: The backing services this deployment has.
-            **Nothing supplies any of them yet**, so a deployment runs the
-            week-one slice and does not offer ``ask_account_question``,
-            ``get_recommendations`` or ``match_meal_from_photo`` -- see
-            :func:`~chip_chat.agent.tools.offered_tools` for why that is the
-            honest state rather than a hole. The parameter exists so the seam is
-            named rather than discovered, and bead ``cc-e1sr`` is where each is
-            wired:
+        lanes: The backing services this deployment has. ``None`` -- the
+            default -- means *read the environment*, exactly as the limits and
+            the model deployment above do: :func:`build_lanes` wires the account
+            and personalization lanes over whatever pool ``connect`` produced.
+            Pass a value to override, which is what a test does; pass
+            :data:`~chip_chat.agent.lanes.NO_LANES` to run the week-one slice on
+            a machine that has credentials.
 
-            *knowledge* needs one
+            Two of the five are still somebody else's: *knowledge* needs one
             :class:`~chip_chat.search.retrieve.Retriever` built per process
-            against the live alias -- the cheapest of the three, and blocked on
-            nothing structural.
-            *account* and *personalization* need the pool below to actually
-            have connections in it, which is ``connect`` and therefore
-            ``cc-lpy4``. Handing them a pool that cannot check anything out
-            would offer the model two tools that decline on every turn, which
-            reads as a lane outage rather than as a deployment nobody finished.
-            *photo* needs an upload route, since the tool takes a reference to a
-            photograph the visitor uploaded on this turn, and a production
-            catalogue loader for stage 5 -- #62 and ``cc-mpd``.
+            against the live alias (``cc-e1sr``), and *photo* needs an upload
+            route and a production catalogue loader (#62, ``cc-mpd``).
 
-        connect: Opens a Snowflake connection, for the pool and the roster. See
-            :func:`build_visitors` for why it is an argument.
+        connect: Opens a Snowflake connection, for the pool and the roster.
+            ``None`` means :func:`~chip_chat.api.connect.snowflake_connect`
+            decides from the environment, and it answers ``None`` itself on a
+            deployment with no credential -- which is the shipped-roster path
+            ``docs/decisions/shipped-persona-roster.md`` describes, still intact
+            and still the thing that keeps a credential-less deployment from
+            serving an empty account. :func:`build_visitors` keeps the older,
+            literal meaning of the argument: it is the lower-level function and
+            ``None`` there really is *no connection*.
 
     Returns:
         The assembled service.
     """
-    visitors, pool = build_visitors(connect)
+    resolved_connect = snowflake_connect() if connect is None else connect
+    visitors, pool = build_visitors(resolved_connect)
+    resolved_lanes = build_lanes(pool) if lanes is None else lanes
+    _log.info("lanes wired on this deployment: %s", resolved_lanes.describe())
     limits = SpendLimits.from_env()
     return Service(
         gate=SpendGate(
             SpendGuard(limits, kill_switch=default_kill_switch()),
             lambda: AzureChatModel(FoundryConfig.from_env()),
-            lanes=lanes,
+            lanes=resolved_lanes,
         ),
         visitors=visitors,
         uploads=UploadLimiter(limits),
