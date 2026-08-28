@@ -468,7 +468,11 @@ class SessionStore:
         self._max = max_sessions
 
     def get(
-        self, session_id: str, *, tools: tuple[ToolName, ...] | None = None
+        self,
+        session_id: str,
+        *,
+        tools: tuple[ToolName, ...] | None = None,
+        lanes: Lanes = NO_LANES,
     ) -> Conversation:
         """Return the conversation for ``session_id``, creating it if new.
 
@@ -479,6 +483,12 @@ class SessionStore:
                 :func:`~chip_chat.agent.tools.offered_tools` at the call site,
                 because which lanes are answerable is a property of the
                 assembled service and not of this store.
+            lanes: What is wired, for the two paragraphs of
+                :func:`~chip_chat.agent.loop.runtime_context` whose truth depends
+                on it. Passed for the same reason ``tools`` is and read at the
+                same call site -- and it is a separate argument because the tool
+                list cannot answer the question: ``get_points_balance`` is
+                offered whether or not the account lane exists behind it.
         """
         with self._lock:
             conversation = self._conversations.get(session_id)
@@ -487,9 +497,9 @@ class SessionStore:
                     # Insertion-ordered, so this is the least recently started.
                     self._conversations.pop(next(iter(self._conversations)))
                 conversation = (
-                    Conversation(session_id=session_id)
+                    Conversation(session_id=session_id, lanes=lanes)
                     if tools is None
-                    else Conversation(session_id=session_id, tools=tools)
+                    else Conversation(session_id=session_id, tools=tools, lanes=lanes)
                 )
                 self._conversations[session_id] = conversation
             return conversation
@@ -1049,7 +1059,9 @@ def create_app(service: Service | None = None) -> FastAPI:
         # here as well as on the entry route rather than only on the polite path.
         admitted = resolved.visitors.admit(session_id)
         conversation = resolved.sessions.get(
-            session_id, tools=offered_tools(resolved.gate.lanes)
+            session_id,
+            tools=offered_tools(resolved.gate.lanes),
+            lanes=resolved.gate.lanes,
         )
         message = _with_photo(resolved, session_id, body)
         response: Response
@@ -1286,7 +1298,7 @@ def _moderate_and_store(
     """
     admitted = service.visitors.visitor(session_id)
     conversation = service.sessions.get(
-        session_id, tools=offered_tools(service.gate.lanes)
+        session_id, tools=offered_tools(service.gate.lanes), lanes=service.gate.lanes
     )
     with chat_turn(
         session_id=session_id,
