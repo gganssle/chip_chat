@@ -13,6 +13,14 @@ thing to run in CI and the thing to run after adding a case.
 Without ``--check`` it runs every case through the week-one slice and writes the
 baseline. That spends money, at least one model call per case.
 
+``--lanes wired`` runs it against the lanes the deployment actually has rather
+than against no lanes at all, and needs a Snowflake credential.
+:mod:`chip_chat.eval.wiring` is why that flag exists and what a run without it is
+worth: the three conditional tools are not offered when nothing can answer them,
+so an unwired run scores the account, personalization and vision rows at zero for
+a reason that is about the process rather than about the model. The report says
+which configuration produced it on its **Deployment** line, either way.
+
 .. code-block:: console
 
     $ python -m chip_chat.eval.golden --check
@@ -20,6 +28,7 @@ baseline. That spends money, at least one model call per case.
     $ export CHIP_CHAT_FOUNDRY_ENDPOINT=... CHIP_CHAT_FOUNDRY_API_KEY=...
     $ python -m chip_chat.eval.golden --catalog ./catalog-build \\
           --out eval/golden/BASELINE.md
+    $ python -m chip_chat.eval.golden --lanes wired --out eval/golden/BASELINE.md
 
 **Pass ``--catalog`` a build the deployment actually serves.** The term check is
 the staleness detector this set has against ``cc-z1i``: the vision enums are
@@ -41,7 +50,8 @@ from chip_chat.eval.golden.cases import DEFAULT_MANIFEST, CaseError, GoldenSet
 from chip_chat.eval.golden.coverage import coverage
 from chip_chat.eval.golden.report import build_report, render
 from chip_chat.eval.golden.run import DEFAULT_SESSION, run_set
-from chip_chat.eval.golden.slice import SliceDeployment
+from chip_chat.eval.golden.slice import SLICE_PERSONA, SliceDeployment
+from chip_chat.eval.wiring import LaneWiringError, add_lanes_option, run_lanes
 from chip_chat.harvest.blobs import LocalBlobStore
 
 DEFAULT_CATALOG_PREFIX = "catalog"
@@ -86,16 +96,26 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
-    deployment = SliceDeployment(model, session_prefix=args.session)
-    observations = run_set(golden, deployment, only=args.only)
-    document = render(
-        build_report(
-            golden,
-            observations,
-            deployment=deployment.name,
-            catalog_version=None if catalog is None else catalog.content_version(),
-        )
-    )
+    try:
+        with run_lanes(args.lanes, SLICE_PERSONA) as wired:
+            print(wired.note)
+            deployment = SliceDeployment(
+                model, lanes=wired.lanes, session_prefix=args.session
+            )
+            observations = run_set(golden, deployment, only=args.only)
+            document = render(
+                build_report(
+                    golden,
+                    observations,
+                    deployment=deployment.name,
+                    catalog_version=(
+                        None if catalog is None else catalog.content_version()
+                    ),
+                )
+            )
+    except LaneWiringError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
     if args.out is not None:
         args.out.write_text(document, encoding="utf-8")
         print(f"wrote {args.out}")
@@ -178,6 +198,7 @@ def _parser() -> argparse.ArgumentParser:
         default=DEFAULT_SESSION,
         help="prefix for the session id each case is run under",
     )
+    add_lanes_option(parser)
     parser.add_argument(
         "--out",
         type=Path,

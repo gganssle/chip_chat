@@ -5,9 +5,12 @@ directory exists to replace is *"I tweaked the system prompt and it feels
 better."*
 
 ```bash
-make experiment-check      # free: the arms, their fingerprints, and the dataset
-make experiment-ceiling    # free: the harness at its ceiling, blind to the prompt
-make experiment-compare    # two prompt versions, one dataset, comparison rendered
+make experiment-check              # free: the arms, their fingerprints, and the dataset
+make experiment-ceiling            # free: the harness at its ceiling, blind to the prompt
+make experiment-compare            # two prompt versions, one dataset, comparison rendered
+make experiment-baseline           # the DEPLOYED build: lanes wired, needs Snowflake
+make experiment-baseline-unwired   # the same arm with no lane wired
+make experiment-wiring             # free: subtract the two
 ```
 
 ## What is in here
@@ -18,7 +21,9 @@ make experiment-compare    # two prompt versions, one dataset, comparison render
 | `prompts/` | Candidate prompt revisions that have not earned their way into the agent package. |
 | `results/` | Recorded results, one JSON per arm. What a later comparison reads. |
 | `captures/` | Span trees from a run, for [#77](https://github.com/gganssle/chip_chat/issues/77)'s promotion path. |
-| `BASELINE.md` | The current build's result, and the baseline the launch criteria are checked against. |
+| `BASELINE.md` | The **deployed** build's result — account and personalization lanes wired — and the baseline the launch criteria are checked against. |
+| `BASELINE-NO-LANES.md` | The same arm with no lane wired. Kept beside the first rather than overwritten; see below. |
+| `WIRING.md` | The two, subtracted. What the deployment adds over the unwired slice. |
 | `COMPARISON.md` | The rendered comparison. #73's demo criterion. |
 
 ## An arm is four axes and an argument
@@ -93,6 +98,50 @@ threshold at all: PRD §05 makes the gates zero, and one uncited claim more than
 last time is one more than zero. A **requirement** has no threshold either,
 because it is usually covered by one or two cases and a rate over two cases has
 no resolution for a threshold to use.
+
+## The fifth axis, which is not in the configuration
+
+An arm is four axes. **Which lanes were wired is a fifth thing that decides the
+numbers, and it is deliberately not one of them**, because it is not a property
+of the experiment — it is a property of the machine the experiment ran on, and a
+`CONFIGURATIONS.json` entry claiming the account lane was up would be a claim
+rather than an observation.
+
+It is nevertheless the axis that has moved these numbers the furthest.
+`chip_chat.agent.lanes.CONDITIONAL_TOOLS` withholds `ask_account_question`,
+`get_recommendations` and `match_meal_from_photo` from a deployment that has no
+lane behind them, so an unwired run scores those rows at zero **because the tool
+the row expects does not exist in the process doing the scoring**. On 27 August
+2026 a re-run of this baseline, taken after the account and personalization lanes
+were wired onto the deployment and after the model's rate limit was raised
+twentyfold, came back byte-identical to the run before it — correctly, because
+nothing had told the harness to wire anything.
+
+So `--lanes {none,wired}` is a flag, `none` is its default, and the value it
+resolved to is recorded on the result as `wiring`. Three consequences:
+
+- **The free modes stay free.** `--check` and `--ceiling` need no credential and
+  `make ci` reaches neither the builder nor a network.
+- **`wired` builds what the deployment builds.** It calls
+  `chip_chat.api.connect.snowflake_connect` and `chip_chat.api.app.build_lanes`,
+  binds the run to the rank-one `regular` fixture off the live roster, and
+  **refuses** if there is no credential rather than falling back to the unwired
+  slice under a heading that says otherwise.
+- **A comparison whose sides do not both state their wiring is not drawn.** Not
+  warned about — refused, with the CLI exiting non-zero. A stated difference is
+  something a reader can weigh, and two runs that say `none` and
+  `account+personalization` *are* compared, with a warning above the table.
+  Silence is what cannot be read: the delta it produces looks identical whether
+  a prompt got better or a lane came up.
+
+`docs/decisions/eval-lane-wiring.md` is the argument in full.
+
+**`results/lean-lanes.json` and `COMPARISON.md` predate the column**, so they say
+nothing about what they were run against and `--compare-recorded` against either
+is refused. That is the check working rather than a chore to clear: those numbers
+were taken against a configuration nobody wrote down, and re-running
+`make experiment-compare` — which now passes `--lanes wired` — is the only honest
+way to get a delta out of them.
 
 ## Why the runner is cheap
 

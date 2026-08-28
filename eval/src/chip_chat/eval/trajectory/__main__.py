@@ -25,12 +25,21 @@ construction is a gate somebody switches off.
 Without either flag it runs the rows against a real deployment and writes the
 baseline. That spends money: at least one model call per row.
 
+**``--lanes wired`` matters more here than anywhere else in ``eval/``.** This is
+the eval that reports tool-selection accuracy, and a tool that is not registered
+cannot be routed to — so an unwired run scores the account, personalization and
+vision rows at zero for a reason that is about ``offered_tools`` rather than
+about the model, and a span tree cannot tell that apart from a model that chose
+not to call. The report's **Traces from** line names the wiring on every run.
+:mod:`chip_chat.eval.wiring` is the long version.
+
 .. code-block:: console
 
     $ python -m chip_chat.eval.trajectory --check
     $ python -m chip_chat.eval.trajectory --ceiling --out eval/trajectory/BASELINE.md
     $ export CHIP_CHAT_FOUNDRY_ENDPOINT=... CHIP_CHAT_FOUNDRY_API_KEY=...
     $ python -m chip_chat.eval.trajectory --out eval/trajectory/BASELINE.md
+    $ python -m chip_chat.eval.trajectory --lanes wired
 """
 
 import argparse
@@ -44,6 +53,7 @@ from chip_chat.eval.dataset.build import Dataset, DatasetError, build_dataset
 from chip_chat.eval.golden.cases import DEFAULT_MANIFEST as GOLDEN_MANIFEST
 from chip_chat.eval.golden.cases import CaseError, GoldenSet
 from chip_chat.eval.golden.run import DEFAULT_SESSION
+from chip_chat.eval.golden.slice import SLICE_PERSONA
 from chip_chat.eval.photos.labels import LabeledSet, LabelError
 from chip_chat.eval.trajectory.coverage import RATE_NEEDS, coverage
 from chip_chat.eval.trajectory.expectations import (
@@ -59,6 +69,7 @@ from chip_chat.eval.trajectory.testing import (
     CEILING_SOURCE,
     ceiling,
 )
+from chip_chat.eval.wiring import LaneWiringError, add_lanes_option, run_lanes
 
 PHOTOS_MANIFEST = Path("eval/photos/labels.json")
 DEFAULT_BASELINE = Path("eval/trajectory/BASELINE.md")
@@ -104,11 +115,20 @@ def main(argv: list[str] | None = None) -> int:
         except FoundryConfigError as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
-        adapter = SliceTraceSource(
-            golden=golden, model=model, session_prefix=args.session
-        )
-        trajectories = run_trajectories(rows, adapter, only=args.only)
-        source = adapter.name
+        try:
+            with run_lanes(args.lanes, SLICE_PERSONA) as wired:
+                print(wired.note)
+                adapter = SliceTraceSource(
+                    golden=golden,
+                    model=model,
+                    lanes=wired.lanes,
+                    session_prefix=args.session,
+                )
+                trajectories = run_trajectories(rows, adapter, only=args.only)
+                source = adapter.name
+        except LaneWiringError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
         caveat = ""
 
     report = build_report(
@@ -195,6 +215,7 @@ def _parser() -> argparse.ArgumentParser:
         default=DEFAULT_SESSION,
         help="prefix for the session id each row is run under",
     )
+    add_lanes_option(parser)
     parser.add_argument(
         "--out",
         type=Path,

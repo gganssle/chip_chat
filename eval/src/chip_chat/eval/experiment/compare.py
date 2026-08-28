@@ -17,11 +17,21 @@ and the aggregate alone would have called it an improvement.
 **Two results are only comparable if they scored the same thing.**
 :attr:`Comparison.comparable` checks the dataset version, and
 :attr:`Comparison.warnings` says what else differs -- a different source, a
-different judge, a different set of inert axes. None of those is refused,
-because refusing would make the harness useless exactly when somebody needs it
-(scoring last month's baseline against today's candidate is the normal case),
-and every one of them changes what a delta means. So they are printed above the
-table rather than enforced below it.
+different judge, a different set of inert axes, a different set of lanes wired.
+None of those is refused, because refusing would make the harness useless
+exactly when somebody needs it (scoring last month's baseline against today's
+candidate is the normal case), and every one of them changes what a delta means.
+So they are printed above the table rather than enforced below it.
+
+**One thing is refused, and it is not a difference.**
+:attr:`Comparison.stated` is false when either side does not record which lanes
+it had wired, and that comparison is not rendered at all. The distinction is the
+whole of ``cc-lanes``: a stated difference is something a reader can weigh, and
+an unstated one is a delta that looks identical whether a prompt got better or a
+lane came up. On 27 August 2026 the second of those was worth twenty points of
+tool selection and nobody could have seen it in the document. So the tables are
+replaced by a refusal that says which side did not say, and the CLI exits
+non-zero.
 
 **A delta on an unmeasured metric is not zero.** Where either side is ``None``
 the delta is ``None`` and the row reads *unmeasured*, for the reason every eval
@@ -49,6 +59,7 @@ from chip_chat.eval.experiment.results import (
     Target,
     delegated,
 )
+from chip_chat.eval.wiring import stated
 
 __all__ = [
     "MATERIAL",
@@ -251,9 +262,51 @@ class Comparison:
         return self.baseline.dataset_version == self.candidate.dataset_version
 
     @property
+    def stated(self) -> bool:
+        """Whether both sides said which lanes they had wired.
+
+        The one condition this module *refuses* on rather than warns about, and
+        the reason it is different in kind from every entry in
+        :attr:`warnings`. A warning describes a difference the reader can then
+        weigh -- a different judge, a different source, older rows. An unstated
+        lane configuration is not a difference; it is the absence of the
+        information a reader would need to know whether there is one. Two runs
+        that both say ``none`` are comparable and two that say ``none`` and
+        ``account+personalization`` are comparable-with-a-warning, because in
+        both cases the reader can see it. A file that says nothing offers a
+        delta that looks exactly like a model improvement and may be a lane
+        coming up, and there is nothing in the document that would let anybody
+        tell. So :func:`~chip_chat.eval.experiment.report.render_comparison`
+        prints a refusal instead of the tables, and the CLI exits non-zero.
+
+        This is the discipline :mod:`chip_chat.eval.retrieval.report` keeps for
+        an arm whose vector half was dropped, applied to the axis that turned
+        out to matter more.
+        """
+        return stated(self.baseline.wiring) and stated(self.candidate.wiring)
+
+    @property
+    def unstated_sides(self) -> tuple[str, ...]:
+        """Which sides did not say, named, for the refusal to print."""
+        sides = []
+        if not stated(self.baseline.wiring):
+            sides.append(f"baseline {self.baseline.experiment!r}")
+        if not stated(self.candidate.wiring):
+            sides.append(f"candidate {self.candidate.experiment!r}")
+        return tuple(sides)
+
+    @property
     def warnings(self) -> tuple[str, ...]:
         """Everything else that differs between the two runs, in prose."""
         notes: list[str] = []
+        if self.stated and self.baseline.wiring != self.candidate.wiring:
+            notes.append(
+                f"different lanes wired: {self.baseline.wiring} then "
+                f"{self.candidate.wiring}. A tool is offered to the model only "
+                "when something can answer it, so a lane that came up moved its "
+                "rows from unscoreable to scored, and part of every delta below "
+                "is the deployment rather than the change."
+            )
         if not self.comparable:
             notes.append(
                 f"different dataset versions: {self.baseline.dataset_version} then "
@@ -280,6 +333,12 @@ class Comparison:
             notes.append(
                 "both sides carry the same configuration fingerprint, so this "
                 "comparison is measuring run-to-run variance rather than a change."
+                if self.baseline.wiring == self.candidate.wiring
+                else "both sides carry the same configuration fingerprint and "
+                "different lanes, so this comparison is measuring the wiring "
+                "rather than the configuration. That is a real measurement and "
+                "it is the difference between what the model can do and what "
+                "the deployment lets it do."
             )
         return tuple(notes)
 

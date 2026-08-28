@@ -2,13 +2,13 @@
 
 - **Configuration** — `0ec39d67a727`, prompt v1+1c6f84d1f21f
 - **Dataset** — cilantro-golden-set `9ba196eb786c`, 34 rows
-- **Answered by** — week-one slice on gpt-5-mini under prompt v1+1c6f84d1f21f, lanes: account+personalization
-- **Lanes wired** — `account+personalization`
+- **Answered by** — week-one slice on gpt-5-mini under prompt v1+1c6f84d1f21f, lanes: none
+- **Lanes wired** — `none` — the hardcoded three-item menu and the account fixture answered, and `ask_account_question`, `get_recommendations` and `match_meal_from_photo` were not offered to the model at all
 - **Judged by** — gpt-5-mini as judge
-- **Run at** — 2026-08-28T03:18:33+00:00
-- **Judge spend** — 11681 tokens
+- **Run at** — 2026-08-28T03:33:19+00:00
+- **Judge spend** — 12889 tokens
 
-> **This run had lanes wired, and it is not comparable with a run that did not.** The tool list a model is offered is a function of what is wired — `chip_chat.agent.lanes.CONDITIONAL_TOOLS` withholds a tool nothing can answer — so a lane that came up here moved its rows from *impossible* to *scored*. The header above names exactly which lanes those were. Two lanes are still absent on every deployment there is: knowledge needs a retriever against the live alias (`cc-e1sr`) and photo needs the upload route and a production catalogue loader (`cc-mpd`), so their tools remain unregistered and their rows remain unscoreable here.
+> **No lane was wired, so the slice registers six of the eleven tools.** A tool that is not registered cannot be routed to, so its rows come back `no_tool` however good the model is, and a span tree cannot tell that apart from a model that chose not to call. `ask_account_question`, `get_recommendations` and `match_meal_from_photo` are the three, and this run scored their rows at zero for a reason that is not about the model. Read `eval/trajectory/BASELINE.md` beside this document.
 
 > **Recorded and not applied: retrieval, matcher.** This run wires no lane behind those axes, so a flat line on either is a fact about the deployment rather than evidence that the setting does not matter.
 
@@ -16,9 +16,9 @@
 
 | Metric | Target | This run | Met | Over |
 | --- | ---: | ---: | :---: | --- |
-| Task completion on the golden set | ≥ 85% | 20.6% | **no** | 19 of 34 row(s) |
-| Tool-selection accuracy | ≥ 95% | 65.6% | **no** | 32 of 34 row(s) |
-| Groundedness of food and policy claims | ≥ 95% | 70.0% | **no** | 10 of 10 row(s) |
+| Task completion on the golden set | ≥ 85% | 17.6% | **no** | 20 of 34 row(s) |
+| Tool-selection accuracy | ≥ 95% | 56.2% | **no** | 32 of 34 row(s) |
+| Groundedness of food and policy claims | ≥ 95% | 40.0% | **no** | 10 of 10 row(s) |
 | Menu claims made without a citation | 0 | -- | — | 0 of 34 row(s) |
 | Photo → order, component-level F1 | ≥ 80% | -- | — | — |
 
@@ -33,10 +33,10 @@ The aggregate above is one number over five lanes with different amounts of the 
 
 | Lane | Rows | Completion | Tool selection | wrong lane | no tool | extra tools | wrong query | ungrounded | over-refusals |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| knowledge | 12 | 0.0% | 91.7% | 1 | 0 | 11 | 0 | 3 | 5 |
-| account | 7 | 42.9% | 66.7% | 2 | 0 | 4 | 0 | 0 | 0 |
-| personalization | 4 | 0.0% | 66.7% | 1 | 0 | 2 | 0 | 0 | 0 |
-| action | 7 | 57.1% | 57.1% | 2 | 1 | 4 | 0 | 0 | 0 |
+| knowledge | 12 | 0.0% | 91.7% | 1 | 0 | 11 | 0 | 6 | 2 |
+| account | 7 | 14.3% | 16.7% | 5 | 0 | 0 | 0 | 0 | 0 |
+| personalization | 4 | 25.0% | 66.7% | 1 | 0 | 2 | 0 | 0 | 0 |
+| action | 7 | 57.1% | 57.1% | 3 | 0 | 4 | 0 | 0 | 0 |
 | vision | 1 | 0.0% | 0.0% | 1 | 0 | 0 | 0 | 0 | 0 |
 | none | 3 | 0.0% | 0.0% | 3 | 0 | 0 | 0 | 0 | 0 |
 
@@ -52,17 +52,17 @@ A lane is where the architecture is; a requirement is where the product is. One 
 | K4 | knowledge | 3 | 0 | 0 | 3 | 0.0% |
 | K5 | knowledge | 2 | 0 | 0 | 2 | 0.0% |
 | A1 | account | 2 | 1 | 1 | 0 | 50.0% |
-| A2 | account | 3 | 2 | 1 | 0 | 66.7% |
+| A2 | account | 3 | 0 | 3 | 0 | 0.0% |
 | A3 | account | — | — | — | — | measured in the adversarial suite, #30 |
-| A4 | account | 1 | 0 | 0 | 1 | 0.0% |
-| P1 | personalization | 3 | 0 | 1 | 2 | 0.0% |
+| A4 | account | 1 | 0 | 1 | 0 | 0.0% |
+| P1 | personalization | 3 | 1 | 0 | 2 | 33.3% |
 | P2 | personalization | 1 | 0 | 1 | 0 | 0.0% |
 | P3 | personalization | 1 | 0 | 0 | 1 | 0.0% |
-| T1 | action | 6 | 2 | 4 | 0 | 33.3% |
-| T2 | action | 8 | 4 | 4 | 0 | 50.0% |
+| T1 | action | 6 | 3 | 3 | 0 | 50.0% |
+| T2 | action | 8 | 5 | 3 | 0 | 62.5% |
 | T3 | action | 1 | 1 | 0 | 0 | 100.0% |
 | T4 | action | 2 | 1 | 1 | 0 | 50.0% |
-| T5 | action | 3 | 2 | 1 | 0 | 66.7% |
+| T5 | action | 3 | 3 | 0 | 0 | 100.0% |
 | V1 | vision | — | — | — | — | measured in api/tests/test_upload_limits.py and vision/tests/test_intake.py |
 | V2 | vision | — | — | — | — | measured in the labeled photo set, #56 |
 | V3 | vision | — | — | — | — | measured in the labeled photo set, #56 |

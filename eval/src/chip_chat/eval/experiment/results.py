@@ -55,6 +55,7 @@ from chip_chat.eval.golden.scoring import Scores, Verdict
 from chip_chat.eval.grounding.scoring import GroundingScores
 from chip_chat.eval.grounding.verdicts import Finding
 from chip_chat.eval.trajectory.scoring import TrajectoryScores
+from chip_chat.eval.wiring import UNSTATED
 
 __all__ = [
     "DEFAULT_RESULTS_DIR",
@@ -321,6 +322,14 @@ class ExperimentResult:
         dataset: The dataset's name.
         dataset_version: Its content fingerprint.
         source: What answered the rows.
+        wiring: Which lanes were wired, as
+            :attr:`chip_chat.eval.wiring.Wiring.label` spells it --
+            ``account+personalization``, or ``none`` for the unwired slice.
+            :data:`~chip_chat.eval.wiring.UNSTATED` where the run did not say,
+            which is every file recorded before this column existed and is not
+            the same thing as ``none``. A comparison refuses the first and
+            allows the second; see :attr:`~chip_chat.eval.experiment.compare.
+            Comparison.stated`.
         judge: What settled the judged findings, or empty.
         judge_tokens: What the judging cost. #76 makes this a budget line.
         inert_axes: Configuration axes this run recorded but could not apply.
@@ -339,6 +348,7 @@ class ExperimentResult:
     dataset: str
     dataset_version: str
     source: str
+    wiring: str = UNSTATED
     judge: str = ""
     judge_tokens: int = 0
     inert_axes: tuple[str, ...] = ()
@@ -390,6 +400,7 @@ class ExperimentResult:
             "dataset": self.dataset,
             "dataset_version": self.dataset_version,
             "source": self.source,
+            "wiring": self.wiring,
             "judge": self.judge,
             "judge_tokens": self.judge_tokens,
             "inert_axes": list(self.inert_axes),
@@ -411,6 +422,7 @@ def build_result(
     golden_scores: Scores,
     trajectory_scores: TrajectoryScores,
     grounding_scores: GroundingScores,
+    wiring: str = UNSTATED,
     judge: str = "",
     judge_tokens: int = 0,
     inert_axes: Sequence[str] = (),
@@ -429,6 +441,7 @@ def build_result(
         golden_scores: Task completion and the per-case verdicts.
         trajectory_scores: Lane selection and the four failure shapes.
         grounding_scores: Groundedness, citations and both refusal directions.
+        wiring: Which lanes were wired. See :attr:`ExperimentResult.wiring`.
         judge: What settled the judged findings, or empty.
         judge_tokens: What that cost.
         inert_axes: Axes recorded but not applied.
@@ -447,6 +460,7 @@ def build_result(
         dataset=dataset,
         dataset_version=dataset_version,
         source=source,
+        wiring=wiring,
         judge=judge,
         judge_tokens=judge_tokens,
         inert_axes=tuple(inert_axes),
@@ -665,6 +679,11 @@ def load_result(path: Path) -> ExperimentResult:
             dataset=str(payload.get("dataset", "")),
             dataset_version=str(payload.get("dataset_version", "")),
             source=str(payload.get("source", "")),
+            # Absent on every file written before the column existed, and that
+            # is exactly what UNSTATED means. Defaulting it to `none` would
+            # claim those runs measured the unwired slice, which is probably
+            # true and is not something a reader should have to take on trust.
+            wiring=str(payload.get("wiring", UNSTATED)),
             judge=str(payload.get("judge", "")),
             judge_tokens=int(payload.get("judge_tokens", 0)),
             inert_axes=tuple(str(axis) for axis in payload.get("inert_axes", ())),

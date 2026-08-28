@@ -28,12 +28,23 @@ two runs somebody did on different days is the thing the harness exists to
 replace. ``--compare-recorded`` does the same from two files, which is how a
 candidate is checked against a baseline recorded weeks ago.
 
+**``--lanes`` is the axis that is not in the configuration, and it is the one
+that moved the numbers furthest.** A configuration names a prompt, a model and
+settings; which of the five lanes are *wired* is a property of the machine the
+run happens on, and it decides which tools the model is offered at all. So it is
+a flag rather than a configuration axis, ``none`` is its default so that every
+free mode above stays free, and the value it resolved to is recorded on the
+result. Two results that do not both state it are **not compared**: the
+comparison prints a refusal instead of its tables and this command exits
+non-zero. See :mod:`chip_chat.eval.wiring` and
+:attr:`~chip_chat.eval.experiment.compare.Comparison.stated`.
+
 .. code-block:: console
 
     $ python -m chip_chat.eval.experiment --check
     $ python -m chip_chat.eval.experiment --ceiling --run shipped
     $ export CHIP_CHAT_FOUNDRY_ENDPOINT=... CHIP_CHAT_FOUNDRY_CHAT_DEPLOYMENT=...
-    $ python -m chip_chat.eval.experiment --run shipped --judge \\
+    $ python -m chip_chat.eval.experiment --run shipped --judge --lanes wired \\
           --record eval/experiments/results/shipped.json \\
           --out eval/experiments/BASELINE.md
     $ python -m chip_chat.eval.experiment --compare shipped lean-lanes \\
@@ -52,7 +63,7 @@ from typing import Any
 from chip_chat.agent.foundry import FoundryConfig, FoundryConfigError
 from chip_chat.agent.model import AzureChatModel
 from chip_chat.eval.dataset.build import Dataset, DatasetError, build_dataset
-from chip_chat.eval.experiment.compare import compare
+from chip_chat.eval.experiment.compare import Comparison, compare
 from chip_chat.eval.experiment.configurations import (
     DEFAULT_MANIFEST,
     ConfigurationError,
@@ -71,11 +82,17 @@ from chip_chat.eval.experiment.results import (
 from chip_chat.eval.experiment.run import Experiment, run_experiment
 from chip_chat.eval.golden.cases import DEFAULT_MANIFEST as GOLDEN_MANIFEST
 from chip_chat.eval.golden.cases import CaseError, GoldenSet
-from chip_chat.eval.golden.slice import SliceDeployment
+from chip_chat.eval.golden.slice import SLICE_PERSONA, SliceDeployment
 from chip_chat.eval.golden.testing import RoutingOracle
 from chip_chat.eval.grounding.judge import ModelJudge
 from chip_chat.eval.photos.labels import LabeledSet, LabelError
 from chip_chat.eval.trajectory.trees import TraceSpan
+from chip_chat.eval.wiring import (
+    LaneWiringError,
+    WiredLanes,
+    add_lanes_option,
+    run_lanes,
+)
 
 PHOTOS_MANIFEST = Path("eval/photos/labels.json")
 DEFAULT_BASELINE = Path("eval/experiments/BASELINE.md")
@@ -90,12 +107,26 @@ CEILING_CAVEAT = (
     "What this run measures is the harness and the wiring at their ceiling."
 )
 
-LIVE_CAVEAT = (
-    "> **The week-one slice registers six of the eleven tools.** A tool that is "
-    "not registered cannot be routed to, so its rows come back `no_tool` "
-    "however good the model is, and a span tree cannot tell that apart from a "
-    "model that chose not to call. Read `eval/trajectory/BASELINE.md` beside "
-    "this document."
+UNWIRED_CAVEAT = (
+    "> **No lane was wired, so the slice registers six of the eleven tools.** A "
+    "tool that is not registered cannot be routed to, so its rows come back "
+    "`no_tool` however good the model is, and a span tree cannot tell that "
+    "apart from a model that chose not to call. `ask_account_question`, "
+    "`get_recommendations` and `match_meal_from_photo` are the three, and this "
+    "run scored their rows at zero for a reason that is not about the model. "
+    "Read `eval/trajectory/BASELINE.md` beside this document."
+)
+
+WIRED_CAVEAT = (
+    "> **This run had lanes wired, and it is not comparable with a run that "
+    "did not.** The tool list a model is offered is a function of what is "
+    "wired — `chip_chat.agent.lanes.CONDITIONAL_TOOLS` withholds a tool nothing "
+    "can answer — so a lane that came up here moved its rows from *impossible* "
+    "to *scored*. The header above names exactly which lanes those were. Two "
+    "lanes are still absent on every deployment there is: knowledge needs a "
+    "retriever against the live alias (`cc-e1sr`) and photo needs the upload "
+    "route and a production catalogue loader (`cc-mpd`), so their tools remain "
+    "unregistered and their rows remain unscoreable here."
 )
 
 
@@ -137,10 +168,12 @@ def main(argv: list[str] | None = None) -> int:
         return _check(arms, dataset)
 
     try:
-        if args.compare:
-            return _compare_arms(args, arms, golden, dataset)
-        return _run_one(args, arms, golden, dataset)
-    except (ConfigurationError, FoundryConfigError) as error:
+        with run_lanes(args.lanes, SLICE_PERSONA) as wired:
+            print(wired.note)
+            if args.compare:
+                return _compare_arms(args, arms, golden, dataset, wired)
+            return _run_one(args, arms, golden, dataset, wired)
+    except (ConfigurationError, FoundryConfigError, LaneWiringError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
@@ -169,10 +202,11 @@ def _run_one(
     arms: Sequence[ExperimentConfiguration],
     golden: GoldenSet,
     dataset: Dataset,
+    wired: WiredLanes,
 ) -> int:
     """Run one arm and write its result."""
     arm = named(arms, args.run)
-    experiment = _execute(args, arm, golden, dataset)
+    experiment = _execute(args, arm, golden, dataset, wired)
     document = render_result(experiment.result)
     _emit(document, args.out)
     _record(experiment.result, args.record, args.results)
@@ -185,17 +219,20 @@ def _compare_arms(
     arms: Sequence[ExperimentConfiguration],
     golden: GoldenSet,
     dataset: Dataset,
+    wired: WiredLanes,
 ) -> int:
     """Run two arms against the same dataset and render the comparison."""
     first, second = args.compare
-    baseline = _execute(args, named(arms, first), golden, dataset)
-    candidate = _execute(args, named(arms, second), golden, dataset)
+    baseline = _execute(args, named(arms, first), golden, dataset, wired)
+    candidate = _execute(args, named(arms, second), golden, dataset, wired)
     _capture(candidate, golden, args.capture)
     comparison = compare(baseline.result, candidate.result)
     _emit(render_comparison(comparison), args.out)
     if args.record or args.results:
         _record(baseline.result, None, args.results)
         _record(candidate.result, None, args.results)
+    if not comparison.stated:
+        return _unstated(comparison)
     for line in comparison.regressions:
         print(f"regression: {line}", file=sys.stderr)
     return 1 if comparison.regressions and args.fail_on_regression else 0
@@ -230,9 +267,29 @@ def _compare_recorded(args: argparse.Namespace) -> int:
         return 1
     comparison = compare(baseline, candidate)
     _emit(render_comparison(comparison), args.out)
+    if not comparison.stated:
+        return _unstated(comparison)
     for line in comparison.regressions:
         print(f"regression: {line}", file=sys.stderr)
     return 1 if comparison.regressions and args.fail_on_regression else 0
+
+
+def _unstated(comparison: Comparison) -> int:
+    """Refuse a comparison whose sides did not say what they were run against.
+
+    Non-zero regardless of ``--fail-on-regression``, which gates a *finding*.
+    This is not a finding; it is the harness declining to produce one, and a
+    caller that reads the exit status has to be able to tell those apart from a
+    green run. See :attr:`~chip_chat.eval.experiment.compare.Comparison.stated`.
+    """
+    sides = " and ".join(comparison.unstated_sides)
+    print(
+        f"error: {sides} did not record which lanes were wired, so there is no "
+        "comparison to draw. Re-run both arms with --lanes and compare the "
+        "results those write.",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def _execute(
@@ -240,8 +297,17 @@ def _execute(
     arm: ExperimentConfiguration,
     golden: GoldenSet,
     dataset: Dataset,
+    wired: WiredLanes,
 ) -> Experiment:
-    """Run one arm, free or live depending on ``--ceiling``."""
+    """Run one arm, free or live depending on ``--ceiling``.
+
+    The lanes reach the factory and the recorded label reaches the result from
+    the *same* :class:`~chip_chat.eval.wiring.WiredLanes`, which is what stops
+    the two from ever disagreeing -- a result that says
+    ``account+personalization`` while the deployment was handed
+    :data:`~chip_chat.agent.lanes.NO_LANES` would be worse than one that says
+    nothing.
+    """
     environment = dict(os.environ)
     if args.ceiling:
         return run_experiment(
@@ -250,10 +316,12 @@ def _execute(
             dataset,
             lambda configuration: SliceDeployment(
                 RoutingOracle(golden),
+                lanes=wired.lanes,
                 session_prefix=f"{args.session}-{configuration.name}",
                 prompt=configuration.prompt(),
             ),
             environment=environment,
+            wiring=wired.wiring.label,
             prompt_read=False,
             only=args.only,
             caveat=CEILING_CAVEAT,
@@ -268,16 +336,18 @@ def _execute(
         dataset,
         lambda configuration: SliceDeployment(
             AzureChatModel(config),
+            lanes=wired.lanes,
             session_prefix=f"{args.session}-{configuration.name}",
             prompt=configuration.prompt(),
         ),
         environment=overlay,
+        wiring=wired.wiring.label,
         judge=judge,
         judge_name="" if judge is None else judge.name,
         judge_tokens=0 if judge is None else judge.spend.total_tokens,
         only=args.only,
         pace=args.pace,
-        caveat=LIVE_CAVEAT,
+        caveat=WIRED_CAVEAT if wired.wiring.wired else UNWIRED_CAVEAT,
     )
     if judge is not None:
         print(f"judge spend: {judge.spend.summary()}")
@@ -464,6 +534,7 @@ def _parser() -> argparse.ArgumentParser:
         default="experiment",
         help="prefix for the session id each row is run under",
     )
+    add_lanes_option(parser)
     parser.add_argument(
         "--capture",
         type=Path,

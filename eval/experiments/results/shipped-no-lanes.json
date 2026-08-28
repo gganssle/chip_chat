@@ -1,5 +1,5 @@
 {
-  "caveat": "> **This run had lanes wired, and it is not comparable with a run that did not.** The tool list a model is offered is a function of what is wired \u2014 `chip_chat.agent.lanes.CONDITIONAL_TOOLS` withholds a tool nothing can answer \u2014 so a lane that came up here moved its rows from *impossible* to *scored*. The header above names exactly which lanes those were. Two lanes are still absent on every deployment there is: knowledge needs a retriever against the live alias (`cc-e1sr`) and photo needs the upload route and a production catalogue loader (`cc-mpd`), so their tools remain unregistered and their rows remain unscoreable here.",
+  "caveat": "> **No lane was wired, so the slice registers six of the eleven tools.** A tool that is not registered cannot be routed to, so its rows come back `no_tool` however good the model is, and a span tree cannot tell that apart from a model that chose not to call. `ask_account_question`, `get_recommendations` and `match_meal_from_photo` are the three, and this run scored their rows at zero for a reason that is not about the model. Read `eval/trajectory/BASELINE.md` beside this document.",
   "configuration": {
     "chat_deployment": "gpt-5-mini",
     "matcher": {},
@@ -21,16 +21,16 @@
     "matcher"
   ],
   "judge": "gpt-5-mini as judge",
-  "judge_tokens": 11681,
+  "judge_tokens": 12889,
   "lanes": [
     {
       "cases": 12,
       "completion": 0.0,
       "failed": 1,
-      "grounded_failed": 3,
+      "grounded_failed": 6,
       "grounded_scored": 10,
       "lane": "knowledge",
-      "over_refusals": 5,
+      "over_refusals": 2,
       "passed": 0,
       "shapes": {
         "correct": 0,
@@ -47,35 +47,35 @@
     },
     {
       "cases": 7,
-      "completion": 0.42857142857142855,
-      "failed": 2,
+      "completion": 0.14285714285714285,
+      "failed": 5,
       "grounded_failed": 0,
       "grounded_scored": 0,
       "lane": "account",
       "over_refusals": 0,
-      "passed": 3,
+      "passed": 1,
       "shapes": {
-        "correct": 0,
-        "extra_tools": 4,
+        "correct": 1,
+        "extra_tools": 0,
         "no_tool": 0,
         "unscored": 1,
-        "wrong_lane": 2,
+        "wrong_lane": 5,
         "wrong_query": 0
       },
-      "tool_selection": 0.6666666666666666,
+      "tool_selection": 0.16666666666666666,
       "uncited": null,
       "under_refusals": 0,
-      "unscored": 2
+      "unscored": 1
     },
     {
       "cases": 4,
-      "completion": 0.0,
-      "failed": 2,
+      "completion": 0.25,
+      "failed": 1,
       "grounded_failed": 0,
       "grounded_scored": 0,
       "lane": "personalization",
       "over_refusals": 0,
-      "passed": 0,
+      "passed": 1,
       "shapes": {
         "correct": 0,
         "extra_tools": 2,
@@ -101,9 +101,9 @@
       "shapes": {
         "correct": 0,
         "extra_tools": 4,
-        "no_tool": 1,
+        "no_tool": 0,
         "unscored": 0,
-        "wrong_lane": 2,
+        "wrong_lane": 3,
         "wrong_query": 0
       },
       "tool_selection": 0.5714285714285714,
@@ -161,22 +161,22 @@
       "asked": 34,
       "metric": "completion",
       "note": "",
-      "scored": 19,
-      "value": 0.20588235294117646
+      "scored": 20,
+      "value": 0.17647058823529413
     },
     {
       "asked": 34,
       "metric": "tool_selection",
       "note": "",
       "scored": 32,
-      "value": 0.65625
+      "value": 0.5625
     },
     {
       "asked": 10,
       "metric": "groundedness",
       "note": "",
       "scored": 10,
-      "value": 0.7
+      "value": 0.4
     },
     {
       "asked": 34,
@@ -194,7 +194,7 @@
     }
   ],
   "prompt_version": "v1+1c6f84d1f21f",
-  "ran_at": "2026-08-28T03:18:33+00:00",
+  "ran_at": "2026-08-28T03:33:19+00:00",
   "requirements": [
     {
       "cases": 6,
@@ -253,9 +253,9 @@
     {
       "cases": 3,
       "delegated_to": "",
-      "failed": 1,
+      "failed": 3,
       "lane": "account",
-      "passed": 2,
+      "passed": 0,
       "requirement": "A2",
       "unscored": 0
     },
@@ -271,18 +271,18 @@
     {
       "cases": 1,
       "delegated_to": "",
-      "failed": 0,
+      "failed": 1,
       "lane": "account",
       "passed": 0,
       "requirement": "A4",
-      "unscored": 1
+      "unscored": 0
     },
     {
       "cases": 3,
       "delegated_to": "",
-      "failed": 1,
+      "failed": 0,
       "lane": "personalization",
-      "passed": 0,
+      "passed": 1,
       "requirement": "P1",
       "unscored": 2
     },
@@ -307,18 +307,18 @@
     {
       "cases": 6,
       "delegated_to": "",
-      "failed": 4,
+      "failed": 3,
       "lane": "action",
-      "passed": 2,
+      "passed": 3,
       "requirement": "T1",
       "unscored": 0
     },
     {
       "cases": 8,
       "delegated_to": "",
-      "failed": 4,
+      "failed": 3,
       "lane": "action",
-      "passed": 4,
+      "passed": 5,
       "requirement": "T2",
       "unscored": 0
     },
@@ -343,9 +343,9 @@
     {
       "cases": 3,
       "delegated_to": "",
-      "failed": 1,
+      "failed": 0,
       "lane": "action",
-      "passed": 2,
+      "passed": 3,
       "requirement": "T5",
       "unscored": 0
     },
@@ -451,6 +451,6 @@
   ],
   "rows": 34,
   "schema": 1,
-  "source": "week-one slice on gpt-5-mini under prompt v1+1c6f84d1f21f, lanes: account+personalization",
-  "wiring": "account+personalization"
+  "source": "week-one slice on gpt-5-mini under prompt v1+1c6f84d1f21f, lanes: none",
+  "wiring": "none"
 }

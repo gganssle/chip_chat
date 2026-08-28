@@ -6,12 +6,25 @@ exists to produce a bad number early, because the alternative -- waiting until
 the lanes are built and then writing the set -- is trap 6, which is the trap #29
 was filed to avoid.
 
-What the slice is: ``chip_chat.agent.loop.run_turn`` over
+What the slice is: ``chip_chat.agent.loop.run_turn`` over whatever
+:attr:`SliceDeployment.lanes` holds. Unwired -- the default, and the only
+configuration that costs nothing -- that is
 :data:`~chip_chat.agent.hardcoded.MENU`, three items, one persona, six of the
 eleven tools. So it will fail every account, personalization, cancel, redeem and
 preferences case, and it will fail them with ``TOOL_NOT_IMPLEMENTED`` rather than
 with a wrong answer -- which the report shows as failures with named causes
 rather than as an average.
+
+**Wired, it is a different measurement, and the name says which.** A run given
+real lanes is offered the conditional tools those lanes answer, so the account
+rows stop failing because the tool is absent and start being scored on whether
+the model picked it. Two numbers taken under two wirings are not comparable, and
+a reader must not have to infer which they hold from how large it is, so
+:attr:`SliceDeployment.name` -- which is what every report prints as the
+deployment and what every recorded result carries as its source -- states the
+lane configuration on every run, unwired included.
+:mod:`chip_chat.eval.wiring` is the label and the builder, and the long version
+of why this matters.
 
 **Four signals, and the missing one is the interesting one.** This deployment
 reports tools, cards, receipts and writes. It does **not** report citations,
@@ -62,6 +75,7 @@ from chip_chat.agent.prompt import SystemPrompt
 from chip_chat.agent.tools import offered_tools
 from chip_chat.eval.golden.cases import ANY_PERSONA, GoldenCase
 from chip_chat.eval.golden.run import DEFAULT_SESSION, Observation, Signal
+from chip_chat.eval.wiring import Wiring
 from chip_chat.otel import ToolName, chat_turn
 
 __all__ = ["SLICE_PERSONA", "SLICE_SIGNALS", "SliceDeployment"]
@@ -110,10 +124,22 @@ class SliceDeployment:
     prompt: SystemPrompt | None = None
 
     @property
+    def wiring(self) -> Wiring:
+        """Which lanes this run has. See :mod:`chip_chat.eval.wiring`."""
+        return Wiring.of(self.lanes)
+
+    @property
     def name(self) -> str:
-        """The deployment, as the report names it."""
+        """The deployment, as the report names it.
+
+        The lane configuration is part of the name rather than a field beside
+        it, because the name is what a report prints and what a recorded result
+        carries as its source -- and a number whose configuration lives
+        somewhere the reader has to go and look for is a number they will read
+        without it.
+        """
         under = "" if self.prompt is None else f" under prompt {self.prompt.version}"
-        return f"week-one slice on {self.model.deployment}{under}"
+        return f"week-one slice on {self.model.deployment}{under}, lanes: {self.wiring}"
 
     @property
     def reports(self) -> frozenset[Signal]:

@@ -201,6 +201,15 @@ verify-tools-bare: ## The same cases, with no system prompt at all
 # both belong in CI. Pass --catalog a build the deployment actually serves —
 # that is what turns the golden set's menu terms into a staleness detector
 # rather than a comment.
+#
+# `golden` runs against the UNWIRED slice, which is six of the eleven tools and
+# is what `--lanes none` means. Add `--lanes wired` to run it against the
+# account and personalization lanes the deployment actually has; it needs a
+# Snowflake credential and it says so in the report's Deployment line either
+# way. See eval/README.md and chip_chat.eval.wiring.
+#
+#     uv run python -m chip_chat.eval.golden --lanes wired \
+#         --out eval/golden/BASELINE.md
 
 .PHONY: golden-check golden photos-check adversarial-check adversarial \
         adversarial-redteam adversarial-baseline adversarial-sabotaged \
@@ -366,6 +375,11 @@ trajectory-baseline: ## Refresh eval/trajectory/BASELINE.md from that same free 
 # one model call per row, which is why it is not a target here:
 #
 #     uv run python -m chip_chat.eval.trajectory --out eval/trajectory/BASELINE.md
+#
+# Add `--lanes wired` to that and the three conditional tools are offered, which
+# is the difference between a lane whose rows come back `no_tool` because the
+# model did not call it and one whose rows come back `no_tool` because the tool
+# was never registered. The report's "Traces from" line names the wiring.
 
 # --- Groundedness and citation presence --------------------------------------
 #
@@ -420,6 +434,11 @@ grounding-judged: ## Run against a real deployment with a judge, and write the b
 # one model call per row:
 #
 #     uv run python -m chip_chat.eval.grounding --out eval/grounding/BASELINE.md
+#
+# `--lanes wired` works on both credentialed forms. It does NOT wire the
+# knowledge lane -- that is cc-e1sr -- so `search_menu_knowledge` still answers
+# from the three-item hardcoded menu and groundedness is still grounded in a
+# fixture. The "Answered by" line says which lanes came up.
 
 # --- Retrieval, on its own ---------------------------------------------------
 #
@@ -569,8 +588,39 @@ dataset-upload: ## Create the Arize dataset, or add a version holding the new en
 # `experiment-compare` is the demo criterion and it costs money: two arms, one
 # model call per row each, plus two judge calls per scoreable row with --judge.
 # It needs CHIP_CHAT_FOUNDRY_ENDPOINT and the two deployment names.
+#
+# WHICH LANES A RUN HAS IS PART OF WHAT IT MEASURED, and until cc-lanes it was
+# neither configurable nor recorded. `--lanes` is the flag and `none` is its
+# default, so every free target above stays free, offline and credential-free --
+# that is a rule here rather than an oversight. `experiment-baseline` is the one
+# target that passes `wired`, because it is the baseline the launch criteria are
+# checked against and the launch criteria are about the deployment: it opens a
+# Snowflake connection as CHIP_CHAT_APP, reads the roster, binds every case's
+# session to the rank-one `regular` fixture, and hands the agent loop the same
+# account and personalization lanes `chip_chat.api.app.build_lanes` hands the
+# Container App. Without a Snowflake credential it REFUSES rather than quietly
+# scoring the unwired slice under a heading that says otherwise.
+#
+# `experiment-baseline-unwired` is the same run with no lane wired, and
+# `experiment-wiring` subtracts the two. That delta is the difference between
+# what the model can do and what the deployment lets it do, and it is the
+# reason the two documents are kept side by side rather than one overwriting
+# the other.
+#
+# `experiment-compare` passes `wired` for the same reason: it writes over
+# results/shipped.json through --results, and a prompt comparison recorded
+# against a configuration the deployment does not have would replace the launch
+# baseline with a different measurement under the same filename.
+#
+# eval/experiments/results/lean-lanes.json and COMPARISON.md predate the wiring
+# column and therefore say nothing about it, so `--compare-recorded` against
+# either is REFUSED until `experiment-compare` is re-run. That is the check
+# working rather than a chore: those numbers were taken against a configuration
+# nobody wrote down.
 
-.PHONY: experiment-check experiment-ceiling experiment-baseline experiment-render experiment-compare
+.PHONY: experiment-check experiment-ceiling experiment-baseline \
+	experiment-baseline-unwired experiment-wiring experiment-render \
+	experiment-compare
 
 experiment-check: ## Load the configurations and the dataset without running anything, free
 	$(UV) run python -m chip_chat.eval.experiment --check
@@ -578,11 +628,25 @@ experiment-check: ## Load the configurations and the dataset without running any
 experiment-ceiling: ## Score an arm with routing handed to it. Free, and blind to the prompt
 	$(UV) run python -m chip_chat.eval.experiment --ceiling --run shipped
 
-experiment-baseline: ## Record the current build as the baseline the launch criteria are checked against
+experiment-baseline: ## Record the DEPLOYED build -- lanes wired -- as the launch baseline
 	$(UV) run python -m chip_chat.eval.experiment --run shipped --judge \
+		--lanes wired \
 		--record eval/experiments/results/shipped.json \
 		--capture eval/experiments/captures/shipped.json \
 		--out eval/experiments/BASELINE.md
+
+experiment-baseline-unwired: ## The same run with no lane wired, for the comparison below
+	$(UV) run python -m chip_chat.eval.experiment --run shipped --judge \
+		--lanes none \
+		--record eval/experiments/results/shipped-no-lanes.json \
+		--capture eval/experiments/captures/shipped-no-lanes.json \
+		--out eval/experiments/BASELINE-NO-LANES.md
+
+experiment-wiring: ## Subtract the two: what the deployment adds over the unwired slice. Free
+	$(UV) run python -m chip_chat.eval.experiment --compare-recorded \
+		eval/experiments/results/shipped-no-lanes.json \
+		eval/experiments/results/shipped.json \
+		--out eval/experiments/WIRING.md
 
 experiment-render: ## Re-render a recorded result as Markdown. Free, no model
 	$(UV) run python -m chip_chat.eval.experiment \
@@ -591,7 +655,7 @@ experiment-render: ## Re-render a recorded result as Markdown. Free, no model
 
 experiment-compare: ## Two prompt versions, same dataset, comparison rendered -- #73's demo
 	$(UV) run python -m chip_chat.eval.experiment --compare shipped lean-lanes \
-		--judge --results eval/experiments/results \
+		--judge --lanes wired --results eval/experiments/results \
 		--capture eval/experiments/captures/lean-lanes.json \
 		--out eval/experiments/COMPARISON.md
 
