@@ -633,6 +633,26 @@ snowflake-verify` now fails on an unfilled baseline by name, under [#47], and
 generated population that exists only in one agent's working directory and in
 one Snowflake account is a population with no copies.
 
+**Half of that is now done, and the recovery above turned out to have been from
+the wrong generation.** The `demo_visitors` the baseline was rebuilt from held
+sixty visitors; `ACCOUNTS.orders` and `ACCOUNTS.loyalty_ledger` held five
+hundred, from a different run of the generator. So the luck was smaller than it
+looked: what survived was a *roster*, faithfully, for a history the account did
+not contain. `docs/snowflake-schema.md` §9 is the write-up.
+
+The fix left the history alone, because the gold marts were computed from it,
+and reconciled the roster to it — which was possible because the population the
+account holds is **exactly reproducible from this repository**: it is
+`generate_population` over the committed catalogue fixture, the committed policy
+harvest and the shipped `population.toml` at seed 20260826, and all five hundred
+visitors match on order count, spend, ledger sum and last order. The three
+tables no publish can write are committed at `data-gen/roster/`, with a
+`manifest.json` recording the seed, both input digests and a SHA-256 per table
+for all six; `make snowflake-load-roster` puts them back and
+`data-gen/tests/test_roster.py` holds the committed copy to the shipped config
+on every `make ci`. A rebuild's prerequisite is therefore a command rather than
+a directory somebody has to still have.
+
 [#39]: https://github.com/gganssle/chip_chat/issues/39
 [#40]: https://github.com/gganssle/chip_chat/issues/40
 [#41]: https://github.com/gganssle/chip_chat/issues/41

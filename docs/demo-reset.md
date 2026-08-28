@@ -395,6 +395,21 @@ inventing a second generation. `make snowflake-verify` now fails by name on an
 unfilled baseline — *"every visitor has the baseline the reset restores them
 to"* — so the next occurrence is loud.
 
+**And the generation it was recovered from was the wrong one, which took
+another day to find out.** The sentence above — "the live `demo_visitors` was
+still the loaded generation exactly" — was true about `demo_visitors` and false
+about the account. It held sixty visitors, `demo-0001` through `demo-0060`, from
+a sixty-customer run of `chip_chat.data_gen`; `ACCOUNTS.orders` and
+`ACCOUNTS.loyalty_ledger` held five hundred, from a different one, published out
+of Databricks silver by
+[#39](https://github.com/gganssle/chip_chat/issues/39) on the nightly schedule. So the baseline was filled
+faithfully from a roster that described a history the account did not contain,
+and the reset would have restored four hundred and forty visitors to nothing at
+all while restoring sixty to somebody else's numbers. `docs/snowflake-schema.md`
+§9 is the write-up of the load defect underneath it. The roster is now committed
+at `data-gen/roster/`, `make snowflake-load-roster` puts it back, and the
+baseline stands at 500 rows for 500 visitors rather than 60 for 60.
+
 ### What is still not measured
 
 1. **The escape inside a task.** The runs above called the procedure directly.

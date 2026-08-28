@@ -896,6 +896,19 @@ search-vector-arm: ## Measure how often the Free tier drops the vector half. [RE
 # real harvested data and needs no landing zone. `snowflake-load` takes one that
 # has been harvested and generated.
 #
+# `snowflake-load-roster` takes `data-gen/roster/`, which is the other half of
+# the account and the half that has no other route in: #39's nightly publish
+# writes `orders`, `order_items` and `loyalty_ledger` out of silver and cannot
+# see `personas`, `persona_fixtures` or `demo_visitors` at all. Two loaders, two
+# halves of one population, and until the roster was committed nothing that made
+# them name the same generation -- which is how the live account spent a day
+# holding a history generated for five hundred customers and a roster generated
+# for sixty. `snowflake-verify` now fails on that by name and
+# `data-gen/tests/test_roster.py` holds the committed copy to the shipped
+# config, so the divergence has two ways of announcing itself and neither of
+# them is somebody remembering. docs/snowflake-schema.md section 9 is the
+# write-up.
+#
 # `snowflake-demo-reset` is #47's manual trigger, and the nightly task installed
 # by `snowflake-apply` calls the same procedure with the same arguments. It ages
 # sessions out rather than truncating -- #9 decided a visitor's state persists
@@ -917,7 +930,8 @@ search-vector-arm: ## Measure how often the Free tier drops the vector half. [RE
 
 .PHONY: snowflake-plan snowflake-apply snowflake-cap snowflake-verify \
         snowflake-verify-fast snowflake-rebuild snowflake-load \
-        snowflake-load-sample snowflake-demo-reset snowflake-demo-reset-plan
+        snowflake-load-sample snowflake-load-roster snowflake-demo-reset \
+        snowflake-demo-reset-plan
 
 snowflake-plan: ## Print the SQL files an apply would run, in order
 	$(UV) run python -m chip_chat.snowflake.apply --plan
@@ -940,6 +954,9 @@ snowflake-load-sample: ## Load the committed catalogue fixture -- #42 criterion 
 snowflake-load: ## Load a harvested and generated landing zone into the serving layer
 	$(UV) run python -m chip_chat.snowflake.load \
 		$(LANDING)/catalog $(LANDING)/accounts/synthetic
+
+snowflake-load-roster: ## Load the committed roster -- personas, fixtures, visitors, baseline
+	$(UV) run python -m chip_chat.snowflake.load data-gen/roster
 
 snowflake-demo-reset-plan: ## Show which demo sessions would be aged out -- changes nothing
 	$(UV) run python -m chip_chat.snowflake.reset --dry-run

@@ -363,9 +363,193 @@ make snowflake-verify-fast   # #41 and #42, without the minute of watching
 harvested and generated — the catalogue from `landing/catalog`, the account
 tables from `landing/accounts/synthetic`, conformed.
 
+`make snowflake-load-roster` loads `data-gen/roster/`, which is the committed
+copy of the three tables no landing zone is needed for. Section 9 is why it
+exists.
+
+## 9. Two loaders fill `ACCOUNTS`, and for a day they disagreed
+
+Section 7 records, almost in passing, that `chip_chat.snowflake.load` "is still
+the only way `demo_visitors`, `personas` and `persona_fixtures` reach the
+account, because the publisher cannot write them". The other half of that
+sentence is the interesting half: `orders`, `order_items` and `loyalty_ledger`
+reach the account the *other* way, from [#39]'s nightly publish out of
+Databricks silver, on a schedule, as a role that cannot see the roster at all.
+
+Six tables of one generated population, two loaders, and — until 2026-08-27 —
+nothing anywhere that made them name the same generation.
+
+### What it looked like
+
+Measured as `CHIP_CHAT_ADMIN` with `ALL_VISITORS` set, across all twenty-eight
+rows of `ACCOUNTS.persona_fixtures` against the tables they claim to describe:
+
+```
+FIXTURES 28 · POINTS_AGREE 4 · ORDERS_AGREE 4 · SPEND_AGREE 4
+```
+
+`demo-0048`'s fixture said eighty orders, $1,345.75 of lifetime spend and 397
+points. The tables said thirty-one orders, $2,430.70 and 1,363 points. The
+account was holding a history generated for five hundred customers underneath a
+roster generated for sixty: `ACCOUNTS.orders` and `ACCOUNTS.loyalty_ledger`
+carried five hundred distinct `demo_id`s, `ACCOUNTS.demo_visitors` carried
+`demo-0001` through `demo-0060`, and the twenty-eight fixtures were drawn from
+that sixty.
+
+**It is a load defect and it is not a generator defect.** `chip_chat.data_gen`
+composes all six tables from one walk and asserts they agree by construction:
+`data-gen/tests/test_referential_integrity.py` holds
+`sum(entry.delta) == fixture.points_balance` for every fixture in the
+population. No coherent generation can look like the account looked. Only
+loading two of them can.
+
+**It cost nothing until the account lane was wired.** While `get_points_balance`
+returned a hardcoded fixture, the fixture was the only source and there was
+nothing in the system for it to contradict; `docs/public-demo.md` §9 was that
+defect and closing it is what exposed this one. Afterwards the opening message
+is composed from `persona_fixtures.narrative` and the tool sums `delta` from the
+ledger, so a visitor was introduced as having 397 points and then told, in the
+same conversation, that they had 1,363.
+
+### Why the narrative made this more than a column repair
+
+Two of the seven archetypes quote the balance in prose. The Weekly Regular's
+narrative reads *"a regular at IL Town 1 Mall, 590 points on the card"* and the
+Lapsed Regular's reads *"15,445 points still unredeemed from 48 orders"* —
+eight of the twenty-eight rows say a number of points in words. Correcting
+`points_balance` and `order_count` while leaving the sentence beside them alone
+would have moved the contradiction from a place a visitor can see it in one turn
+to a place they can see it in two, which is worse rather than better. The
+generator renders the sentence and the columns from the same measured facts, so
+the only repair that holds is one that replaces the row.
+
+### What was done instead of a re-generation
+
+The obvious fix — regenerate the population, load all six tables together — was
+the wrong one, and for a reason worth writing down. The four gold marts were
+computed in Databricks *from the `orders` the account already held*. Replacing
+those orders makes `MARTS.customer_360` and `MARTS.usual_order` describe
+customers who no longer exist, which is not an error; it is four tables of
+plausible numbers about nobody, and it would have moved the lie from the account
+lane to the personalization lane.
+
+So the history was left alone and the roster was reconciled to it. That was
+possible because the live history turned out to be **exactly reproducible from
+this repository**: the population the account holds is
+`generate_population(catalogue fixture, policy fixture, population.toml)` at the
+shipped seed 20260826, and the check is not a resemblance —
+
+```
+live visitors: 500 generated visitors: 500
+mismatched visitors: 0
+```
+
+— comparing order count, lifetime spend, ledger sum, ledger entry count and last
+order timestamp for all five hundred. The landing zone `docs/snowflake-account.md`
+§3.4 records as missing was never lost. It was never written down, which is a
+different problem with a different fix.
+
+The three roster tables of that generation are now committed at
+`data-gen/roster/`, 140 kilobytes, and `make snowflake-load-roster` loads them.
+`manifest.json` beside them records the seed, both input digests and a SHA-256
+per table for all six, so "is this the generation the marts were computed
+against?" is a question with an answer.
+
+### The two things that make it stay fixed
+
+**`data-gen/tests/test_roster.py`, in `make ci`, free.** It regenerates the
+shipped population and holds the committed bytes to it table by table, holds the
+manifest to the fresh one, holds every committed fixture to the committed
+history, and holds every narrative that mentions points to the balance in the
+column beside it. A retune of `population.toml` that moves the population now
+fails a test rather than quietly desynchronising the account the next time
+somebody publishes.
+
+**`make snowflake-verify`, against the live account.** A new check under [#42]
+asks the account itself, in one statement, whether the roster describes the
+history it sits beside — points, order count, lifetime spend, first and last
+order, usual item, and whether a narrative that says a number of points says the
+right one:
+
+```
+PASS  persona_fixtures describes the orders and the ledger it sits beside
+      28 fixtures, all agreeing on points 28 · orders 28 · spend 28 · dates 28
+      · usual 28 · narrative 28
+```
+
+It reports a profile rather than a verdict because the profile is the diagnosis.
+Twenty-seven of twenty-eight is one bad row; four of twenty-eight is two
+generations in one database, and those want different repairs.
+
+The usual-item column is deliberately weaker than the generator's own rule.
+`chip_chat.data_gen.fixtures._commonest` breaks a tie between two equally
+frequent baskets on the `repr` of a Python tuple, which no SQL expression
+reproduces, so a check that tried to rebuild that rule would raise a false alarm
+the first time a fixture had two joint-commonest baskets. What is asked instead
+is that the item the fixture calls the usual appears in *some* basket the
+customer repeated as often as any other — which a fixture from another
+generation fails essentially always, and a tie never does.
+
+The check was confirmed to bite by moving one number: `points_balance + 1` on
+one row of one fixture, and it named the row.
+
+```
+FAIL  persona_fixtures describes the orders and the ledger it sits beside
+      28 fixtures; agreeing: POINTS 27 · ORDERS 28 · SPEND 28 · DATES 28 ·
+      USUAL 28 · NARRATIVE 27. demo-0033 says 434 points and the ledger sums
+      to 433. …
+```
+
+Note that `NARRATIVE` fell with `POINTS`. That is the column that exists because
+the prose quotes the number.
+
+### Verified on the live app
+
+Not on a test double. Entry, then the one question the numbers can disagree
+about, against
+`https://ca-chip-chat-web.whitesea-eea6e4c0.eastus2.azurecontainerapps.io`, on
+an archetype whose narrative quotes the balance:
+
+```
+POST /api/entry   {"name": "Graham"}
+  persona_id      regular  ("The Weekly Regular", demo-0272)
+  points_balance  590
+  narrative       a regular at IL Town 1 Mall, 590 points on the card, and 99%
+                  of 79 orders the same Chicken Bowl with guacamole, white
+                  rice, black beans and cheese.
+  opening         Hi Graham. You're a regular at IL Town 1 Mall, 590 points on
+                  the card, and 99% of 79 orders the same Chicken Bowl with
+                  guacamole, white rice, black beans and cheese. …
+
+POST /api/chat    {"message": "How many points do I have?"}
+  reply           You have 590 points. That's enough right now to redeem a
+                  Side Tortilla (85 pts), Chips (350 pts), a Fountain Drink
+                  (400 pts), or Guac (500 pts). Want to redeem one?
+```
+
+The sentence and the tool say 590. Before the reload they would not have, and
+the same run on the Lapsed Regular reads 15,445 in the opening and 15,445 back
+from `get_points_balance`.
+
+`/healthz/lanes` still reports `personalization: up` with
+`derived_at: 2026-08-27T18:54:51Z` and `stale: false` — the nightly publish was
+deliberately **not** re-run, because the orders it computes from were not
+touched.
+
+### What this did not fix
+
+`api/src/chip_chat/api/fixtures/persona_fixtures.json` is a committed export of
+this table, read only when the API has no Snowflake connection factory
+(`docs/decisions/shipped-persona-roster.md`). It is still an export of the old
+generation. The deployed app reads Snowflake — `/healthz/lanes` reports the
+account lane up, and the transcript above came off the live URL — so the file is
+not being consulted today, but it is a third copy of a table that now has two
+authoritative ones and it should be re-exported from `data-gen/roster/`.
+
 [#27]: https://github.com/gganssle/chip_chat/issues/27
 [#39]: https://github.com/gganssle/chip_chat/issues/39
 [#41]: https://github.com/gganssle/chip_chat/issues/41
+[#42]: https://github.com/gganssle/chip_chat/issues/42
 [#43]: https://github.com/gganssle/chip_chat/issues/43
 [#45]: https://github.com/gganssle/chip_chat/issues/45
 [#46]: https://github.com/gganssle/chip_chat/issues/46
