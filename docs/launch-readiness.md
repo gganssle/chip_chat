@@ -25,6 +25,19 @@ would put a stranger in front of a demo that contradicts itself within two turns
 (§4.1), and would score the launch gates against a code path that the gates'
 own enforcement mechanism is not on.
 
+> **Amended 28 August 2026, and the verdict is not re-rendered here.** `cc-lpy4`
+> put a Snowflake connection on the deployment, so the second sentence above is
+> now half true rather than true: the warehouse is in the path on revision
+> `0000025` — the account and personalization lanes report **up**, personas come
+> from the live `persona_fixtures`, and the account tools read the visitor's own
+> rows under #43's policies through #44's pool. §4.1 is closed and rewritten
+> below. **The search index and the ops API are still not**, and neither is the
+> eval work in §§4.3–4.6, so the paragraph's *argument* survives its first
+> sentence being outdated. Whoever next takes a go/no-go decision should read
+> §§4.2 onward and re-run §1's gates against a deployment that now has two of
+> five lanes on real data; this section deliberately does not do that on their
+> behalf.
+
 **What this is not.** It is not a judgement that the work is incomplete. The
 mechanisms are built and, at their own layer, verified — the row access policies,
 the connection pool, the confirmation precondition, the spend cap, the
@@ -152,20 +165,39 @@ infrastructure ($41.50) makes the all-in number **$0.21**. `docs/cost.md`.
 
 ## 4. Blockers, in the order they matter
 
-### 4.1 The deployed app contradicts itself — **the one to fix first**
+### 4.1 The deployed app contradicted itself — **closed, and what it left**
 
-All five lanes report `not_wired` at `GET /healthz/lanes`. The opening message
-reads the assigned persona; `get_points_balance` reads
-`chip_chat.agent.hardcoded.ACCOUNT`. Observed live in one session:
+**Closed on 28 August 2026 by `cc-lpy4`, on revision `0000025`.** What this
+section recorded was:
 
-> **Opening:** "…a regular at AL Town 1 Mall, 397 points…"
-> **"How many points do I have?"** → "…home store Ballard, 1,340 points…"
+> All five lanes report `not_wired` at `GET /healthz/lanes`. The opening message
+> reads the assigned persona; `get_points_balance` reads
+> `chip_chat.agent.hardcoded.ACCOUNT`. Observed live in one session:
+>
+> > **Opening:** "…a regular at AL Town 1 Mall, 397 points…"
+> > **"How many points do I have?"** → "…home store Ballard, 1,340 points…"
+>
+> Two stores, two balances, two usual orders, one conversation. Each half is
+> correct on its own. Together they are the thing the opening message exists to
+> prevent.
 
-Two stores, two balances, two usual orders, one conversation. Each half is
-correct on its own. Together they are the thing the opening message exists to
-prevent. `docs/public-demo.md` §9 argues — correctly — that the three fixes
-available from the app tier are all worse than the bug, and that the real fix is
-a Snowflake connection factory (`cc-lpy4`), which closes both halves at once.
+The diagnosis was right: the fix was a Snowflake connection factory, and it
+closed both halves at once. `account` and `personalization` now report **up** at
+`/healthz/lanes`; personas are assigned from the live `persona_fixtures` and the
+account tools read the visitor's own rows through the pool that bound them. It
+took one thing this section did not anticipate — `runtime_context` named the
+hardcoded account in a system message, so the first wired revision still *said*
+"the Ballard regular" beside a real balance. `docs/public-demo.md` §9 has both
+transcripts and the fix.
+
+**What is left is narrower and is not a wiring bug.**
+`ACCOUNTS.persona_fixtures` on the live account was loaded from a different
+`data-gen` generation than `ACCOUNTS.orders` and `loyalty_ledger`: across all
+twenty-eight fixtures, points agree 4/28 and order counts agree 4/28. Two of the
+seven archetypes quote a points figure in their narrative, and for those the
+opening sentence can still differ from what the ledger sums to. Same visitor,
+same store, same usual order, one drifted number — a reload rather than a code
+change. Bead `chip-qvg`.
 
 ### 4.2 The ops API has no functions deployed
 
