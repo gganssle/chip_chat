@@ -301,17 +301,6 @@ resource "azurerm_container_app" "web" {
 # owns the container image.
 
 locals {
-  # The account identifier the ops API authenticates against — `hq72718.us-east-2.aws`,
-  # not a URL and not a secret. Derived from the publish job's account URL when
-  # that is configured, because it is the same Snowflake account: two settings
-  # that must agree are one setting that can disagree, and the failure mode is a
-  # write path pointed at nothing that answers 503 while looking configured.
-  snowflake_ops_account = (
-    var.snowflake_ops_account != ""
-    ? var.snowflake_ops_account
-    : trimsuffix(var.snowflake_account_url, ".snowflakecomputing.com")
-  )
-
   # Two Key Vault secrets this app reads, neither of them created here.
   #
   # The same argument `databricks_publish_secret_scope` makes: no key material
@@ -421,7 +410,14 @@ resource "azurerm_function_app_flex_consumption" "ops" {
     # somebody may edit; `snowflake/sql/04_users.sql` and `00_roles.sql` create
     # both. The warehouse is the X-Small serving one — only the nightly publish
     # may name `CHIP_CHAT_PUBLISH_WH`.
-    "SNOWFLAKE_ACCOUNT"     = local.snowflake_ops_account
+    # The same `var.snowflake_account` the container app's read connection uses,
+    # and deliberately not a second variable: it is one Snowflake account, and
+    # two settings that must agree are one setting that can disagree. What
+    # differs between the tiers is the user, the role and the key — never the
+    # account. Empty leaves the ops API with no write credentials and answering
+    # the 503 RFC-001 §10 gives copy to, which is the honest state for a write
+    # path that was never pointed at anything.
+    "SNOWFLAKE_ACCOUNT"     = var.snowflake_account
     "SNOWFLAKE_OPS_USER"    = var.snowflake_ops_user
     "SNOWFLAKE_PRIVATE_KEY" = local.key_vault_reference[local.ops_private_key_secret]
     "SNOWFLAKE_WRITE_ROLE"  = "CHIP_CHAT_WRITE"

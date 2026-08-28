@@ -111,32 +111,28 @@
 # --- The ops API's write credentials (issue #63) -----------------------------
 #
 # The Functions app holds the ONLY credentials in the system with the Snowflake
-# write role, and this is the account it points them at. Setting
-# snowflake_account_url above is enough — the ops account is derived from it by
-# trimming `.snowflakecomputing.com` — and snowflake_ops_account is here for the
-# case where the publish job is not wanted but the write path is.
+# write role, and it points them at `snowflake_account` — the same variable the
+# chat app's read connection uses, deliberately, because it is one account.
+# There is nothing to set here for the account itself.
 #
-# An identifier, not a host: `hq72718.us-east-2.aws` and not
-# `hq72718.us-east-2.aws.snowflakecomputing.com`. The connector's `account`
-# argument takes the first.
-#
-# With both empty the ops API answers every call with the 503 and the copy
-# RFC-001 §10 gives it. That is a deployment state, not a bug: the read lanes are
-# unaffected and the confirmation card renders and says ordering is unavailable.
-#
-# The private key is NOT here and is not a variable, for the same reason the
-# publisher's is not. It is a Key Vault secret an operator puts there, and the
-# app setting is a reference resolved at start-up:
+# What differs between the two tiers is the user, the role and the key. The user
+# is snowflake_ops_user; the role is CHIP_CHAT_WRITE and is spelled in
+# compute.tf; and the key is a Key Vault secret an operator puts there once,
+# exactly as CHIP_CHAT_APP's is:
 #
 #   az keyvault secret set --vault-name "$(terraform output -raw key_vault_name)" \
 #     --name snowflake-ops-private-key --file ~/.snowflake/keys/chip_chat_ops.p8
 #
 # The shared secret the chat app presents on `x-cilantro-ops-key` is the same
-# shape and `make ops-key` mints it. docs/ops-api.md §"Deploying it" is the
-# write-up.
+# shape and `make ops-key` mints it. Neither value enters Terraform state: both
+# app settings are Key Vault references the platform resolves at start-up.
 #
-# snowflake_ops_account = "hq72718.us-east-2.aws"
-# snowflake_ops_user    = "CHIP_CHAT_OPS"
+# With snowflake_account empty the ops API answers every call with the 503 and
+# the copy RFC-001 §10 gives it. That is a deployment state, not a bug: the read
+# lanes are unaffected and the confirmation card renders saying ordering is
+# unavailable. docs/ops-api.md §"Deploying it" is the write-up.
+#
+# snowflake_ops_user = "CHIP_CHAT_OPS"
 
 # The schedule ships PAUSED, like the recommender's. Turn it on once the
 # medallion is loaded and the marts are current — a job that fails every night at

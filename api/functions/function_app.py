@@ -163,12 +163,16 @@ SERVING_WAREHOUSE: Final = "CHIP_CHAT_SERVING_WH"
 one, and only the nightly publish may name it."""
 
 _DEMO_ID = re.compile(r"\A[A-Za-z0-9_-]{1,64}\Z")
-"""What a ``demo_id`` may be spelled with.
+"""What a ``demo_id`` may be spelled with. Anything outside it is refused before
+a connection is opened; data-gen's identifiers are of the form ``dm-000123``.
 
-Snowflake's ``SET`` does not take a bound parameter, so the identifier is
-interpolated into the statement that binds it -- and an allowlist rather than an
-escape is what makes that safe. Anything outside it is refused before a
-connection is opened. data-gen's identifiers are of the form ``dm-000123``.
+This file used to say that Snowflake's ``SET`` cannot take a bound parameter and
+that the allowlist was therefore what made interpolation safe. That was wrong,
+and :mod:`chip_chat.api.connect` records the correction: the bind works, under
+``paramstyle="qmark"``, verified against the live account. The identifier is now
+bound like everything else and the pattern stays anyway -- it costs a regex match
+and it refuses a malformed identifier one layer before the database has to have
+an opinion about it.
 """
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
@@ -202,6 +206,15 @@ def _key_material(setting: str) -> object:
     credential at two in the morning can recognise on sight. So the conversion
     happens here rather than at the vault, and the setting stays a thing a human
     can verify.
+
+    The read tier reached the same conclusion independently and
+    ``chip_chat.api.connect`` is its version of this -- one conversion, at the
+    one place a PEM meets the driver. The two are not shared, and the reason is
+    the dependency direction rather than taste: this host installs the workspace
+    as wheels and reads ``SNOWFLAKE_PRIVATE_KEY`` out of its own environment,
+    while ``connect.py`` resolves the app's key from three sources including a
+    Key Vault client. They must agree about the *format*, and both are checked
+    against the live account.
 
     Args:
         setting: The environment's value, PEM or base64 DER.
@@ -285,6 +298,14 @@ class SnowflakeWriteBackend:
                 "warehouse": os.environ.get("SNOWFLAKE_WAREHOUSE", SERVING_WAREHOUSE),
                 "database": os.environ.get("SNOWFLAKE_DATABASE", "CHIP_CHAT"),
                 "schema": os.environ.get("SNOWFLAKE_SCHEMA", "ACCOUNTS"),
+                # `?`, because that is what both statements this host sends
+                # spell, and the connector's default `pyformat` makes a syntax
+                # error of it. Per connection rather than by setting
+                # `snowflake.connector.paramstyle`, which is a module global and
+                # would reach into any other consumer of the driver in the same
+                # process -- the same choice, and the same reasoning, as
+                # `chip_chat.api.connect.CONNECT_SETTINGS` on the read side.
+                "paramstyle": "qmark",
             }
         )
 
@@ -311,7 +332,7 @@ class SnowflakeWriteBackend:
 
             connection = snowflake.connector.connect(**self._settings)
             with connection.cursor() as cursor:
-                cursor.execute(f"SET {IDENTITY_VARIABLE} = '{demo_id}'")
+                cursor.execute(f"SET {IDENTITY_VARIABLE} = ?", [demo_id])
         # Any driver error is an outage: what a caller needs to know is that
         # nothing was written, not which exception class said so.
         except Exception as failure:
@@ -346,7 +367,9 @@ class SnowflakeWriteBackend:
 
             The statement is assembled from the declaration rather than written
             out: ``PARSE_JSON`` wraps exactly the arguments #46 declared as
-            ``VARIANT``, and everything else is bound.
+            ``VARIANT``, and everything else is bound. Every placeholder is
+            ``?`` -- see ``paramstyle`` in :meth:`SnowflakeWriteBackend.from_env`
+            for why it is that and not ``%s``.
 
             Args:
                 procedure_name: Fully qualified.
@@ -365,10 +388,10 @@ class SnowflakeWriteBackend:
             bindings: list[object] = []
             for declared, value in zip(declaration.arguments, arguments, strict=True):
                 if declared.sql_type == "VARIANT":
-                    slots.append("PARSE_JSON(%s)")
+                    slots.append("PARSE_JSON(?)")
                     bindings.append(json.dumps(value, default=str))
                 else:
-                    slots.append("%s")
+                    slots.append("?")
                     bindings.append(value)
             statement = f"CALL {procedure_name}({', '.join(slots)})"
             try:

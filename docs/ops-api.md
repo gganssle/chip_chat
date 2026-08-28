@@ -287,7 +287,22 @@ base64-encoded DER, and handed a PEM string it does not complain — `b64decode`
 discards the dashes and the words in the armour, decodes the wreckage, and the
 failure surfaces as an authentication error naming nothing. `_key_material` in
 `function_app.py` converts, so the vault can hold the format a person rotating
-the credential at two in the morning recognises on sight.
+the credential at two in the morning recognises on sight. The read tier reached
+the same conclusion independently and `chip_chat.api.connect._der` is its
+version; the two tiers must agree about the *format* and are checked separately
+against the live account, because their key sources differ.
+
+**Both tiers bind with `?`.** This file used to say that Snowflake's `SET`
+cannot take a bound parameter, and that the `demo_id` allowlist was therefore
+what made interpolating it safe. That was wrong. The bind works under
+`paramstyle="qmark"`, which the ops host now passes per connection exactly as
+`chip_chat.api.connect.CONNECT_SETTINGS` does — set per connection rather than
+on `snowflake.connector.paramstyle`, which is a module global that would reach
+into any other consumer of the driver in the same process. Both statement shapes
+the host sends, `SET DEMO_ID = ?` and `CALL <proc>(?, PARSE_JSON(?), …)`, were
+bound successfully as `CHIP_CHAT_OPS` on `CHIP_CHAT_WRITE` against the live
+account on 2026-08-28. The allowlist stays: it costs a regex and it refuses a
+malformed identifier one layer before the database has to have an opinion.
 
 **Two connection strings have to be deleted.** Azure leaves
 `AzureWebJobsStorage` and `DEPLOYMENT_STORAGE_CONNECTION_STRING` on the app as
