@@ -31,7 +31,13 @@ from chip_chat.agent.hardcoded import ACCOUNT, MENU, SIMULATION_NOTICE, STORE
 from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.model import ChatModel, ModelReply
 from chip_chat.agent.prompt import load
-from chip_chat.agent.tools import TOOLS, dispatch, offered_schemas, offered_tools
+from chip_chat.agent.tools import (
+    DESK_WRITES,
+    TOOLS,
+    dispatch,
+    offered_schemas,
+    offered_tools,
+)
 from chip_chat.otel import (
     Message,
     TokenUsage,
@@ -565,10 +571,31 @@ def _card_from(
     if name == ToolName.PROPOSE_ORDER.value:
         draft = result.get("draft")
         return (draft, False) if isinstance(draft, dict) else None
-    if name == ToolName.PLACE_ORDER.value:
-        found = result.get("receipt")
-        return (found, True) if isinstance(found, dict) else None
-    return None
+    if name not in _CARD_TOOLS:
+        return None
+    # The other four are symmetrical and answered by the same two keys, because
+    # `cancel_order`, `redeem_points` and `update_preferences` are each one tool
+    # answered twice -- a card the first time and a receipt after the visitor
+    # confirmed. `place_order` only ever produces the second, which is why it is
+    # in this list rather than beside `propose_order`: it costs nothing to read
+    # a key that is never there, and a fifth branch would be a fifth place to
+    # forget a tool.
+    receipt = result.get("receipt")
+    if isinstance(receipt, dict):
+        return receipt, True
+    card = result.get("card")
+    return (card, False) if isinstance(card, dict) else None
+
+
+_CARD_TOOLS: Final[frozenset[str]] = frozenset(
+    tool.value for tool in (ToolName.PLACE_ORDER, *DESK_WRITES)
+)
+"""The write tools whose results carry a card or a receipt for the widget.
+
+Derived from :data:`chip_chat.agent.tools.DESK_WRITES` rather than written out,
+so a deployment that offers a write tool cannot also be a deployment whose
+widget silently never renders its card.
+"""
 
 
 def _as_json(value: object) -> str:

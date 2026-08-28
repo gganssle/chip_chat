@@ -89,7 +89,13 @@ LANE_TOOLS: Final[dict[str, tuple[ToolName, ...]]] = {
     "account": (ToolName.ASK_ACCOUNT_QUESTION, ToolName.GET_POINTS_BALANCE),
     "personalization": (ToolName.GET_USUAL_ORDER, ToolName.GET_RECOMMENDATIONS),
     "photo": (ToolName.MATCH_MEAL_FROM_PHOTO,),
-    "action": (ToolName.PROPOSE_ORDER, ToolName.PLACE_ORDER),
+    "action": (
+        ToolName.PROPOSE_ORDER,
+        ToolName.PLACE_ORDER,
+        ToolName.CANCEL_ORDER,
+        ToolName.REDEEM_POINTS,
+        ToolName.UPDATE_PREFERENCES,
+    ),
 }
 """Which tools stop working when each lane does.
 
