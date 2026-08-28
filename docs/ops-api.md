@@ -466,14 +466,15 @@ actually about.
 reading for what it does *not* do. It holds no write credential; it composes no
 procedure arguments; it never retries a write, because the retry belongs inside
 this service where the retry key is spent in the procedure's own transaction.
-What it puts on a request is four headers and a reference:
+What it puts on a request is a reference and five headers, and the fifth is the
+one the body is *not* allowed to carry:
 
 | Header | What it establishes |
 | --- | --- |
 | `x-functions-key` | Azure's own key. The host runs at `AuthLevel.FUNCTION`. |
 | `x-cilantro-ops-key` | The application's shared secret, compared in code. |
 | `x-cilantro-session` | The `demo_id` the app resolved from the session cookie. |
-| `x-cilantro-confirmation` | The signed grant, when there is one. |
+| `x-cilantro-confirmation` | The signed grant. Absent only on the availability probe and on a caller that has an in-process record instead. |
 | `traceparent` / `tracestate` | Injected from inside `tool.<name>`, which is what makes `ops.<action>` a child of the agent's tool span across a process boundary. |
 
 Two keys and not one, and they are not redundant: the function key stops an
@@ -485,6 +486,17 @@ visitor is one. The body of a write is the reference the *model* named, and a
 confirmation travelling in the same object as a model-named value would be one
 field away from looking like something a model could name. Nothing
 model-reachable composes a header on this request.
+
+**The body carries what the visitor was shown and nothing else**, which is three
+identifiers and one object. `update_preferences` is the object, and it is the one
+place where what the confirmation is *keyed by* and what the body *carries* are
+different values: the key is `preferences_reference`, a digest, and the body has
+to be the preferences themselves, because this service recomputes that digest
+from the body and checks the grant against the result. A caller that sent the
+digest would be sending a string to a route that requires an object, and the
+write would be refused as malformed one layer away from anything that explains
+why — which is what the first wiring of this client did, and what
+`api/tests/test_grants.py` now drives all four routes to prevent.
 
 **The availability probe carries no trace context, deliberately.**
 `OpsClient.available` is asked while a card is being composed and from
