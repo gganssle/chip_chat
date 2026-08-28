@@ -31,7 +31,7 @@ twice. Worse than untidy: ``continue_turn(..., parent=SpanName.TOOL)`` on the op
 API's edge *refuses* a write whose parent span is not a tool span, so an ops span
 opened here would make every remote write fail with ``TRACE_CONTEXT_REQUIRED``.
 
-:meth:`Desk.orderable_item_ids` is the vocabulary ``propose_order``'s schema is
+:meth:`Desk.orderable_menu` is the vocabulary ``propose_order``'s schema is
 narrowed to. RFC-001 D3 says the model may describe food and may never name a
 SKU; the enforcement is the deterministic matcher and the ops API's catalogue
 check, and the *schema* narrowing is a third, cheap layer that makes an
@@ -40,6 +40,18 @@ desk because only the desk knows what it can price -- ``tools.py`` used to pin i
 to the three hardcoded items in a function that said, in as many words, *"when
 the real catalogue reaches the desk, the enum is generated from it and this is
 the function that does it"*. This is that.
+
+It carries **more than the ids**, and the reason is a turn that was watched
+failing on the deployment. The first wiring of the real catalogue narrowed the
+enum to ten published ``CMG-*`` ids and stopped there, and the model could not
+compose a single valid draft: nothing it could read told it what those ids were
+called, and nothing told it that a bowl has a required rice group, so it guessed,
+was refused with ``REQUIRED_SLOT_EMPTY``, guessed again, and hit the loop's step
+ceiling. A vocabulary the model cannot *use* is not narrower than an open one --
+it is an empty one. So the menu carries the names, the prices and the required
+groups with the modifier ids that fill them, all read off the catalogue rather
+than written out anywhere, and small enough to belong in a tool definition
+because the published catalogue this demo harvests is ten items.
 """
 
 from collections.abc import Mapping, Sequence
@@ -48,7 +60,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from chip_chat.otel import OpsAction
 
-__all__ = ["ActionOutcome", "Card", "Desk", "Receipted"]
+__all__ = ["ActionOutcome", "Card", "Desk", "OrderableMenu", "Receipted"]
 
 
 @runtime_checkable
@@ -73,6 +85,23 @@ class Receipted(Protocol):
     def as_dict(self) -> Mapping[str, Any]:
         """The receipt, as the model is handed it and the widget renders it."""
         ...
+
+
+@dataclass(frozen=True, slots=True)
+class OrderableMenu:
+    """What a desk can price, in the two forms a tool definition needs.
+
+    Attributes:
+        item_ids: The enum ``propose_order``'s ``item_id`` is narrowed to. An id
+            outside it is not expressible rather than merely rejected.
+        described: Prose the model is shown beside that enum -- names, prices,
+            and which groups each item requires. Generated from the desk's own
+            catalogue and never written by hand, so an item the catalogue drops
+            leaves the description as it leaves the enum.
+    """
+
+    item_ids: tuple[str, ...]
+    described: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,13 +162,15 @@ class Desk(Protocol):
         """
         ...
 
-    def orderable_item_ids(self) -> tuple[str, ...] | None:
-        """The item ids ``propose_order``'s schema is narrowed to, or ``None``.
+    def orderable_menu(self) -> OrderableMenu | None:
+        """What this desk can price, for ``propose_order``'s schema.
 
         ``None`` leaves the schema open, which is right for a desk whose
         catalogue is too large to enumerate in a tool definition. Neither desk
         in this repository is that, and the shape is here so that a future one
-        can decline rather than truncate.
+        can decline rather than truncate -- and so that the failure of a
+        too-large catalogue is an open schema and a matcher doing the work,
+        rather than a silently truncated list.
         """
         ...
 

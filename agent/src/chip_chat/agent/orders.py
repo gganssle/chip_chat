@@ -30,12 +30,13 @@ from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from chip_chat.agent.desk import ActionOutcome
+from chip_chat.agent.desk import ActionOutcome, OrderableMenu
 from chip_chat.agent.hardcoded import MENU, SIMULATION_NOTICE, STORE, MenuItem
 from chip_chat.otel import OpsAction
 
 __all__ = [
     "DEFAULT_DRAFT_TTL_SECONDS",
+    "HARDCODED_MENU",
     "Draft",
     "DraftLine",
     "OrderDesk",
@@ -49,6 +50,26 @@ DEFAULT_DRAFT_TTL_SECONDS = 900.0
 
 _MAX_QUANTITY = 5
 """Per ``docs/action-surface.md`` §7.1 rule 4, flattened to one number here."""
+
+
+HARDCODED_MENU: OrderableMenu = OrderableMenu(
+    item_ids=tuple(sorted(MENU)),
+    described=" | ".join(
+        f"{item.item_id} = {item.name} (${item.unit_price})"
+        for item in sorted(MENU.values(), key=lambda row: row.item_id)
+    ),
+)
+"""What the week-one desk can price, as ``propose_order``'s schema wants it.
+
+A module constant rather than something :meth:`OrderDesk.orderable_menu` builds
+per call, because :data:`chip_chat.agent.tools.TOOL_SCHEMAS` needs it at import
+and constructing a whole desk to read three names would be a strange way to ask.
+
+No required groups, because the three hardcoded items have no modifier structure
+at all -- which is exactly why the week-one slice got away with an enum and
+nothing else, and why the real catalogue could not. :mod:`chip_chat.agent.desk`
+records what that cost when it was found out.
+"""
 
 
 class RejectionCode:
@@ -206,9 +227,9 @@ class OrderDesk:
         """
         return False
 
-    def orderable_item_ids(self) -> tuple[str, ...]:
-        """The three ids ``propose_order``'s schema is narrowed to."""
-        return tuple(sorted(MENU))
+    def orderable_menu(self) -> OrderableMenu:
+        """The three items this desk can price. See :data:`HARDCODED_MENU`."""
+        return HARDCODED_MENU
 
     def available(self) -> bool:
         """True. An in-process dictionary is not a service that can be down."""

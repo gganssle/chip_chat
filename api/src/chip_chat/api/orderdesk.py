@@ -44,7 +44,7 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final
 
-from chip_chat.agent.desk import ActionOutcome
+from chip_chat.agent.desk import ActionOutcome, OrderableMenu
 from chip_chat.agent.orders import OrderRejectedError
 from chip_chat.api.confirmations import (
     Confirmation,
@@ -65,6 +65,7 @@ from chip_chat.api.ops import (
 )
 from chip_chat.api.opsclient import OpsClient
 from chip_chat.api.visitors import VisitorDesk, VisitorSession
+from chip_chat.catalog import MenuCatalog
 from chip_chat.otel import OpsAction
 
 __all__ = ["NO_VISITOR", "OPS_DECLINED", "OpsDesk", "RewardLookup"]
@@ -184,19 +185,30 @@ class OpsDesk:
         """True. All four of PRD T1's actions have a service behind them here."""
         return True
 
-    def orderable_item_ids(self) -> tuple[str, ...]:
-        """Every item id the published catalogue prices, for the tool schema.
+    def orderable_menu(self) -> OrderableMenu:
+        """What the published catalogue can price, as ``propose_order`` needs it.
 
         The whole catalogue rather than a curated subset, and it is small enough
         for that to be reasonable -- ``CHIP_CHAT.CATALOGUE.menu_items`` is the
         ten rows the harvest published. A catalogue that grew past what belongs
         in a tool definition would want
-        :meth:`chip_chat.agent.desk.Desk.orderable_item_ids` to answer ``None``
-        and leave the schema open, and the enforcement would fall back to where
-        it has always really been: the draft store's own pricing, which refuses
-        an unpriced item, and the procedure's catalogue check behind that.
+        :meth:`chip_chat.agent.desk.Desk.orderable_menu` to answer ``None`` and
+        leave the schema open, and the enforcement would fall back to where it
+        has always really been: the draft store's own pricing, which refuses an
+        unpriced item, and the procedure's catalogue check behind that.
+
+        The description is composed rather than the ids alone, because a model
+        that can see ten opaque ``CMG-*`` ids and nothing else cannot compose a
+        draft that survives :meth:`DraftStore._require_groups` -- which is not a
+        guess, it is what the first deployment of this lane did, three times,
+        until it hit the loop's step ceiling. :mod:`chip_chat.agent.desk` records
+        that at length.
         """
-        return tuple(sorted(item.item_id for item in self._drafts.catalog.menu_items))
+        catalog = self._drafts.catalog
+        return OrderableMenu(
+            item_ids=tuple(sorted(item.item_id for item in catalog.menu_items)),
+            described=_describe(catalog),
+        )
 
     def available(self) -> bool:
         """Whether a card composed now should say ordering is available."""
@@ -559,6 +571,63 @@ class _Receipt:
     def as_dict(self) -> Mapping[str, Any]:
         """The procedure's own receipt, unchanged."""
         return dict(self._body)
+
+
+def _describe(catalog: MenuCatalog) -> str:
+    """Say what the catalogue can price, in the fewest words a model can use.
+
+    One line per item: the id, the published name, the reference restaurant's
+    price, and -- for an item whose menu declares content groups -- what each
+    group requires and which modifier ids fill it. Everything is read off the
+    catalogue; nothing here is written down.
+
+    **Why the price is the reference restaurant's** rather than the visitor's.
+    This string goes in a *tool definition*, which is composed once per turn and
+    before any visitor is known to this function, so a per-visitor figure would
+    be either wrong or a second read on every turn. It is a rough guide for the
+    model's own sentences and the card is the number that counts: the draft is
+    priced at the store the card names, in the column its channel selects, and
+    that is the total the visitor confirms and the procedure re-derives. A model
+    quoting this figure at a visitor whose store prices differently would be
+    quoting a real published price at the wrong restaurant, which is why
+    ``propose_order``'s own description already tells it to show the card.
+
+    **Why the required groups matter more than the price.** They are the
+    difference between a draft that prices and one refused with
+    ``REQUIRED_SLOT_EMPTY``: a bowl needs a rice, and the menu says so in
+    ``min_quantity`` on every member of ``RiceContentGroup`` rather than in any
+    field a model could otherwise reach.
+    """
+    prices = {
+        row.item_id: row
+        for row in catalog.item_prices
+        if row.restaurant_id == catalog.reference_restaurant_id
+    }
+    groups: dict[str, dict[str, list[str]]] = {}
+    minimums: dict[str, dict[str, int]] = {}
+    for modifier in catalog.modifiers:
+        if modifier.group_name is None:
+            continue
+        groups.setdefault(modifier.item_id, {}).setdefault(
+            modifier.group_name, []
+        ).append(modifier.modifier_item_id)
+        if modifier.min_quantity:
+            required = minimums.setdefault(modifier.item_id, {})
+            required[modifier.group_name] = max(
+                required.get(modifier.group_name, 0), modifier.min_quantity
+            )
+    lines = []
+    for item in sorted(catalog.menu_items, key=lambda row: row.item_id):
+        price = prices.get(item.item_id)
+        money = "" if price is None else f" (${price.unit_price})"
+        needed = [
+            f"{count} from {group} "
+            f"[{', '.join(sorted(set(groups[item.item_id][group])))}]"
+            for group, count in sorted(minimums.get(item.item_id, {}).items())
+        ]
+        requires = f" -- requires {'; '.join(needed)}" if needed else ""
+        lines.append(f"{item.item_id} = {item.name}{money}{requires}")
+    return " | ".join(lines)
 
 
 def _order_arguments(draft: Draft) -> Sequence[Any]:

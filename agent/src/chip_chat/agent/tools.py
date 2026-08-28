@@ -66,11 +66,11 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Any, Final
 
-from chip_chat.agent.desk import ActionOutcome, Desk
+from chip_chat.agent.desk import ActionOutcome, Desk, OrderableMenu
 from chip_chat.agent.hardcoded import ACCOUNT, MENU, SIMULATION_NOTICE, search_menu
 from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.model import ToolInvocation, UnknownToolError
-from chip_chat.agent.orders import OrderRejectedError
+from chip_chat.agent.orders import HARDCODED_MENU, OrderRejectedError
 from chip_chat.agent.surface import ToolCallRejectedError, spec
 from chip_chat.otel import (
     ConfirmationState,
@@ -146,7 +146,7 @@ the one thing the week-one slice was built to keep.
 
 
 def _narrowed_to_the_orderable_menu(
-    definition: dict[str, Any], item_ids: Sequence[str] | None
+    definition: dict[str, Any], menu: OrderableMenu | None
 ) -> dict[str, Any]:
     """Pin ``propose_order``'s item ids to what the desk can actually price.
 
@@ -167,32 +167,44 @@ def _narrowed_to_the_orderable_menu(
     answers off the real marts and names real ids the model could not then
     propose.
 
+    **The description travels with the enum**, and leaving it out was a real
+    outage rather than a hypothetical one. A model shown ten ``CMG-*`` ids and
+    nothing else cannot compose a draft: it has no names to match a visitor's
+    words against and no way to know a bowl requires a rice. It guesses, gets
+    ``REQUIRED_SLOT_EMPTY``, guesses again, and reaches the loop's step ceiling.
+    :class:`chip_chat.agent.desk.OrderableMenu` carries both halves for that
+    reason.
+
     Args:
         definition: One tool definition, as the surface composed it.
-        item_ids: What the desk can price, or ``None`` to leave the schema open.
+        menu: What the desk can price, or ``None`` to leave the schema open.
 
     Returns:
         The definition, narrowed where it is ``propose_order`` and there is a
         vocabulary to narrow it to. The mapping is modified in place, which is
         safe because :func:`_definition` builds a fresh one per call.
     """
-    if definition["function"]["name"] != ToolName.PROPOSE_ORDER.value or not item_ids:
+    if definition["function"]["name"] != ToolName.PROPOSE_ORDER.value or menu is None:
         return definition
-    line = definition["function"]["parameters"]["properties"]["items"]["items"]
+    parameters = definition["function"]["parameters"]["properties"]["items"]
+    parameters["description"] = (
+        f"{parameters['description']} What this deployment can price: {menu.described}"
+    )
+    line = parameters["items"]
     line["properties"]["item_id"] = {
         **line["properties"]["item_id"],
-        "enum": sorted(item_ids),
+        "enum": sorted(menu.item_ids),
     }
     return definition
 
 
-def _definition(name: ToolName, item_ids: Sequence[str] | None) -> Mapping[str, Any]:
+def _definition(name: ToolName, menu: OrderableMenu | None) -> Mapping[str, Any]:
     """Return one tool definition, narrowed to what the desk can price."""
-    return _narrowed_to_the_orderable_menu(spec(name).as_tool_definition(), item_ids)
+    return _narrowed_to_the_orderable_menu(spec(name).as_tool_definition(), menu)
 
 
 TOOL_SCHEMAS: tuple[Mapping[str, Any], ...] = tuple(
-    _definition(name, sorted(MENU)) for name in TOOLS
+    _definition(name, HARDCODED_MENU) for name in TOOLS
 )
 """The unconditional tool definitions, and what ``llm.completion`` records so
 Arize's tool-selection evals can compare choice against offer.
@@ -251,8 +263,8 @@ def offered_schemas(
     schema the model is shown and the schema its arguments are checked against
     have to be the same object.
     """
-    item_ids = sorted(MENU) if desk is None else desk.orderable_item_ids()
-    return tuple(_definition(name, item_ids) for name in offered_tools(lanes, desk))
+    menu = HARDCODED_MENU if desk is None else desk.orderable_menu()
+    return tuple(_definition(name, menu) for name in offered_tools(lanes, desk))
 
 
 def dispatch(
