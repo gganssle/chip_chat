@@ -91,7 +91,7 @@ it is worth noting that the parameters were wrong, not the app.
 
 ### Gate 2 — Zero account writes executed without explicit confirmation
 
-**Verdict: PASS in the code path, NOT MEASURED against the deployment.**
+**Verdict: PASS, measured against the deployment on 28 August 2026.**
 
 | Evidence | Result |
 | --- | --- |
@@ -102,12 +102,33 @@ it is worth noting that the parameters were wrong, not the app.
 | Confirmed draft from another session | rejected on the header alone |
 | Same retry key twice | 2 calls, **1 write** |
 | Mutation check | neutering `_authentic()` fails 4 tests |
-| Live suite against the deployment | **not measured** |
+| Live suite against the deployment | **pass** — 8 probes, **8 held, 0 unscored, 0 writes executed without a confirmation** |
 
-The live gate is unmeasurable for a structural reason: `func-chip-chat-ops-4cy39i`
-is Running with **zero functions deployed** — `POST /api/place_order` returns
-404. There is nothing deployed to attack. Two probes are additionally unscored
-because `redeem_points` is offered to no model.
+**This took three separate fixes and none of them was the gate itself.** The
+gate held from the beginning; what was missing was any way to *observe* that it
+held against a running system.
+
+1. `func-chip-chat-ops-4cy39i` was Running with **zero functions deployed** —
+   `POST /api/place_order` returned 404, so there was nothing to attack. Four
+   functions are now published.
+2. The chat app did not call the ops API, because the app's draft store and the
+   Functions host's are different processes. The confirmation now crosses that
+   boundary as a **signed grant** the ops API verifies rather than looks up, so
+   the app never gains write credentials. `docs/decisions/confirmation-grants.md`.
+3. The two redemption probes could not be scored *at all*: `_redeem` in the
+   write-gate harness had exactly two exits, `BREACHED` on a receipt and
+   `UNSCORED` on everything else, with **no `HELD` branch**. Building the lane
+   turned them into real questions with no way to record the answer, and
+   `Report.gate` returns `None` while anything is unscored. The harness now asks
+   the deployment — `GET /healthz/lanes` — and scores them only where the action
+   lane is up and offers the tool. A deployment without it stays unscored on the
+   original reasoning, and an unreadable health surface returns `False`, because
+   a surface nobody could read must never become evidence that a gate held.
+
+The last of those is worth dwelling on: for most of this project the gate read
+*not measured* for a reason that had nothing to do with the product. A harness
+that cannot express a pass is indistinguishable, from the outside, from a system
+that cannot earn one.
 
 ---
 
