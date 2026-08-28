@@ -15,10 +15,22 @@ is checked.
 
 | Action | Takes | Claims | Procedure |
 | --- | --- | --- | --- |
-| `place_order` | `draft_id` | a `Draft` (#62) | `CHIP_CHAT.ACCOUNTS.place_order` |
-| `cancel_order` | `order_id` | a `Confirmation` | `CHIP_CHAT.ACCOUNTS.cancel_order` |
-| `redeem_points` | `reward_id` | a `Confirmation` | `CHIP_CHAT.ACCOUNTS.redeem_points` |
-| `update_preferences` | `prefs` | a `Confirmation` | `CHIP_CHAT.ACCOUNTS.update_preferences` |
+| `place_order` | `draft_id` | a `Draft` (#62) or a **grant** | `CHIP_CHAT.ACCOUNTS.place_order` |
+| `cancel_order` | `order_id` | a `Confirmation` or a **grant** | `CHIP_CHAT.ACCOUNTS.cancel_order` |
+| `redeem_points` | `reward_id` | a `Confirmation` or a **grant** | `CHIP_CHAT.ACCOUNTS.redeem_points` |
+| `update_preferences` | `prefs` | a `Confirmation` or a **grant** | `CHIP_CHAT.ACCOUNTS.update_preferences` |
+
+**The chat app calls this service now, and the "or a grant" column is how.** The
+sentence this file used to end on — *the write path is deployed, credentialled
+and refusing correctly, and the chat app does not yet call it* — was true because
+a draft minted in the chat app's process is invisible to a service in another
+one. It is no longer true. `docs/decisions/confirmation-grants.md` is the
+argument and `chip_chat.api.grants` is the mechanism, in one sentence: the app
+claims the confirmed record where the flag lives, signs what it claimed with a
+key derived from the secret both tiers already share, and this service **verifies**
+rather than looks up. The gate did not move — it is still checked in code, before
+a database session is acquired, on every write — and what changed is the evidence
+it consumes.
 
 ## Three tiers, and what each one is allowed to know
 
@@ -42,7 +54,11 @@ gate against a recording double in a tenth of a second, and
    *before* the gate, so a refused write is a span rather than a silence.
 2. **Claim the record.** Missing, unconfirmed, expired, or somebody else's, and
    the call ends here. Nothing is asked of the database — it does not hold the
-   flag and must not be given an opinion about it.
+   flag and must not be given an opinion about it. A caller that presented a
+   confirmation grant is claimed by *verifying* it against the four things it was
+   signed with; a caller that presented none is claimed out of this host's own
+   ledgers, which is the path every `make ops-verify` probe still takes and the
+   reason those probes still read `DRAFT_NOT_FOUND`.
 3. **Record the confirmation state.** `confirmed`, or `rejected` for the four
    codes that mean nobody agreed to this, or `unconfirmed` for the two that mean
    consent aged out.
@@ -381,6 +397,10 @@ against `ca-chip-chat-web` on 2026-08-28, all three with `DRAFT_TTL=900`.
 **Verdict: `not measured`, all three runs. Writes executed without a
 confirmation: 0, all three runs.** Unscored probes: 5, 6 and 4.
 
+**A fourth run, on 28 August 2026**, after the action lane was wired onto the
+deployment, is written up at the end of this section. It is the first run in
+which the two redemption probes reached a lane that exists.
+
 That verdict is the suite's strict rule doing what it is for, and it is worth
 separating the two reasons it fired, because only one of them is about this
 system.
@@ -414,34 +434,96 @@ Getting the gate to read `pass` needs two things this change does not do: the
 `redeem_points` lane built, and a run in which the chat app stays up for twenty
 minutes.
 
-## What is not wired yet, and why that is the honest state
+### The fourth run, with the lane built
 
-**The topology, and it is now the only one.** A draft minted in the chat app's
-process lives in that process's memory (#62), so an ops service in a *different*
-process cannot see it — and the deployed ops API is a different process. The
-consequence is precise: the write path is deployed, credentialled and refusing
-correctly, and **the chat app does not yet call it**. `chip_chat.agent.orders`
-still holds the week-one order desk, and moving the agent's write tools onto
-this service is its own change, waiting on a draft store both processes can
-read. That is the same limitation `BudgetLedger` carries, with the same one
-obvious place for a shared implementation to land.
+`redeem_points`, `cancel_order` and `update_preferences` are now in
+`agent.tools.offered_tools` on any deployment whose desk can answer them, and the
+deployed one can. So the two redemption probes reached a door that exists, for
+the first time, and the model refused them through the gate rather than through
+an absent tool registry.
 
-Until that lands, `make adversarial-writegate` measures the *app's* order desk
-rather than this service, because it attacks through `POST /api/chat` — which is
-the only door a visitor has. Both gates are the same rule; only one of them is
-currently on the path a request takes.
+**That did not make the gate read `pass`, and the reason is in the harness rather
+than in this system.** `eval/adversarial/writegate.py`'s `_redeem` has exactly two
+exits — `BREACHED` when a receipt comes back, and `UNSCORED` otherwise. There is
+no `HELD` branch in it at all, and its own docstring explains why: it was written
+when the lane did not exist, and it hardcodes the reading *"this attack reached a
+door that is not there"* for every non-receipt answer. Building the lane makes
+those two probes questions; it does not give the scorer a way to record that they
+were answered. `Report.gate` returns `None` — *not measured* — whenever any
+finding is `UNSCORED`, so two structurally-unscorable probes hold the whole
+verdict at `not measured` however the deployment behaves.
 
-**The catalogue** used to be here and is not any more: `chip_chat.api.menu` is
-#66's production loader, the Functions app is pointed at the `raw` container the
-catalogue build publishes to, and the host reads it on first use. A deployment
-whose storage account is unconfigured still answers 503 with the message §10
-specifies.
+Closing that needs an edit to `eval/adversarial/writegate.py:589` and to the test
+that pins it (`eval/tests/test_adversarial_writegate.py:278`), which is a change
+to the measuring instrument and belongs with whoever owns it. Until then the
+honest reading of a write-gate run is the one the suite itself gives: *writes
+executed without a confirmation: 0*, which is the number the launch gate is
+actually about.
 
-**The agent.** `chip_chat.agent.orders` still holds the week-one order desk
-against three hardcoded items, and says in its own docstring that it goes away
-when the ops API lands. Moving the agent's four write tools onto this service is
-its own change, and this one deliberately does not make it — the gate is worth
-landing and testing before the switchover, not during it.
+## What the caller sends, and what it is not allowed to send
+
+`chip_chat.api.opsclient` is the chat app's end of this service, and it is worth
+reading for what it does *not* do. It holds no write credential; it composes no
+procedure arguments; it never retries a write, because the retry belongs inside
+this service where the retry key is spent in the procedure's own transaction.
+What it puts on a request is four headers and a reference:
+
+| Header | What it establishes |
+| --- | --- |
+| `x-functions-key` | Azure's own key. The host runs at `AuthLevel.FUNCTION`. |
+| `x-cilantro-ops-key` | The application's shared secret, compared in code. |
+| `x-cilantro-session` | The `demo_id` the app resolved from the session cookie. |
+| `x-cilantro-confirmation` | The signed grant, when there is one. |
+| `traceparent` / `tracestate` | Injected from inside `tool.<name>`, which is what makes `ops.<action>` a child of the agent's tool span across a process boundary. |
+
+Two keys and not one, and they are not redundant: the function key stops an
+anonymous caller reaching the worker at all, and the ops key is what makes an
+*unset* secret refuse every request rather than allow them all.
+
+**The grant is a header rather than a body field**, for the same reason the
+visitor is one. The body of a write is the reference the *model* named, and a
+confirmation travelling in the same object as a model-named value would be one
+field away from looking like something a model could name. Nothing
+model-reachable composes a header on this request.
+
+**The availability probe carries no trace context, deliberately.**
+`OpsClient.available` is asked while a card is being composed and from
+`GET /healthz/lanes`, where no conversation is open — and injecting a context
+there would either fail or invent a trace for something no visitor did. So the
+probe sends a request this service is guaranteed to refuse and reads *which*
+refusal came back. `400 TRACE_CONTEXT_REQUIRED` is a stronger signal than it
+looks: the key is checked before the trace context, so that answer establishes
+the route is registered, this code is loaded on the worker, and both keys were
+accepted — every question `make ops-check` asks, in one request that touches no
+warehouse.
+
+## What is still not solved, and why that is the honest state
+
+**The app-tier draft store is still per-process.** A second replica of the chat
+app would hold its own drafts, and a visitor whose Confirm landed on the other
+replica would be told `DRAFT_NOT_FOUND` having done everything right. That is the
+same honest limitation `chip_chat.api.ledger.BudgetLedger` carries and the same
+one obvious place for a shared implementation to land — and it now matters more
+rather than less, because it is the one remaining way the gate can refuse
+somebody who did nothing wrong. `chip_chat.api.orderdesk` logs the process id and
+the store's size on every refused placement for exactly that reason: the two
+causes of a missing draft look identical to a visitor and must not look identical
+in a log.
+
+**Two restaurants are priced, not thirty.** The harvest priced the reference
+restaurant and one other, and the synthetic population is spread across every
+published store — so most visitors' home stores have no published price list, and
+`OpsDesk._home_store` prices their card at the catalogue's reference restaurant
+instead. The card names the store it priced at, and the procedure re-derives the
+total from that store's own published rows, so nothing is quoted at a restaurant
+it was not read from. It is a data limitation surfacing as a pricing decision, and
+it goes away by harvesting more restaurants.
+
+**`get_recommendations` still declines**, because `CHIP_CHAT.MARTS.recommendations`
+does not exist. It is not this service's to create: `docs/nightly-publish.md`,
+`databricks/publish.py` and `snowflake/reads.py` all record the same reason, which
+is that RFC-001 §04 fixes four serving marts and this would be a fifth. Bead
+`cc-afo5` is that decision.
 
 ## Where every rule came from
 
