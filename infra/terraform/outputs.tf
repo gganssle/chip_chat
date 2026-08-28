@@ -358,3 +358,20 @@ output "databricks_publish_secret_scope" {
   description = "The Databricks secret scope the publish reads its Snowflake private key from. Created empty; fill it with: databricks secrets put-secret <scope> publisher-private-key --string-value \"$(cat ~/.snowflake/keys/chip_chat_publisher.p8)\""
   value       = databricks_secret_scope.snowflake.name
 }
+
+# --- The agent-observability backend ----------------------------------------
+
+output "otlp_endpoint" {
+  description = "What the deployed app has OTEL_EXPORTER_OTLP_ENDPOINT set to. Internal to cae-chip-chat by design, so it does not resolve from a laptop -- docs/decisions/hosted-phoenix.md, \"Reading the traces\", is how you get a UI. Empty means the app exports only to Application Insights."
+  value       = local.otlp_endpoint
+}
+
+output "phoenix_app_name" {
+  description = "The Phoenix container app. Read its logs with: az containerapp logs show -g rg-chip-chat -n <name> --tail 50. Null while var.phoenix_enabled is false."
+  value       = var.phoenix_enabled ? azurerm_container_app.phoenix[0].name : null
+}
+
+output "monitors_job_name" {
+  description = "The scheduled online-eval job (gh-76). Run it now with: az containerapp job start -g rg-chip-chat -n <name>. Null while there is no container registry to run an image from -- build one with: make monitors-image-push"
+  value       = length(azurerm_container_app_job.monitors) > 0 ? azurerm_container_app_job.monitors[0].name : null
+}

@@ -6,9 +6,15 @@ Four steps in a fixed order, and the order is the whole of the cost argument.
    cost nothing, and two of them -- the disclosure signal and the budget breach
    -- are worthless on a sample. A cross-visitor monitor running on a fifth of
    traffic misses four disclosures in five.
-2. The sampling policy decides which turns get a judge, and a turn a
-   deterministic monitor already fired on is always judged: something cheap has
-   said this one is interesting, and the judge is what says *how*.
+2. The sampling policy decides which turns get a judge, and a turn an
+   **escalating** deterministic monitor fired on is always judged: something
+   cheap has said this one is interesting, and the judge is what says *how*.
+   Escalating is not the same as *fired*, and the difference is the one thing
+   in this module that production taught rather than reasoning — the latency
+   monitor fires on every turn the deployed app serves, so "judge anything that
+   fired" is "judge everything", which is the sampling rate switched off
+   without anybody deciding to. :func:`_escalating` and
+   :attr:`~chip_chat.eval.online.monitors.Monitor.escalates` carry the rule.
 3. The judged turns get the two questions of #75 -- is this grounded in what it
    retrieved, and did it decline -- from
    :class:`~chip_chat.eval.grounding.judge.ModelJudge`. The same judge, the same
@@ -38,7 +44,7 @@ from chip_chat.eval.golden.lanes import Lane
 from chip_chat.eval.grounding.judge import JudgeSpend, ModelJudge
 from chip_chat.eval.grounding.questions import Question
 from chip_chat.eval.grounding.run import Turn
-from chip_chat.eval.online.monitors import Alert, Severity, evaluate
+from chip_chat.eval.online.monitors import Alert, Severity, evaluate, monitor
 from chip_chat.eval.online.sampling import Reason, SamplingDecision, SamplingPolicy
 from chip_chat.eval.online.signals import LiveTurn
 
@@ -144,7 +150,7 @@ def run_online(
     scored: list[Scored] = []
     for turn in turns:
         deterministic = evaluate(turn)
-        decision = policy.decide(turn, flagged=bool(deterministic))
+        decision = policy.decide(turn, flagged=_escalating(deterministic))
         grounded: bool | None = None
         declined: bool | None = None
         if decision.judged and judge is not None:
@@ -167,6 +173,19 @@ def run_online(
         judge_tokens=spend.total_tokens,
         judge_calls=spend.calls,
     )
+
+
+def _escalating(alerts: Iterable[Alert]) -> bool:
+    """Whether any of these findings is a reason to spend a judge on the turn.
+
+    Not simply *whether anything fired*, and the difference was expensive to
+    learn. See :data:`~chip_chat.eval.online.monitors.BUDGET_BREACH`: the
+    latency monitor fires on every turn the deployed app serves, so a rule that
+    escalated on any alert escalated on everything and quietly turned a 20%
+    sampling policy into a 100% one. ``Monitor.escalates`` is where that is
+    decided, per monitor, with the argument beside it.
+    """
+    return any(monitor(alert.monitor).escalates for alert in alerts)
 
 
 def _as_question(turn: LiveTurn) -> Question:

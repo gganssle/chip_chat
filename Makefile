@@ -615,15 +615,55 @@ experiment-compare: ## Two prompt versions, same dataset, comparison rendered --
 # fails to fire on its own condition. That is #76's "each monitor tested by
 # producing the condition" as a command rather than as a claim.
 
+# The three targets below `online-drill` are the deployed half, added when the
+# monitors got a live trace source and a schedule -- see
+# docs/decisions/hosted-phoenix.md. They cost money and need Azure, so they are
+# outside `make ci` like every other target that does.
+#
+# `monitors-image-push` builds the image the scheduled job runs, with `az acr
+# build` rather than a local `docker build`: it needs no Docker daemon, which
+# matters because the thing most likely to be missing on the machine that has to
+# fix a broken monitor at short notice is a running Docker daemon.
+#
+# `monitors-deploy` moves the job onto that image, pinned to the commit, the way
+# `make deploy` does for the app. Terraform creates the job at a moving tag once
+# and then stops owning the image; this is what pins it.
+#
+# `monitors-run` starts one execution now instead of waiting for the cron tick,
+# and prints how to read what it said. A scheduled thing you cannot also run by
+# hand is a scheduled thing you cannot debug.
+
 MEASURED_TOKENS ?= 916
 
-.PHONY: online-check online-drill
+MONITORS_IMAGE_NAME ?= chip-chat-monitors
+MONITORS_IMAGE_TAG  ?= $(IMAGE_TAG)
+MONITORS_JOB         = $(shell $(TF_RUN) output -raw monitors_job_name)
+
+.PHONY: online-check online-drill monitors-image-push monitors-deploy monitors-run
 
 online-check: ## Policy, monitors and the judges' share of the daily cap. Free
 	$(UV) run python -m chip_chat.eval.online --check --measured-tokens $(MEASURED_TOKENS)
 
 online-drill: ## Produce every feared condition and show which monitor caught it. Free
 	$(UV) run python -m chip_chat.eval.online --drill
+
+monitors-image-push: ## Build the monitors image IN the registry (no local Docker needed)
+	az acr build \
+		--registry $(shell $(TF_RUN) output -raw container_registry_name) \
+		--image $(MONITORS_IMAGE_NAME):$(MONITORS_IMAGE_TAG) \
+		--image $(MONITORS_IMAGE_NAME):latest \
+		--file eval/Dockerfile --platform $(IMAGE_PLATFORM) .
+
+monitors-deploy: ## Pin the scheduled job to the commit-tagged monitors image
+	az containerapp job update -n $(MONITORS_JOB) -g $(RG) \
+		--image $(REGISTRY)/$(MONITORS_IMAGE_NAME):$(MONITORS_IMAGE_TAG) -o none
+	@echo "  $(MONITORS_JOB) now runs $(MONITORS_IMAGE_NAME):$(MONITORS_IMAGE_TAG)"
+
+monitors-run: ## Run the online monitors once, now, instead of on the cron tick
+	az containerapp job start -n $(MONITORS_JOB) -g $(RG) -o none
+	@echo "  started. Watch it with:"
+	@echo "    az containerapp job execution list -n $(MONITORS_JOB) -g $(RG) -o table"
+	@echo "  and read what it said with the query in docs/decisions/hosted-phoenix.md"
 
 # --- Promotion ----------------------------------------------------------------
 #

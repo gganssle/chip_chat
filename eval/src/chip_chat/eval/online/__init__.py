@@ -20,6 +20,7 @@ chip_chat.eval.online
 ├── sampling  which turns get a judge, and the arithmetic behind the rate
 ├── monitors  the five fears, each as a condition that can fire
 ├── budget    judge tokens, inside the daily cap rather than beside it
+├── phoenix   the trace source: a backend's rows, as live turns
 ├── run       sample, judge, monitor, alert -- and count what it cost
 └── testing   each condition produced deliberately, so each monitor is demonstrated
 ```
@@ -27,6 +28,7 @@ chip_chat.eval.online
 ```bash
 python -m chip_chat.eval.online --check   # free: policy, monitors, budget
 python -m chip_chat.eval.online --drill   # free: every condition, produced
+python -m chip_chat.eval.online --phoenix "$OTEL_EXPORTER_OTLP_ENDPOINT" --judge
 ```
 
 Two things this package deliberately does not do. It does not **deliver** an
@@ -45,6 +47,7 @@ evidence of.
 
 from chip_chat.eval.online.budget import JudgeBudget, budget_from_env
 from chip_chat.eval.online.monitors import MONITORS, Alert, Monitor, Severity, evaluate
+from chip_chat.eval.online.phoenix import PhoenixError, read_live_turns, read_spans
 from chip_chat.eval.online.run import OnlineRun, Scored, run_online
 from chip_chat.eval.online.sampling import (
     DEFAULT_RATE,
@@ -62,6 +65,7 @@ __all__ = [
     "LiveTurn",
     "Monitor",
     "OnlineRun",
+    "PhoenixError",
     "Reason",
     "SamplingDecision",
     "SamplingPolicy",
@@ -69,6 +73,8 @@ __all__ = [
     "Severity",
     "budget_from_env",
     "evaluate",
+    "read_live_turns",
+    "read_spans",
     "read_turn",
     "run_online",
 ]

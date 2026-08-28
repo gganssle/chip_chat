@@ -339,12 +339,117 @@ variable "kill_switch" {
 
 variable "otlp_endpoint" {
   description = <<-EOT
-    Where agent-observability spans go. Empty while the deployed app exports
-    only to Application Insights; issue #78 points it at Arize AX, which
-    decision D6 says must be an endpoint and a header and nothing else.
+    Where agent-observability spans go, as an override.
+
+    Empty is not "nowhere" any more. Empty means "the Phoenix container app in
+    this environment", which observability.tf computes from the resource itself
+    so it cannot go stale. Setting this to a value points the app somewhere else
+    instead — a hosted Arize AX endpoint, a collector, a laptop through a tunnel
+    — which is the whole of the app tier's half of decision D6, unchanged.
   EOT
   type        = string
   default     = ""
+}
+
+# --- The agent-observability backend ----------------------------------------
+#
+# See docs/decisions/hosted-phoenix.md. Free tier only was the owner's
+# instruction, and self-hosting the open-source backend of the same vendor is
+# the version of "free" that does not require signing anybody up for anything.
+
+variable "phoenix_enabled" {
+  description = <<-EOT
+    Whether to run the agent-observability backend in this environment.
+
+    True by default, and turning it off is a deliberate act with a consequence
+    worth knowing: the app then exports only to Application Insights, and every
+    monitor in chip_chat.eval.online loses its trace source. PRD section 12
+    makes online evals a launch criterion, so false is a pre-launch state and
+    not a saving.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "phoenix_image" {
+  description = <<-EOT
+    The Phoenix image, pinned, and pinned to the same version compose.yaml uses.
+
+    A dev loop and a deployment that disagree about the backend's version are
+    worse than either alone: every difference between a local span tree and a
+    production one then has two candidate causes instead of one.
+    infra/tests/test_local_stack.py fails if this and compose.yaml drift apart,
+    so bumping one means bumping both in the same commit.
+  EOT
+  type        = string
+  default     = "docker.io/arizephoenix/phoenix:version-20.3.0"
+}
+
+variable "monitors_image_tag" {
+  description = <<-EOT
+    The tag of the monitors image the scheduled job is CREATED with.
+
+    Built by `make monitors-image-push`, which is `az acr build` against
+    eval/Dockerfile — the chip-chat-eval package rather than chip-chat-api, so
+    the job carries chip_chat.eval.online and the app image does not have to.
+
+    "latest" is a moving tag and this repository is otherwise strict that a
+    deployed thing points at an immutable one, so the exception needs its
+    reason. It is the same one azurerm_container_app.web has: Terraform creates
+    the resource and then stops owning the image (`ignore_changes`), and
+    `make monitors-deploy` immediately moves it to a commit-tagged digest, the
+    way `make deploy` does for the app. What this default buys is that a fresh
+    `terraform apply` produces a job that runs rather than a job that cannot
+    start, without anybody having to remember a -var.
+  EOT
+  type        = string
+  default     = "latest"
+}
+
+variable "monitors_cron" {
+  description = <<-EOT
+    How often the monitors run, as a cron expression in UTC.
+
+    Every fifteen minutes. The number is a trade between two costs that pull in
+    opposite directions: a longer interval means a disclosure signal sits
+    undetected for longer, and a shorter one means more job starts and more
+    overlap between windows. Fifteen minutes is short enough that the worst-case
+    detection delay is under a coffee break and long enough that a run costs
+    seconds of vCPU rather than minutes.
+  EOT
+  type        = string
+  default     = "*/15 * * * *"
+}
+
+variable "monitors_args" {
+  description = <<-EOT
+    Arguments appended to the scheduled monitor run, after --phoenix.
+
+    The default asks for the last twenty minutes against a fifteen-minute
+    schedule, which overlaps on purpose: a turn that lands between the end of
+    one window and the start of the next would otherwise be seen by nobody, and
+    a monitor firing twice on one trace is a duplicate alert while a monitor
+    firing on none is a missed one.
+
+    --judge is on. Four of the six monitors need no model and run on every turn
+    regardless; the two that do need one are the groundedness and over-refusal
+    judges, and eval/online/README.md measures their share of the daily ceiling
+    at under five percent even on the pessimistic figure. Removing it here makes
+    the loop free and blind to exactly the two failures a demo is judged on.
+
+    --fail-on page is the routing, and it is the only routing this system has.
+    chip_chat.eval.online deliberately delivers no alerts — the route is
+    somebody's action group and an eval package that held a delivery mechanism
+    would be untestable and the delivery unowned — so the CALLER routes, and for
+    a scheduled job the exit status is the route. A disclosure signal fails the
+    execution, which is visible in `az containerapp job execution list` and is
+    something Azure Monitor can alert on without this repository knowing
+    anything about Azure Monitor. Everything below `page` is reported and does
+    not fail the run, which is right: a dashboard-severity finding means
+    something as a rate and nothing as an instance.
+  EOT
+  type        = list(string)
+  default     = ["--lookback-minutes", "20", "--judge", "--fail-on", "page"]
 }
 
 # --- Container registry -----------------------------------------------------
