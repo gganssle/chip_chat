@@ -402,14 +402,26 @@ def verify(
         raise GrantRejectedError(
             GrantCode.INVALID, "the confirmation is of a version this API does not read"
         )
-    grant = Grant(
-        action=OpsAction(str(payload.get("action", ""))),
-        demo_id=str(payload.get("demo_id", "")),
-        reference_id=str(payload.get("reference_id", "")),
-        arguments=list(payload.get("arguments", ())),
-        grant_id=str(payload.get("grant_id", "")),
-        expires_at=float(payload.get("expires_at", 0.0)),
-    )
+    try:
+        grant = Grant(
+            action=OpsAction(str(payload.get("action", ""))),
+            demo_id=str(payload.get("demo_id", "")),
+            reference_id=str(payload.get("reference_id", "")),
+            arguments=list(payload.get("arguments", ())),
+            grant_id=str(payload.get("grant_id", "")),
+            expires_at=float(payload.get("expires_at", 0.0)),
+        )
+    except (TypeError, ValueError) as unreadable:
+        # An authenticated payload this verifier cannot read is a version skew
+        # between two deployments of the same repository -- one tier writing an
+        # action or a field shape the other does not know. It is refused rather
+        # than raised, because a refusal is an answer the caller understands and
+        # an exception here would surface as a 400 about a malformed request,
+        # which is a description of the wrong thing.
+        raise GrantRejectedError(
+            GrantCode.INVALID,
+            f"the confirmation is not one this API can read: {unreadable}",
+        ) from unreadable
     _bound(grant, action=action, demo_id=demo_id, reference_id=reference_id)
     if grant.expires_at <= (time.time() if now is None else now):
         raise GrantRejectedError(
@@ -434,6 +446,16 @@ def _bound(grant: Grant, *, action: OpsAction, demo_id: str, reference_id: str) 
     bound would be a bearer token for *any* write, which is precisely what a
     confirmation must not be.
 
+    Ordinary comparison rather than :func:`hmac.compare_digest`, and the
+    asymmetry with the signature check above is deliberate. The signature is the
+    one comparison where timing leaks something an attacker can use, because it
+    is the one an attacker can grind against. These three are comparisons between
+    two values the attacker *already supplied or already knows* -- a grant that
+    reached this line has been authenticated, so its contents are not a secret to
+    guess -- and reaching for a constant-time comparison here would only add a
+    ``TypeError`` on the day a non-ASCII identifier arrives, which is a refusal
+    turning into a crash.
+
     Raises:
         GrantRejectedError: :attr:`GrantCode.INVALID`, with the same sentence
             whichever binding failed -- the caller is told the confirmation does
@@ -441,8 +463,8 @@ def _bound(grant: Grant, *, action: OpsAction, demo_id: str, reference_id: str) 
     """
     if (
         grant.action is not action
-        or not hmac.compare_digest(grant.demo_id, demo_id)
-        or not hmac.compare_digest(grant.reference_id, reference_id)
+        or grant.demo_id != demo_id
+        or grant.reference_id != reference_id
     ):
         raise GrantRejectedError(
             GrantCode.INVALID,
