@@ -42,6 +42,7 @@ output changes.
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
+from chip_chat.agent.desk import Desk
 from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.loop import Conversation, TurnResult, run_turn
 from chip_chat.agent.model import ChatModel
@@ -78,7 +79,7 @@ class FundedTurn:
         self,
         budget: TurnBudget,
         model: ChatModel,
-        desk: OrderDesk,
+        desk: Desk,
         lanes: Lanes = NO_LANES,
     ) -> None:
         """Bind an allowed budget to the model it paid for.
@@ -124,10 +125,21 @@ class FundedTurn:
         Args:
             conversation: The visitor's history, appended to in place.
             message: What the visitor said.
-            confirm_draft_id: A draft the visitor confirmed by pressing the
+            confirm_draft_id: The card the visitor confirmed by pressing the
                 button. Applied before the agent runs, so ``place_order`` finds
-                a confirmed draft rather than being told about one. Nothing the
+                a confirmed record rather than being told about one. Nothing the
                 model says can reach this argument.
+
+                One field for both record types, and the name is the older of
+                the two rather than a lie. A browser presses one button on one
+                card and has no way of knowing -- and no business knowing --
+                whether the id on it is a draft's or a confirmation's;
+                :meth:`chip_chat.agent.desk.Desk.confirm` is what resolves that,
+                and it looks in the store this visitor's records are actually
+                in. Renaming the field was considered and rejected: it is the
+                one the deployed widget posts and the one the live write-gate
+                red team composes, and a rename would have quietly unscored
+                every probe in that suite.
 
         Returns:
             The turn's result.
@@ -172,7 +184,7 @@ class SpendGate:
         guard: SpendGuard,
         model_factory: Callable[[], ChatModel],
         *,
-        desk: OrderDesk | None = None,
+        desk: Desk | None = None,
         lanes: Lanes = NO_LANES,
         moderator: TextModerator | None = None,
     ) -> None:
@@ -207,8 +219,15 @@ class SpendGate:
         return self._guard
 
     @property
-    def desk(self) -> OrderDesk:
-        """The order desk. Holds drafts; cannot call a model."""
+    def desk(self) -> Desk:
+        """The action lane. Holds drafts; cannot call a model.
+
+        Typed as the protocol rather than as the week-one class, which is what
+        lets :func:`chip_chat.api.app.build_service` hand in
+        :class:`~chip_chat.api.orderdesk.OpsDesk` -- the same store, the real
+        catalogue, and the deployed ops API behind it -- without this module
+        knowing anything about either.
+        """
         return self._desk
 
     @property

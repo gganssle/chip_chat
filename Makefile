@@ -1160,9 +1160,10 @@ OPS_URL        = $(shell $(TF_RUN) output -raw ops_api_url)
 OPS_VAULT      = $(shell $(TF_RUN) output -raw key_vault_name)
 OPS_DIR        = api/functions
 OPS_KEY_SECRET = ops-api-key
+OPS_HOST_KEY_SECRET = ops-function-key
 
-.PHONY: ops-key ops-package ops-deploy ops-check ops-settings ops-verify ops-logs \
-        ops-unset-connection-strings
+.PHONY: ops-key ops-host-key ops-package ops-deploy ops-check ops-settings ops-verify \
+        ops-logs ops-unset-connection-strings
 
 # The shared secret the chat app presents on `x-cilantro-ops-key`. Minted here
 # rather than in Terraform for the reason `databricks_publish_secret_scope`
@@ -1179,6 +1180,34 @@ ops-key: ## Mint the ops API's shared secret in Key Vault if it is not there
 			--value "$$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" -o none && \
 		echo "minted $(OPS_KEY_SECRET) in $(OPS_VAULT)"; \
 	fi
+
+# The *platform's* key, as opposed to the application's. The Functions host runs
+# at `AuthLevel.FUNCTION`, so every caller presents `x-functions-key` on top of
+# the ops key that `function_app._authentic` compares — see
+# `chip_chat.api.opsclient.FUNCTION_KEY_HEADER` for why both, and why neither
+# makes the other redundant.
+#
+# Copied into Key Vault rather than read in Terraform with a data source, which
+# is the same rule `ops-key` above keeps: no credential enters the state file.
+# The container app then reaches it through the versionless reference in
+# `compute.tf`, resolved by the app's own user-assigned identity.
+#
+# Unlike `ops-key` this one DOES overwrite, and the asymmetry is deliberate.
+# `ops-key` mints a value that exists nowhere else, so rotating it without
+# rolling the caller takes the write path down; this one *copies* a value Azure
+# already owns, so an overwrite can only ever bring the vault back into
+# agreement with the platform. Run it after any host-key rotation, then restart
+# the container app's revision so it picks the new value up.
+ops-host-key: ## Copy the ops API's platform host key into Key Vault
+	@key=$$(az functionapp keys list -g $(RG) -n $(OPS_APP) \
+		--query functionKeys.default -o tsv); \
+	if [ -z "$$key" ]; then \
+		echo "$(OPS_APP) has no default host key; is the app deployed?"; exit 1; \
+	fi; \
+	az keyvault secret set --vault-name $(OPS_VAULT) --name $(OPS_HOST_KEY_SECRET) \
+		--description "A copy of $(OPS_APP)'s default host key, so the chat app can present x-functions-key." \
+		--value "$$key" -o none && \
+		echo "copied $(OPS_APP)'s default host key into $(OPS_HOST_KEY_SECRET)"
 
 ops-package: ## Build the workspace into the wheels the Functions host installs
 	rm -rf $(OPS_DIR)/wheels

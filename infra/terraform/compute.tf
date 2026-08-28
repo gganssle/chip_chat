@@ -62,6 +62,15 @@ locals {
 
       # The circuit breaker, in the run position. One portal edit throws it.
       CHIP_CHAT_KILL_SWITCH = var.kill_switch
+
+      # Where the write path is. This one entry is the difference between an ops
+      # API that is deployed and refusing correctly and an ops API the chat app
+      # actually calls: `chip_chat.api.app.build_action_lane` reads it, and unset
+      # means the app runs the week-one order desk and `/healthz/lanes` reports
+      # the action lane `not_wired`. The two secrets that go with it are
+      # Container Apps secrets below and not entries here, because this map still
+      # carries none.
+      CHIP_CHAT_OPS_URL = "https://${azurerm_function_app_flex_consumption.ops.default_hostname}"
     },
     # The agent-observability backend. `local.otlp_endpoint` is defined in
     # observability.tf and resolves to the Phoenix container app in this
@@ -159,6 +168,38 @@ resource "azurerm_container_app" "web" {
     }
   }
 
+  # The two secrets the action lane needs, and neither is a write credential.
+  #
+  # `ops-api-key` is the application's own shared secret: the chat app presents
+  # it on `x-cilantro-ops-key`, the ops API compares it with
+  # `hmac.compare_digest`, and — since docs/decisions/confirmation-grants.md —
+  # the chat app also derives the key it signs confirmation grants with from it.
+  # One secret configures both ends of one relationship, which is the whole
+  # reason it is not two.
+  #
+  # `ops-function-key` is Azure's, because the Functions host runs at
+  # `AuthLevel.FUNCTION`. It is a *copy* of that app's default host key, put in
+  # the vault by `make ops-host-key` rather than read here with a data source —
+  # a data source would put a live credential in the state file, which is the
+  # same rule `databricks_publish_secret_scope` and the two Key Vault references
+  # on the Functions app already keep.
+  #
+  # Both are unconditional. An absent secret in the vault makes the reference
+  # unresolvable and the revision fail to start, which is louder and earlier than
+  # an app that comes up healthy and refuses every write — and `make ops-key` and
+  # `make ops-host-key` are both idempotent.
+  secret {
+    name                = "ops-api-key"
+    key_vault_secret_id = "${azurerm_key_vault.main.vault_uri}secrets/ops-api-key"
+    identity            = azurerm_user_assigned_identity.app.id
+  }
+
+  secret {
+    name                = "ops-function-key"
+    key_vault_secret_id = "${azurerm_key_vault.main.vault_uri}secrets/ops-function-key"
+    identity            = azurerm_user_assigned_identity.app.id
+  }
+
   ingress {
     external_enabled = true
     target_port      = var.web_target_port
@@ -224,6 +265,19 @@ resource "azurerm_container_app" "web" {
           name        = "SNOWFLAKE_PRIVATE_KEY"
           secret_name = "snowflake-private-key"
         }
+      }
+
+      # The action lane's two secrets, by reference to the blocks above. Same
+      # `secret_name`-not-`value` shape and the same reason: a key that ended up
+      # in the value column would be a key in `az containerapp show`.
+      env {
+        name        = "CHIP_CHAT_OPS_KEY"
+        secret_name = "ops-api-key"
+      }
+
+      env {
+        name        = "CHIP_CHAT_OPS_FUNCTION_KEY"
+        secret_name = "ops-function-key"
       }
 
       # /healthz is outside the spend cap and outside the rate limit on purpose

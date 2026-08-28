@@ -91,6 +91,7 @@ import azure.functions as func
 
 from chip_chat.api.confirmations import ConfirmationLedger
 from chip_chat.api.drafts import DraftStore
+from chip_chat.api.grants import GRANT_HEADER, OPS_KEY_VARIABLE, GrantSigner
 from chip_chat.api.menu import build_catalog
 from chip_chat.api.ops import (
     OPS_UNAVAILABLE_MESSAGE,
@@ -139,9 +140,6 @@ warning in :func:`_handle` is how the operator finds out it was not written.
 
 OPS_KEY_HEADER: Final = "x-cilantro-ops-key"
 """The shared secret the chat app presents. See rule 1 in the module docstring."""
-
-OPS_KEY_VARIABLE: Final = "CHIP_CHAT_OPS_KEY"
-"""Where the secret is read from. Key Vault reference on the Functions app."""
 
 OPS_USER: Final = "CHIP_CHAT_OPS"
 """The Snowflake user this host authenticates as. `sql/04_users.sql` creates it.
@@ -441,8 +439,29 @@ def build_ops_service(catalog: MenuCatalog | None = None) -> OpsService:
             "line for which setting is missing"
         )
     return OpsService(
-        SnowflakeWriteBackend.from_env(), DraftStore(catalog), ConfirmationLedger()
+        SnowflakeWriteBackend.from_env(),
+        DraftStore(catalog),
+        ConfirmationLedger(),
+        grants=_signer(),
     )
+
+
+def _signer() -> GrantSigner | None:
+    """The verifier for confirmations minted in the chat app's process, if any.
+
+    Built from the *same* setting :func:`_authentic` compares -- one Key Vault
+    secret configures both ends of one relationship, and
+    :mod:`chip_chat.api.grants` argues why the signing key is derived from it
+    rather than stored beside it.
+
+    ``None`` where the setting is unset, and that is not a hole: a service with
+    no verifier refuses every grant with a sentence naming the missing setting,
+    which is a great deal more useful than the ``DRAFT_NOT_FOUND`` an ignored
+    grant would produce. ``docs/ops-api.md`` records what an *unresolved* Key
+    Vault reference costs in confusion; this is the same trap, told.
+    """
+    ops_key = os.environ.get(OPS_KEY_VARIABLE, "")
+    return GrantSigner(ops_key) if ops_key else None
 
 
 def configure(service: OpsService) -> None:
@@ -493,7 +512,9 @@ def _resolved() -> OpsService:
 def place_order(request: func.HttpRequest) -> func.HttpResponse:
     """Place a confirmed draft. Body: ``{"draft_id": ...}``."""
     return _handle(
-        request, "draft_id", lambda session, reference: session.place_order(reference)
+        request,
+        "draft_id",
+        lambda session, reference, granted: session.place_order(reference, granted),
     )
 
 
@@ -501,7 +522,9 @@ def place_order(request: func.HttpRequest) -> func.HttpResponse:
 def cancel_order(request: func.HttpRequest) -> func.HttpResponse:
     """Cancel a confirmed order. Body: ``{"order_id": ...}``."""
     return _handle(
-        request, "order_id", lambda session, reference: session.cancel_order(reference)
+        request,
+        "order_id",
+        lambda session, reference, granted: session.cancel_order(reference, granted),
     )
 
 
@@ -509,7 +532,9 @@ def cancel_order(request: func.HttpRequest) -> func.HttpResponse:
 def redeem_points(request: func.HttpRequest) -> func.HttpResponse:
     """Redeem a confirmed reward. Body: ``{"reward_id": ...}``."""
     return _handle(
-        request, "reward_id", lambda session, reference: session.redeem_points(reference)
+        request,
+        "reward_id",
+        lambda session, reference, granted: session.redeem_points(reference, granted),
     )
 
 
@@ -525,7 +550,9 @@ def update_preferences(request: func.HttpRequest) -> func.HttpResponse:
     return _handle(
         request,
         "prefs",
-        lambda session, reference: session.update_preferences(reference),
+        lambda session, reference, granted: session.update_preferences(
+            reference, granted
+        ),
         shape=dict,
     )
 
@@ -533,7 +560,7 @@ def update_preferences(request: func.HttpRequest) -> func.HttpResponse:
 def _handle(
     request: func.HttpRequest,
     field: str,
-    write: Callable[[OpsSession, Any], Receipt],
+    write: Callable[[OpsSession, Any, str | None], Receipt],
     *,
     shape: type = str,
 ) -> func.HttpResponse:
@@ -575,7 +602,7 @@ def _handle(
 def _answer(
     request: func.HttpRequest,
     field: str,
-    write: Callable[[OpsSession, Any], Receipt],
+    write: Callable[[OpsSession, Any, str | None], Receipt],
     *,
     shape: type = str,
 ) -> func.HttpResponse:
@@ -605,10 +632,19 @@ def _answer(
     if not demo_id:
         return _refusal(401, "SESSION_REQUIRED", "no visitor is bound to this request")
 
+    # The confirmation, where the caller is a *different process* holding a
+    # record this one cannot see. Absent on every call the in-process design
+    # makes and on every probe `infra/scripts/verify-ops-api.sh` puts, which is
+    # why it is optional here and why those calls still meet the same gate by
+    # the same route: no grant means claim from this host's own ledgers, find
+    # nothing, and refuse. See `chip_chat.api.grants` for what a grant is and
+    # what it is not.
+    granted = request.headers.get(GRANT_HEADER) or None
+
     try:
         with continue_turn(dict(request.headers), parent=SpanName.TOOL):
             service = _resolved()
-            receipt = write(service.session(demo_id), reference)
+            receipt = write(service.session(demo_id), reference, granted)
     except TurnContextError as split:
         # Before the write, not after: gate 2 is auditable because every write
         # emits ops.<action>, and a write nobody can find in a trace is a write

@@ -87,6 +87,7 @@ signature to :data:`~chip_chat.snowflake.procedures.IDENTITY_VOCABULARY`.
 
 import json
 import logging
+import os
 import secrets
 import threading
 from collections.abc import Callable, Iterator, Mapping
@@ -94,7 +95,7 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import (
@@ -111,12 +112,15 @@ from chip_chat.agent.health import probe
 from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.loop import PROMPT_VERSION, Conversation
 from chip_chat.agent.tools import offered_tools
+from chip_chat.api.confirmations import ConfirmationLedger
 from chip_chat.api.connect import (
     KeyPairJwt,
     PrivateKey,
     SnowflakeSettings,
     snowflake_connect,
 )
+from chip_chat.api.drafts import DraftStore
+from chip_chat.api.grants import OPS_KEY_VARIABLE, GrantSigner
 from chip_chat.api.guard import SpendGuard
 from chip_chat.api.killswitch import (
     CachedKillSwitch,
@@ -125,6 +129,9 @@ from chip_chat.api.killswitch import (
     any_of,
 )
 from chip_chat.api.limits import SpendLimits
+from chip_chat.api.menu import build_catalog
+from chip_chat.api.opsclient import OpsClient
+from chip_chat.api.orderdesk import OpsDesk, RewardLookup
 from chip_chat.api.outcome import Stop
 from chip_chat.api.pool import DEFAULT_POOL_SIZE, SessionConnection, VisitorPool
 from chip_chat.api.turns import SpendGate
@@ -140,6 +147,7 @@ from chip_chat.api.visitors import (
     journal_from_env,
     shipped_roster,
 )
+from chip_chat.catalog import MenuCatalog
 from chip_chat.otel import (
     TelemetryConfig,
     TokenUsage,
@@ -189,6 +197,7 @@ __all__ = [
     "SessionStore",
     "SwitchRequest",
     "VisitorProfile",
+    "build_action_lane",
     "build_lanes",
     "build_photos",
     "build_service",
@@ -758,6 +767,176 @@ def _analyst_host(settings: SnowflakeSettings) -> str:
         return derived
 
 
+OPS_URL_VARIABLE: Final = "CHIP_CHAT_OPS_URL"
+"""Where the deployed ops API answers. ``infra/terraform/compute.tf`` sets it.
+
+Unset is the week-one slice and an honest state rather than a hole: the app runs
+:class:`~chip_chat.agent.orders.OrderDesk`, ``GET /healthz/lanes`` reports the
+action lane ``not_wired`` with the sentence that says drafts are proposed and
+nothing is written, and the three write tools that need a real account are not
+offered to the model at all.
+"""
+
+OPS_FUNCTION_KEY_VARIABLE: Final = "CHIP_CHAT_OPS_FUNCTION_KEY"
+"""The platform key for the Functions host, which runs at ``AuthLevel.FUNCTION``.
+
+Separate from :data:`~chip_chat.api.grants.OPS_KEY_VARIABLE`, which is the
+*application's* secret. :class:`~chip_chat.api.opsclient.OpsClient` explains why
+both are sent and why neither makes the other redundant.
+"""
+
+
+def build_action_lane(
+    visitors: VisitorDesk,
+    *,
+    catalog: MenuCatalog | None = None,
+    rewards: RewardLookup | None = None,
+) -> OpsDesk | None:
+    """Assemble the action lane over the deployed ops API, or decline to.
+
+    The last of the five lanes to be wired, and the reason it was last is
+    recorded at length in ``docs/ops-api.md``: the ops API has been deployed,
+    credentialled and refusing correctly for some time, and the chat app did not
+    call it because a draft minted in this process is invisible to a service in
+    another one. ``docs/decisions/confirmation-grants.md`` is how that was
+    resolved without giving this tier a write credential and without inventing a
+    shared store; :mod:`chip_chat.api.grants` is the mechanism.
+
+    **Three settings and a catalogue, and every one of them is a precondition
+    rather than an option.** Without a URL there is nothing to call. Without the
+    ops key there is no secret to authenticate with *and* no key to sign a
+    confirmation with, which are the same secret by construction. Without a
+    catalogue there is nothing to price a draft against, and a draft priced
+    against nothing would be a card whose total the ops API's own procedure
+    would reject -- so declining here is the same refusal, made where it is
+    legible.
+
+    The function key is deliberately *not* a precondition. A host at
+    ``AuthLevel.ANONYMOUS`` needs none, the ops key is the check that is made in
+    this repository's own code, and a deployment that forgot the platform key
+    gets a 401 from Azure with a name on it rather than an app that would not
+    start.
+
+    Args:
+        visitors: The session-to-visitor binding. The action lane's only source
+            of a ``demo_id``.
+        catalog: The published catalogue. ``None`` reads it through
+            :func:`chip_chat.api.menu.build_catalog`, which is #66's production
+            loader -- the same one the Functions host uses, so the two tiers
+            price a draft identically or neither does.
+        rewards: How a redemption card learns what a reward is called and costs.
+            See :data:`~chip_chat.api.orderdesk.RewardLookup`.
+
+    Returns:
+        The desk, or ``None`` where this deployment has no ops API.
+    """
+    base_url = os.environ.get(OPS_URL_VARIABLE, "").strip()
+    ops_key = os.environ.get(OPS_KEY_VARIABLE, "").strip()
+    if not base_url or not ops_key:
+        _log.info(
+            "no action lane: %s and %s must both be set for the chat app to "
+            "reach the ops API",
+            OPS_URL_VARIABLE,
+            OPS_KEY_VARIABLE,
+        )
+        return None
+    if ops_key.startswith("@Microsoft.KeyVault"):
+        # The trap `docs/ops-api.md` records from the other tier, caught on this
+        # one. An unresolved Key Vault reference is not an error: the setting
+        # arrives holding the literal string, every `hmac.compare_digest` fails
+        # against it, and every write is refused with `OPS_KEY_INVALID` from a
+        # service that looks entirely healthy. Refusing to build the lane says
+        # so once, at start-up, in the log a deployment check reads.
+        _log.error(
+            "%s holds an unresolved Key Vault reference; the action lane is "
+            "not wired, because every write it made would be refused",
+            OPS_KEY_VARIABLE,
+        )
+        return None
+    resolved_catalog = build_catalog() if catalog is None else catalog
+    if resolved_catalog is None:
+        _log.error(
+            "no action lane: %s is set but no published catalogue could be "
+            "read, and a draft that is not priced is not a card",
+            OPS_URL_VARIABLE,
+        )
+        return None
+    client = OpsClient(
+        base_url,
+        ops_key,
+        os.environ.get(OPS_FUNCTION_KEY_VARIABLE, "").strip(),
+    )
+    _log.info("action lane wired against %s", client.base_url)
+    return OpsDesk(
+        DraftStore(resolved_catalog),
+        ConfirmationLedger(),
+        client,
+        GrantSigner(ops_key),
+        visitors,
+        rewards=rewards,
+    )
+
+
+def _reward_lookup(lanes: Lanes) -> RewardLookup | None:
+    """How a redemption card learns a reward's published name and point cost.
+
+    Off the account lane's own points read, which is the query
+    ``get_points_balance`` already makes: it returns the published reward
+    catalogue with each row marked affordable or not. Reading it here rather
+    than opening a second connection is the argument
+    :mod:`chip_chat.agent.lanes` makes about every backing service -- a lane
+    that built its own client would be a second place a credential is resolved.
+
+    Returns:
+        The lookup, or ``None`` on a deployment with no account lane, which
+        leaves a redemption card quoting no cost at all. That is honest and it
+        is not free: ``sql/12_procedures.sql`` reads a null
+        ``QUOTED_POINT_COST`` as *skip the check*, so such a deployment loses
+        the ``REWARD_COST_CHANGED`` protection and gains nothing invented in its
+        place.
+    """
+    account = lanes.account
+    if account is None:
+        return None
+
+    def lookup(session_id: str, reward_id: str) -> tuple[str, int] | None:
+        try:
+            found = account.points_balance(session_id=session_id)
+        except Exception:  # pragma: no cover - a lane declines rather than raises
+            _log.warning("the account lane could not price a reward", exc_info=True)
+            return None
+        balance = found.balance
+        if balance is None:
+            # The lane declined. A card that quoted a cost read from nothing
+            # would be the plausible number PRD A4 forbids, so it quotes none.
+            return None
+        for reward in balance.rewards:
+            if reward.reward_id == reward_id:
+                return reward.name, reward.point_cost
+        return None
+
+    return lookup
+
+
+def _ordering_available(service: Service) -> bool | None:
+    """What ``GET /healthz/lanes`` should report for the action lane.
+
+    ``None`` where this deployment has no ops API, which
+    :func:`chip_chat.agent.health.probe` renders as ``not_wired`` rather than
+    down -- a deployment that never had a write path is working as configured,
+    and reporting it red would train whoever reads the surface to ignore red.
+
+    Asked through the desk rather than through the client so that the health
+    surface and a confirmation card get their answer from the same object and
+    the same fifteen-second memo. A health route that probed independently could
+    say *up* in the same second a card said *unavailable*.
+    """
+    desk = service.gate.desk
+    if not desk.offers_every_write():
+        return None
+    return desk.available()
+
+
 def build_service(
     lanes: Lanes | None = None,
     connect: Callable[[], SessionConnection] | None = None,
@@ -804,11 +983,37 @@ def build_service(
     visitors, pool = build_visitors(resolved_connect)
     resolved_lanes = build_lanes(pool) if lanes is None else lanes
     _log.info("lanes wired on this deployment: %s", resolved_lanes.describe())
+    # Built here rather than on first use, unlike the photo intake, and it is
+    # worth being precise about the difference because `Service.photos` records
+    # a genuinely expensive lesson: building Azure SDK clients on the start-up
+    # path cost thirty-five seconds and a restart loop.
+    #
+    # This *does* touch Azure — `build_catalog` resolves the app's identity and
+    # reads nine blobs — so it is on the same path for the same kind of work,
+    # and eager anyway, because the alternative is worse. The tool list the
+    # model is offered depends on which desk this is, and a conversation is
+    # opened with that list written into its runtime context; a desk that
+    # appeared on the second turn would make the first turn's registration a lie
+    # and raise `ToolRegistrationError` on the third. There is no lazy version of
+    # this that is also honest.
+    #
+    # What makes it affordable is that the published catalogue is ten items and
+    # the identity is already resolved: measured on `ca-chip-chat-web--0000035`,
+    # the process went from import to "Uvicorn running" in three seconds. If a
+    # future catalogue makes that untrue, the fix is to hand `build_service` a
+    # catalogue rather than to defer the desk.
+    #
+    # What it deliberately does not do is talk to the *ops API*.
+    # `OpsClient.available` is asked when a card is composed, and a start-up
+    # path that waited on another service would be a liveness probe waiting
+    # behind it.
+    desk = build_action_lane(visitors, rewards=_reward_lookup(resolved_lanes))
     limits = SpendLimits.from_env()
     return Service(
         gate=SpendGate(
             SpendGuard(limits, kill_switch=default_kill_switch()),
             lambda: AzureChatModel(FoundryConfig.from_env()),
+            desk=desk,
             lanes=resolved_lanes,
         ),
         visitors=visitors,
@@ -936,7 +1141,7 @@ def create_app(service: Service | None = None) -> FastAPI:
         report = probe(
             resolved.gate.lanes,
             session_id=session_id,
-            ordering_available=None,
+            ordering_available=_ordering_available(resolved),
         )
         response = JSONResponse(report.as_dict())
         _set_session_cookie(response, session_id, secure=_is_https(request))
@@ -1085,7 +1290,7 @@ def create_app(service: Service | None = None) -> FastAPI:
         admitted = resolved.visitors.admit(session_id)
         conversation = resolved.sessions.get(
             session_id,
-            tools=offered_tools(resolved.gate.lanes),
+            tools=offered_tools(resolved.gate.lanes, resolved.gate.desk),
             lanes=resolved.gate.lanes,
         )
         message = _with_photo(resolved, session_id, body)
@@ -1308,7 +1513,9 @@ def _moderate_and_store(
     """
     admitted = service.visitors.visitor(session_id)
     conversation = service.sessions.get(
-        session_id, tools=offered_tools(service.gate.lanes), lanes=service.gate.lanes
+        session_id,
+        tools=offered_tools(service.gate.lanes, service.gate.desk),
+        lanes=service.gate.lanes,
     )
     with chat_turn(
         session_id=session_id,

@@ -206,7 +206,47 @@ function modifierText(card) {
   return parts;
 }
 
+// The three writes that name a row -- cancel_order, redeem_points,
+// update_preferences -- put up a card too, and it is not an order: it has a
+// confirmation_id rather than a draft_id, and details rather than priced lines.
+// Rendering it through the order card would show '$undefined', so it gets its
+// own six lines. What it does NOT get is its own confirm field: the button
+// posts confirm_draft_id, because the server resolves that id against whichever
+// of the two record types this visitor holds and a browser has no business
+// knowing which. api/turns.py says why the field kept the older name.
+function renderAction(card, isReceipt) {
+  const node = el('div', 'card');
+  node.dataset.draftId = card.confirmation_id || '';
+  const what = (card.action || '').replace(/_/g, ' ');
+  node.appendChild(el('div', 'title', (isReceipt ? 'RECEIPT \u2014 ' : '') + what));
+  const details = card.details || {};
+  for (const key of Object.keys(details)) {
+    const value = details[key];
+    if (value === null || value === undefined) continue;
+    const shown = typeof value === 'object' ? JSON.stringify(value) : String(value);
+    node.appendChild(el('p', 'mods', key.replace(/_/g, ' ') + ': ' + shown));
+  }
+  const actions = el('div', 'actions');
+  if (!isReceipt) {
+    const go = el('button', 'primary', 'Confirm');
+    go.onclick = () => {
+      go.disabled = true;
+      send('Yes, go ahead.', {confirm_draft_id: card.confirmation_id});
+    };
+    actions.appendChild(go);
+  }
+  actions.appendChild(el('span', 'sim', '\u00b7 ' + SIMULATED));
+  node.appendChild(actions);
+  if (card.unavailable_message) {
+    node.appendChild(el('div', 'stamp', card.unavailable_message));
+  }
+  log.appendChild(node);
+  bottom(node);
+  return node;
+}
+
 function renderCard(card, isReceipt) {
+  if (card && card.confirmation_id && !card.lines) return renderAction(card, isReceipt);
   const node = el('div', 'card');
   node.dataset.draftId = card.draft_id || '';
   if (isReceipt) {
@@ -238,6 +278,12 @@ function renderCard(card, isReceipt) {
   }
   actions.appendChild(el('span', 'sim', '\\u00b7 ' + SIMULATED));
   node.appendChild(actions);
+  // RFC-001 section 10: the card renders and REPORTS that ordering is
+  // unavailable. It is not withdrawn and the button is not silently disabled,
+  // because a visitor who is told nothing assumes the order went through.
+  if (card.unavailable_message) {
+    node.appendChild(el('div', 'stamp', card.unavailable_message));
+  }
   if (isReceipt) {
     const kept = 'Kept in this conversation \\u2014 ask me about order '
       + (card.order_id || '') + ' any time.';

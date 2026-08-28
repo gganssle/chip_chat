@@ -93,3 +93,6 @@ web/dist/
 # the main checkout walks into them and fails on another agent's half-written
 # file. `[tool.ruff] extend-exclude` in pyproject.toml is the other half of this.
 .claude/worktrees/
+
+# Scratch scripts used to drive the live deployment by hand.
+.order.sh
