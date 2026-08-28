@@ -212,6 +212,27 @@ restriction to your own address**, look, and flip it back with `terraform apply`
 That is a deliberate two-command act with an audit trail, which is the right
 shape for something that exposes a transcript.
 
+#### Reading what the monitors said
+
+The job prints to stdout, which Container Apps ships to the workspace. This is
+the query `make monitors-run` points at:
+
+```bash
+az monitor log-analytics query \
+  --workspace $(az monitor log-analytics workspace show \
+                  -g rg-chip-chat -n log-chip-chat --query customerId -o tsv) \
+  --analytics-query "ContainerAppConsoleLogs_CL
+                     | where ContainerName_s == 'monitors'
+                     | where TimeGenerated > ago(1h)
+                     | order by TimeGenerated asc
+                     | project TimeGenerated, Log_s" -o tsv
+```
+
+Ingestion runs a minute or two behind the execution, so a run that has just
+finished is not immediately readable. `az containerapp job execution list` is the
+faster answer to *did it run and did it pass*; a `Failed` execution with
+`--fail-on page` in its arguments means a disclosure signal fired.
+
 ### 4. Minimum replicas is one, and that is the line item
 
 Everything else in this estate scales to zero, and `compute.tf` argues for it
