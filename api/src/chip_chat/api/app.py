@@ -157,6 +157,17 @@ from chip_chat.otel import (
     render_response,
     shutdown_tracing,
 )
+from chip_chat.search import SearchError
+from chip_chat.search.client import (
+    SEARCH_SCOPE,
+    EntraToken,
+    HttpSearchService,
+    endpoint_from_env,
+)
+from chip_chat.search.client import pooled_client as search_pooled_client
+from chip_chat.search.lane import KnowledgeLane
+from chip_chat.search.retrieve import Retriever
+from chip_chat.search.schema import ALIAS as DEFAULT_SEARCH_ALIAS
 from chip_chat.snowflake.cortex import (
     HOST_VARIABLE,
     AnalystError,
@@ -168,9 +179,15 @@ from chip_chat.snowflake.lane import AccountLane, PersonalizationLane
 from chip_chat.vision import (
     AzureBlobStore,
     AzureImageAnalyzer,
+    AzureVisionModel,
     ImageModerator,
+    MealDescriber,
+    MealMatcher,
     PhotoIntake,
+    PhotoLane,
+    SlotRules,
     UploadRejectedError,
+    Vocabulary,
 )
 from chip_chat.vision.intake import StoredPhoto
 from chip_chat.vision.reader import read_upload_async
@@ -679,22 +696,33 @@ def build_visitors(
 
 
 def build_lanes(pool: VisitorPool | None) -> Lanes:
-    """Assemble the Snowflake-backed lanes over ``pool``, or return none at all.
+    """Assemble every lane this deployment can build, and withhold the rest.
 
-    Two of the five, and the two that were the whole of ``cc-lpy4``. The other
-    three are somebody else's ticket and are deliberately untouched here:
-    *knowledge* needs one :class:`~chip_chat.search.retrieve.Retriever` against
-    the live alias (``cc-e1sr``), and *photo* needs the upload route and a
-    production catalogue loader (``cc-mpd``).
+    Four of the five, and the fifth -- *action* -- is assembled separately by
+    :func:`build_action_lane` because it hangs off the ops API rather than off a
+    backing store. The two that were the whole of ``cc-lpy4`` are here, and so
+    are the two that used to be somebody else's ticket:
+    :func:`build_knowledge_lane` (``cc-e1sr``) and :func:`build_photo_lane`
+    (``cc-mpd``). Issue #106 is what closed them: with neither wired,
+    ``search_menu_knowledge`` answered out of
+    :data:`chip_chat.agent.hardcoded.MENU`, which is three items, and no amount
+    of loading Snowflake would have changed a word of it.
 
-    **A pool is the precondition, and it is the only one.** Both lanes take
+    **The four preconditions are independent, and that is the point.** Knowledge
+    needs a search endpoint, photo needs a catalogue and a vision deployment,
+    and account and personalization need a Snowflake pool. A deployment missing
+    any one of them gets the other three rather than :data:`NO_LANES` -- which
+    is why the pool check below returns a populated :class:`Lanes` instead of
+    the constant it used to.
+
+    **A pool is the precondition for two of them.** Both lanes take
     :meth:`~chip_chat.api.pool.VisitorPool.for_session` and nothing else --
     :data:`chip_chat.snowflake.reads.SessionCheckout` is that method's shape,
     which ``api/tests/test_read_lane_seam.py`` has been holding since before
     either end had a caller. So there is no configuration here beyond the
     connection: a deployment that can check a connection out can answer
     ``get_points_balance`` and ``get_usual_order`` from this visitor's own rows,
-    and one that cannot has ``pool is None`` and gets :data:`NO_LANES`.
+    and one that cannot has ``pool is None`` and gets neither of them.
 
     **The account lane needs one thing the pool does not give it**, which is a
     REST host for Cortex Analyst, and one thing the container cannot give it,
@@ -708,14 +736,16 @@ def build_lanes(pool: VisitorPool | None) -> Lanes:
             Snowflake credential.
 
     Returns:
-        The lanes. :data:`NO_LANES` where there is no pool, which is the
-        week-one slice and is an honest state rather than a hole.
+        The lanes this deployment can actually answer with. Every field is
+        independently ``None``, and a ``None`` is an honest state rather than a
+        hole: the tool it backs is either withdrawn from the model's list or
+        left on the fixture that says in its own result what it is reading.
     """
-    if pool is None:
-        return NO_LANES
-    settings = SnowflakeSettings.from_env()
-    if settings is None:  # pragma: no cover - a pool implies settings
-        return NO_LANES
+    knowledge = build_knowledge_lane()
+    photo = build_photo_lane()
+    settings = None if pool is None else SnowflakeSettings.from_env()
+    if pool is None or settings is None:
+        return Lanes(knowledge=knowledge, photo=photo)
     key = PrivateKey()
     # Built once per process and held for its life, for the reason
     # `chip_chat.search.client.pooled_client` measures: a client per turn is a
@@ -724,8 +754,115 @@ def build_lanes(pool: VisitorPool | None) -> Lanes:
         _analyst_host(settings), pooled_client(), KeyPairJwt(settings, key)
     )
     return Lanes(
+        knowledge=knowledge,
         account=AccountLane(pool.for_session, transport),
         personalization=PersonalizationLane(pool.for_session),
+        photo=photo,
+    )
+
+
+SEARCH_ALIAS_VARIABLE: Final = "AZURE_SEARCH_INDEX_ALIAS"
+"""Which alias the knowledge lane queries. ``infra/terraform/compute.tf`` sets it.
+
+An *alias*, never an index name, and the variable is named for what it holds so
+that nobody is tempted to point it at one. RFC-001 section 08 rebuilds the index
+under a name that says which corpus release it carries and swaps the alias in a
+single write; an application that learned an index name would pin itself to one
+release and stop moving the week after somebody rebuilt it.
+"""
+
+
+def build_knowledge_lane() -> KnowledgeLane | None:
+    """Assemble hybrid retrieval over the live corpus alias, or decline to.
+
+    One :class:`~chip_chat.search.retrieve.Retriever` per process, holding one
+    pooled ``httpx.Client`` for the life of the process. That is the whole of
+    the latency argument :class:`~chip_chat.search.retrieve.Retriever` records
+    against measurements taken from this container: 11.2 ms on a warm pooled
+    connection against 84.3 ms on a fresh one. A retriever per turn would be a
+    TLS handshake per turn and nothing further down recovers it.
+
+    Nothing here touches the network. :class:`~chip_chat.search.client.EntraToken`
+    defers its credential chain to the first call, so a process that never
+    searches never resolves an identity, and the start-up cost of this function
+    is a URL parse.
+
+    Returns:
+        The lane, or ``None`` where ``AZURE_SEARCH_ENDPOINT`` is unset. ``None``
+        is the week-one slice: ``search_menu_knowledge`` falls back to
+        :data:`chip_chat.agent.hardcoded.MENU` and says in its own result that
+        it is reading a three-item menu, which is honest and was, until #106,
+        what the deployment actually served.
+    """
+    try:
+        endpoint = endpoint_from_env()
+    except SearchError:
+        _log.warning(
+            "no knowledge lane: AZURE_SEARCH_ENDPOINT is unset, so "
+            "search_menu_knowledge will answer from the hardcoded menu"
+        )
+        return None
+    alias = os.environ.get(SEARCH_ALIAS_VARIABLE, "").strip() or DEFAULT_SEARCH_ALIAS
+    service = HttpSearchService(
+        endpoint, search_pooled_client(), EntraToken(SEARCH_SCOPE)
+    )
+    _log.info("knowledge lane wired against %s alias %r", endpoint, alias)
+    return KnowledgeLane(Retriever(service, alias=alias))
+
+
+def build_photo_lane() -> PhotoLane | None:
+    """Assemble stage 4 and stage 5 over the published catalogue, or decline to.
+
+    Three things have to be there and any one of them missing is a decline: the
+    catalogue :func:`~chip_chat.api.menu.build_catalog` reads from blob storage,
+    the generated vocabulary named by ``CHIP_CHAT_VISION_VOCABULARY``, and a
+    vision deployment. The uploads container is a fourth, and it is the same
+    store :func:`build_photos` writes to -- the describer reads the photograph
+    back itself rather than being handed bytes, so that the image reaches
+    exactly one place.
+
+    **The two stages are built from one catalogue on purpose.** The vocabulary
+    carries the content version it was generated from and
+    :meth:`~chip_chat.vision.matcher.MealMatcher.resolve` checks it, so a
+    vocabulary shipped in the image and a catalogue published to blob storage
+    that came from different builds raise :class:`CatalogueDriftError` on the
+    first photograph rather than resolving a term that has moved. That is a loud
+    failure and it is the intended one: the alternative is a matcher quietly
+    resolving last month's salsa.
+
+    Returns:
+        The lane, or ``None`` where any part is unconfigured. ``None`` withdraws
+        ``match_meal_from_photo`` from the tool list entirely -- the model is
+        never offered a tool nothing can answer -- and the upload route says so
+        in a sentence.
+    """
+    catalog = build_catalog()
+    if catalog is None:
+        _log.warning(
+            "no photo lane: no published catalogue in blob storage, so "
+            "match_meal_from_photo is not offered to the model"
+        )
+        return None
+    try:
+        vocabulary = Vocabulary.from_env()
+        model = AzureVisionModel.from_env()
+        images = AzureBlobStore.from_env()
+    except Exception:
+        _log.warning(
+            "no photo lane: the generated vocabulary, the vision deployment or "
+            "the uploads container is not configured, so match_meal_from_photo "
+            "is not offered to the model",
+            exc_info=True,
+        )
+        return None
+    _log.info(
+        "photo lane wired against catalogue %s and vocabulary %s",
+        catalog.content_version()[:12],
+        (vocabulary.content_version or "unversioned")[:12],
+    )
+    return PhotoLane(
+        MealDescriber(model, images=images, vocabulary=vocabulary),
+        MealMatcher(catalog, rules=SlotRules.from_env()),
     )
 
 
@@ -961,10 +1098,11 @@ def build_service(
             :data:`~chip_chat.agent.lanes.NO_LANES` to run the week-one slice on
             a machine that has credentials.
 
-            Two of the five are still somebody else's: *knowledge* needs one
-            :class:`~chip_chat.search.retrieve.Retriever` built per process
-            against the live alias (``cc-e1sr``), and *photo* needs an upload
-            route and a production catalogue loader (#62, ``cc-mpd``).
+            All four of the backing lanes are wired there now: #106 closed
+            the two that were open, so *knowledge* holds one
+            :class:`~chip_chat.search.retrieve.Retriever` against the live
+            alias and *photo* holds the describer and the matcher over the
+            published catalogue.
 
         connect: Opens a Snowflake connection, for the pool and the roster.
             ``None`` means :func:`~chip_chat.api.connect.snowflake_connect`
@@ -997,11 +1135,14 @@ def build_service(
     # and raise `ToolRegistrationError` on the third. There is no lazy version of
     # this that is also honest.
     #
-    # What makes it affordable is that the published catalogue is ten items and
-    # the identity is already resolved: measured on `ca-chip-chat-web--0000035`,
-    # the process went from import to "Uvicorn running" in three seconds. If a
-    # future catalogue makes that untrue, the fix is to hand `build_service` a
-    # catalogue rather than to defer the desk.
+    # What makes it affordable is that the read is nine blobs and the identity
+    # is already resolved: measured on `ca-chip-chat-web--0000035`, against a
+    # ten-item catalogue, the process went from import to "Uvicorn running" in
+    # three seconds. #106 published the real one -- 192 items and 1,385
+    # modifiers, 1.3 MB across the same nine blobs -- and `build_catalog`
+    # memoises it, so the photo lane below reads the same object rather than a
+    # second copy. If a future catalogue makes that untrue, the fix is to hand
+    # `build_service` a catalogue rather than to defer the desk.
     #
     # What it deliberately does not do is talk to the *ops API*.
     # `OpsClient.available` is asked when a card is composed, and a start-up

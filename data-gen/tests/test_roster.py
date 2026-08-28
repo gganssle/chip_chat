@@ -23,26 +23,79 @@ by comparing anything to anything.
 The copy is committed rather than regenerated on demand for the reason
 docs/snowflake-account.md §10 gives about the landing zone: a population that
 exists only in one agent's working directory and in one Snowflake account is a
-population with no copies. `make snowflake-load-roster` loads these files, and
-they are 140 kilobytes.
+population with no copies. `make snowflake-load-roster` loads these files.
 
 A committed copy is a second thing to keep true, which is what these tests are
-for. They regenerate the shipped population from the shipped ``population.toml``
-and hold the committed bytes to it — so a retune that moves the population
-fails here, loudly, in `make ci`, rather than quietly desynchronising the live
-account the next time somebody publishes.
+for. They regenerate the shipped population and hold the committed bytes to it —
+so a retune that moves the population fails here, loudly, in `make ci`, rather
+than quietly desynchronising the live account the next time somebody publishes.
+
+## Why ``roster/inputs/`` exists, as of GitHub #106
+
+The population is a function of three things: the catalogue, the published
+rewards terms, and ``population.toml``. Two of those used to be the committed
+*test fixtures* — a two-entree catalogue and the harvest tests' recorded site —
+because that is what a laptop with no network could reach, and the account was
+loaded from the same small generation, so the two agreed.
+
+#106 ended that. The account now holds a population composed from the real
+harvested catalogue: 192 published items and 1,385 modifiers rather than ten
+rows. Regenerating from the fixture would therefore no longer produce what the
+account holds, and a test comparing the two would be asserting that two
+different generations are the same one.
+
+So the inputs travel with the roster. ``roster/inputs/`` carries the built
+catalogue and the three policy tables
+:func:`~chip_chat.data_gen.rewards.load_rewards_terms` reads — 1.4 megabytes,
+against seventeen for the population they generate — and these tests build from
+those. `make ci` still needs no network, no credential and no harvest, and
+"reproducible from this repository byte for byte" stays a claim you can check
+rather than one you have to believe.
+
+The fixture catalogue has not gone anywhere and is still what the rest of this
+suite runs against: every property it asserts holds at any catalogue size, and
+a suite that regenerated 192 items to prove referential integrity would spend
+the time to learn nothing new.
 """
 
 import json
 from decimal import Decimal
+from functools import cache
 from pathlib import Path
 
-from population_fixtures import fixture_population
+from population_fixtures import shipped_config
 
+from chip_chat.catalog import load_catalog
+from chip_chat.data_gen import SyntheticPopulation, generate_population
 from chip_chat.data_gen.records import to_jsonl
+from chip_chat.data_gen.rewards import load_rewards_terms
+from chip_chat.harvest.blobs import LocalBlobStore
 
 ROSTER = Path(__file__).resolve().parents[1] / "roster"
 """Where the committed copy lives."""
+
+INPUTS = ROSTER / "inputs"
+"""The catalogue and policy tables the committed roster was generated from.
+
+A landing zone in miniature: the same layout ``chip_chat.harvest.blobs`` writes
+and the same prefixes the loaders read, so nothing here has to know it is a
+fixture. See this module's docstring for why it is committed at all.
+"""
+
+
+@cache
+def shipped_population() -> SyntheticPopulation:
+    """Regenerate what the live account is supposed to be holding.
+
+    Generated once for the whole module. Three and a half seconds against the
+    real catalogue, measured on 2026-08-28, which is what makes committing the
+    inputs affordable rather than merely correct.
+    """
+    blobs = LocalBlobStore(INPUTS)
+    return generate_population(
+        load_catalog(blobs), load_rewards_terms(blobs), shipped_config()
+    )
+
 
 COMMITTED = ("personas", "persona_fixtures", "demo_visitors")
 """The tables `chip_chat.snowflake.load` is the only route into the account for.
@@ -56,15 +109,16 @@ checkable rather than asserted.
 
 def test_the_committed_roster_is_the_shipped_populations() -> None:
     """Byte for byte, table by table, against a fresh generation."""
-    population = fixture_population()
+    population = shipped_population()
 
     for name in COMMITTED:
         expected = to_jsonl(population.table(name))
         actual = (ROSTER / f"{name}.jsonl").read_bytes()
         assert actual == expected, (
-            f"data-gen/roster/{name}.jsonl is not what the shipped "
-            "population.toml generates. Either the config was retuned and the "
-            "committed roster was not re-exported, or the roster was edited by "
+            f"data-gen/roster/{name}.jsonl is not what roster/inputs/ and the "
+            "shipped population.toml generate. Either the config was retuned, "
+            "or the catalogue under roster/inputs/ was refreshed, and the "
+            "committed roster was not re-exported; or the roster was edited by "
             "hand. Re-export it and reload the account: a roster the account "
             "does not hold is the defect this directory exists to foreclose"
         )
@@ -79,7 +133,7 @@ def test_the_committed_manifest_names_the_generation_it_came_from() -> None:
     argument — and so a future rebuild can tell whether the landing zone it
     just regenerated is the one the gold marts were computed against.
     """
-    population = fixture_population()
+    population = shipped_population()
 
     manifest = json.loads((ROSTER / "manifest.json").read_text(encoding="utf-8"))
 
@@ -97,7 +151,7 @@ def test_every_committed_fixture_agrees_with_the_committed_history() -> None:
     the two halves separate — and it fails if somebody hand-edits a number in
     ``persona_fixtures.jsonl`` to make a narrative read better.
     """
-    population = fixture_population()
+    population = shipped_population()
     orders: dict[str, int] = {}
     spend: dict[str, Decimal] = {}
     for order in population.orders:
@@ -132,7 +186,7 @@ def test_the_narratives_quote_the_numbers_beside_them() -> None:
     contradiction for a less visible one. The generator renders both from the
     same measured facts, and this is what says so.
     """
-    population = fixture_population()
+    population = shipped_population()
 
     quoting = [
         row

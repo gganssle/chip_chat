@@ -1015,9 +1015,40 @@ snowflake-cap: ## Cap the whole trial: make snowflake-cap QUOTA=<credits>
 snowflake-load-sample: ## Load the committed catalogue fixture -- #42 criterion 3
 	$(UV) run python -m chip_chat.snowflake.load catalog/tests/fixtures/catalog
 
-snowflake-load: ## Load a harvested and generated landing zone into the serving layer
-	$(UV) run python -m chip_chat.snowflake.load \
-		$(LANDING)/catalog $(LANDING)/accounts/synthetic
+# The CATALOGUE half, and deliberately not the ACCOUNTS half.
+#
+# This target used to name `$(LANDING)/accounts/synthetic` as well, and it could
+# not have worked: `chip_chat.snowflake.load` refuses `order_items` by name
+# because the generator leaves `demo_id` off an order line and #43's row access
+# policy filters one table against a session variable and cannot follow a join
+# to the order. The conformed line comes out of Databricks silver on #39's
+# nightly publish, which is also what writes `orders` and `loyalty_ledger`. Two
+# loaders, two halves, and the halves the *human* loader owns are this one and
+# `snowflake-load-roster`.
+#
+# `$(LANDING)/catalog/chipotle`, not `$(LANDING)/catalog`. The catalogue build
+# writes its nine tables under a *source* prefix -- `MenuCatalog.write` uses
+# `chip_chat.catalog.records.DEFAULT_PREFIX`, which is `catalog/chipotle` -- and
+# this target named the parent for as long as nobody ran it against a real
+# landing zone. `chip_chat.snowflake.load.sources` only raises when *none* of
+# the directories it was given holds a file for any table, so the accounts half
+# satisfied it and the four catalogue tables were silently skipped. That is how
+# a demo ends up serving the ten-row committed fixture (GitHub #106): not a
+# failed load, an incomplete one that reported success.
+#
+# `CATALOGUE.rewards` and `CATALOGUE.rewards_terms` are NOT loaded here, and the
+# reason is worth writing down rather than rediscovering. Both are real and both
+# come out of the policy harvest, but neither is a file the harvest writes:
+# `rewards` carries a `reward_id` this repository derives (the harvest publishes
+# a position and a name), and `rewards_terms` is computed by
+# `chip_chat.data_gen.rewards.load_rewards_terms` out of `policy_sections` and
+# `faq_entries` rather than parsed from a table of its own. Pointing this target
+# at the policy prefix therefore fails on the first of them with "it carries no
+# reward_id". They were loaded by hand, they are eight rows and four rows, and
+# on 28 August 2026 both still matched the fresh harvest exactly. Closing that
+# gap is its own piece of work; see the bead filed with GitHub #106.
+snowflake-load: ## Load a harvested landing zone's CATALOGUE into the serving layer
+	$(UV) run python -m chip_chat.snowflake.load $(LANDING)/catalog/chipotle
 
 snowflake-load-roster: ## Load the committed roster -- personas, fixtures, visitors, baseline
 	$(UV) run python -m chip_chat.snowflake.load data-gen/roster
@@ -1065,9 +1096,35 @@ APP      = $(shell $(TF_RUN) output -raw container_app_name)
 APP_URL  = $(shell $(TF_RUN) output -raw web_url)
 RG       = $(shell $(TF_RUN) output -raw resource_group_name)
 
-.PHONY: image image-push deploy deploy-check rollback revisions scale-one scale-zero takedown
+.PHONY: image image-push deploy deploy-check rollback revisions scale-one scale-zero takedown \
+        vocabulary
 
-image: ## Build the chat app image for Container Apps
+# The photo lane's vocabulary, which the image carries and nothing commits.
+#
+# RFC-001 section 07 generates the model's enums from the live catalogue at
+# build time so that they cannot drift from what is orderable, and the whole
+# force of that is in *not* checking the module in. So it is written here, out
+# of the catalogue in the landing zone, and the Dockerfile copies this one file
+# into the installed namespace package. `make image` depends on it, which is
+# what keeps the generation from being a step somebody has to remember.
+#
+# It needs a landing zone with a built catalogue in it -- `make reharvest` then
+# `python -m chip_chat.catalog --landing landing --offline`. Against the
+# committed ten-item fixture it would produce eight terms and a photo lane that
+# could not name a barbacoa bowl, so the target says which catalogue it read.
+vocabulary: ## Generate the photo lane's vocabulary from $(LANDING)/catalog
+	@test -f $(LANDING)/catalog/chipotle/vocabulary.jsonl || { \
+		echo "$(LANDING)/catalog/chipotle holds no built catalogue."; \
+		echo "Harvest and build one first:"; \
+		echo "  make reharvest"; \
+		echo "  uv run python -m chip_chat.catalog --landing $(LANDING) --offline --stores $(STORES)"; \
+		exit 2; }
+	@mkdir -p build
+	$(UV) run python -m chip_chat.catalog --landing $(LANDING) --offline \
+		--stores $(STORES) --vocabulary build/vision_vocabulary.py >/dev/null
+	@echo "build/vision_vocabulary.py <- $(LANDING)/catalog/chipotle"
+
+image: vocabulary ## Build the chat app image for Container Apps
 	docker buildx build --platform $(IMAGE_PLATFORM) -t $(IMAGE) --load .
 
 image-push: ## Push it, authenticating with your own Entra token

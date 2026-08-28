@@ -61,6 +61,7 @@ swap differs from the chat lane's, and is another thing the alias makes cheap.
 """
 
 import os
+import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, Protocol
@@ -78,6 +79,7 @@ __all__ = [
     "HttpEmbedder",
     "TokenSource",
     "batched",
+    "throttled_attempts",
 ]
 
 COGNITIVE_SERVICES_SCOPE: Final = "https://cognitiveservices.azure.com/.default"
@@ -293,14 +295,82 @@ class TokenSource(Protocol):
         ...
 
 
+THROTTLED: Final = 429
+"""What the deployment answers when the build is asking faster than its tier allows."""
+
+DEFAULT_ATTEMPTS: Final = 6
+"""How many times one batch is offered to a throttled deployment before giving up.
+
+Six because the account's own ``Retry-After`` has been observed at 54 seconds
+and the quota window is a minute: six attempts is comfortably more than one
+window and still bounded, which is the property that matters. A build that
+cannot get through in six is a build hitting something other than pacing, and
+that should surface as the error it is rather than as a job nobody stops.
+"""
+
+DEFAULT_RETRY_AFTER: Final = 30.0
+"""Seconds to wait when a 429 arrives without a ``Retry-After`` header.
+
+The header is not guaranteed. Thirty seconds is half a quota window: long
+enough that the retry is not simply a second refusal, short enough that a build
+of a few hundred chunks is not measured in hours.
+"""
+
+MAXIMUM_RETRY_AFTER: Final = 120.0
+"""The longest this will wait on one attempt, whatever the header says.
+
+A cap rather than a trust boundary: a header asking for an hour is a signal to
+stop and tell somebody, not to sleep through the deploy window.
+"""
+
+
+def throttled_attempts(attempts: int = DEFAULT_ATTEMPTS) -> range:
+    """Return the attempt numbers one batch may use, newest-first readable.
+
+    Exists so the retry count is a value a test can pass rather than a literal
+    inside a loop.
+
+    Args:
+        attempts: How many attempts to allow. At least one.
+
+    Returns:
+        ``range(attempts)``.
+
+    Raises:
+        ValueError: If ``attempts`` is not positive, which would be a loop that
+            never calls the deployment and reports success.
+    """
+    if attempts < 1:
+        raise ValueError(f"attempts must be positive, got {attempts}")
+    return range(attempts)
+
+
 class HttpEmbedder:
-    """The real :class:`Embedder`, over the Azure OpenAI data plane."""
+    """The real :class:`Embedder`, over the Azure OpenAI data plane.
+
+    **It paces itself against the tier it is calling**, which is not a
+    refinement. The corpus this repository indexes went from 31 chunks to 358
+    on GitHub #106, and an S0 deployment refuses the fourth or fifth batch of
+    sixteen with ``429 RateLimitReached`` and a ``Retry-After`` of about a
+    minute. Without a retry the build dies there, having created an index it
+    then abandons, and the alias keeps serving the old one -- which is the
+    right *failure* semantics and the wrong outcome, because nothing was
+    actually wrong.
+
+    Retrying is safe here in a way it is not everywhere: embedding is a pure
+    function of the text, so a repeated batch produces the same vectors and
+    costs one more call. There is no partial state to reconcile, which is why
+    this is a plain sleep-and-retry rather than anything with a ledger.
+    """
 
     def __init__(
         self,
         deployment: EmbeddingDeployment,
         client: Any,
         token: TokenSource,
+        *,
+        attempts: int = DEFAULT_ATTEMPTS,
+        sleep: Any = time.sleep,
     ) -> None:
         """Initialise the embedder.
 
@@ -309,10 +379,40 @@ class HttpEmbedder:
             client: An ``httpx.Client``. Injected rather than created so that
                 one connection pool serves the whole build.
             token: Returns a bearer token for the Foundry data plane.
+            attempts: How many times a throttled batch is retried before the
+                error is raised. See :data:`DEFAULT_ATTEMPTS`.
+            sleep: How to wait between attempts. Injected so a test can assert
+                what was waited for without waiting for it.
         """
         self._deployment = deployment
         self._client = client
         self._token = token
+        self._attempts = throttled_attempts(attempts)
+        self._sleep = sleep
+
+    def _pause(self, response: Any) -> float:
+        """Return how long to wait after ``response`` said 429.
+
+        Args:
+            response: The refusal.
+
+        Returns:
+            Seconds, from the response's ``Retry-After`` where it published one
+            and :data:`DEFAULT_RETRY_AFTER` where it did not, capped at
+            :data:`MAXIMUM_RETRY_AFTER`.
+        """
+        header = ""
+        try:
+            header = str(response.headers.get("Retry-After", "")).strip()
+        except Exception:  # pragma: no cover - a response without headers
+            header = ""
+        try:
+            wanted = float(header)
+        except ValueError:
+            wanted = DEFAULT_RETRY_AFTER
+        if wanted <= 0:
+            wanted = DEFAULT_RETRY_AFTER
+        return min(wanted, MAXIMUM_RETRY_AFTER)
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         """Return one vector per text.
@@ -328,13 +428,21 @@ class HttpEmbedder:
 
         Raises:
             EmbeddingError: If the deployment refuses, or answers with a
-                different number of vectors than it was given texts.
+                different number of vectors than it was given texts. A ``429``
+                is retried first -- see the class docstring -- and only becomes
+                this error once the attempts are spent.
         """
-        response = self._client.post(
-            self._deployment.embeddings_url,
-            json=self._deployment.request_body(texts),
-            headers={"Authorization": f"Bearer {self._token.token()}"},
-        )
+        for attempt in self._attempts:
+            response = self._client.post(
+                self._deployment.embeddings_url,
+                json=self._deployment.request_body(texts),
+                headers={"Authorization": f"Bearer {self._token.token()}"},
+            )
+            if response.status_code != THROTTLED:
+                break
+            if attempt == self._attempts[-1]:
+                break
+            self._sleep(self._pause(response))
         if response.status_code != 200:
             raise EmbeddingError(
                 f"embeddings call returned {response.status_code}: {response.text[:400]}"

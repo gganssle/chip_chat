@@ -23,8 +23,19 @@ keep, both of which one OR clause could undo while reading like a convenience:
 written into the body rather than inherited from three-valued logic.
 
 :func:`test_no_policy_body_exempts_a_lane_role` -- the ops API is not exempt,
-and neither is the read lane. The only role either body may name is the owner
-role, which no service user holds and which can detach the policy outright.
+and neither is the read lane nor the nightly publisher. The only role either
+body may name is the owner role, which no service user holds and which can
+detach the policy outright.
+
+What this file cannot ask is whether the ACCOUNT agrees with it, and on
+2026-08-27 it did not: `OR CURRENT_ROLE() = 'CHIP_CHAT_PUBLISH'` was set on the
+live `visitor_isolation` body to unblock the first nightly publish, and removed
+again the same day. A body is changed by ``ALTER ROW ACCESS POLICY ... SET
+BODY`` -- the only statement that works on an attached policy -- so the file
+these tests read stayed exactly as it was throughout.
+`chip_chat.snowflake.verify` closes that half by DESCRIBEing both policies on
+the account and asking them this same question, and `sql/10_policies.sql` argues
+the case out in full.
 """
 
 import re
@@ -275,13 +286,28 @@ def test_the_roster_policy_still_binds_a_bound_session(bodies: dict[str, str]) -
 
 
 def test_no_policy_body_exempts_a_lane_role(bodies: dict[str, str]) -> None:
-    """One OR clause is all it would take, and it would read like a fix.
+    """One OR clause is all it would take, and it has been written once.
 
     Snowflake has no owner exemption: a row access policy filters the table for
     whoever reads it. The only way a role gets out from under one is a clause
     in the body naming it, so that is what this test refuses. Issue #41's third
     criterion -- the write role cannot read another visitor's rows either -- is
     a property of this assertion plus the grants file.
+
+    The clause that was actually written named ``CHIP_CHAT_PUBLISH`` rather than
+    the write role, and was applied to the live account rather than to this
+    file, which is the only reason this test did not fail on 2026-08-27. It was
+    a correct diagnosis of a real outage -- #39's job counted the rows it had
+    just written, read zero, and stopped -- and it was still the wrong repair,
+    because a policy body is per-policy and not per-table: it would have opened
+    all nine tables ``visitor_isolation`` guards to a role that has business in
+    three of them. The job counts off ``INFORMATION_SCHEMA.TABLES.ROW_COUNT``
+    instead, which is metadata about a table rather than a read of its rows.
+    `sql/10_policies.sql` and docs/nightly-publish.md section 7 are the argument.
+
+    The roles come from :data:`chip_chat.snowflake.account.LANE_ROLES` rather
+    than being spelled out here, so a fourth lane role is covered by declaring
+    it rather than by remembering this test exists.
     """
     for name, body in bodies.items():
         for role in account.LANE_ROLES:

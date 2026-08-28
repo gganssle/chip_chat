@@ -77,6 +77,26 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 COPY --from=build --chown=cilantro:cilantro /app/.venv /app/.venv
 
+# The photo lane's vocabulary, generated rather than committed.
+#
+# RFC-001 section 07: "Every enum is generated from the live catalogue at build
+# time, so the model's vocabulary cannot drift from what is orderable." That
+# sentence is the reason this file is not in `vision/src/` where it would be
+# convenient -- a checked-in copy is a hand-maintained list with an extra step,
+# and it would be wrong on exactly the deployment where somebody re-harvested.
+#
+# So `make image` writes it first, out of the built catalogue in the landing
+# zone, and this copies it into the installed namespace package where
+# `CHIP_CHAT_VISION_VOCABULARY=chip_chat.vision_vocabulary` can import it. A
+# bare `docker build .` therefore needs `make vocabulary` to have run; that is
+# not an oversight, it is the build step being visible rather than implied.
+#
+# ARG is redeclared here because an ARG from before the FROM is out of scope in
+# the stage that follows it.
+ARG PYTHON_VERSION
+COPY --chown=cilantro:cilantro build/vision_vocabulary.py \
+     /app/.venv/lib/python${PYTHON_VERSION}/site-packages/chip_chat/vision_vocabulary.py
+
 WORKDIR /app
 EXPOSE 8000
 

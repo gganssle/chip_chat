@@ -12,6 +12,7 @@ except `data-gen/tests/test_roster.py`, which holds it to what the shipped
 | `persona_fixtures.jsonl` | `ACCOUNTS.persona_fixtures` | 28 |
 | `demo_visitors.jsonl` | `ACCOUNTS.demo_visitors`, and `ACCOUNTS.demo_visitor_baseline` from the same file in the same run | 500 |
 | `manifest.json` | — | the seed, both input digests, and a SHA-256 per table for all six |
+| `inputs/` | — | the catalogue and policy tables this generation came from |
 
 ## Why these three and not all six
 
@@ -34,19 +35,52 @@ single conversation. `docs/snowflake-schema.md` §9 is the write-up.
 
 The other three tables are not committed here because they are seventeen
 megabytes and because they are reproducible from this repository byte for byte:
-the population is generated from the committed catalogue fixture, the committed
-policy harvest and the shipped `population.toml` at seed 20260826, and the
-digests in `manifest.json` are what make "reproducible" a claim you can check
-rather than one you have to believe. `data-gen/tests/test_roster.py` checks it
-on every `make ci`.
+the population is generated from `inputs/` and the shipped `population.toml` at
+seed 20260826, and the digests in `manifest.json` are what make "reproducible" a
+claim you can check rather than one you have to believe.
+`data-gen/tests/test_roster.py` checks it on every `make ci`.
+
+## `inputs/`
+
+The catalogue and the three policy tables the generation reads, 1.4 megabytes,
+laid out exactly as a landing zone lays them out:
+
+```
+inputs/catalog/chipotle/*.jsonl          the built catalogue, 192 items
+inputs/parsed/chipotle/policy/*.jsonl    rewards, policy_sections, faq_entries
+```
+
+They are here because of [#106]. Until then the roster was generated from the
+*test* fixtures — the two-entree catalogue under `catalog/tests/fixtures/` and
+the harvest tests' recorded site — and the account was loaded from the same
+small generation, so nothing was wrong with comparing them. #106 replaced the
+account's catalogue with the real harvest, so a test regenerating from the
+fixture would have been asserting that two different generations were the same
+one, and the input that makes the roster reproducible had to travel with it.
+
+Refreshing them is the same deliberate act as retuning `population.toml`, and
+has the same consequences: re-harvest, rebuild the catalogue, regenerate,
+re-export all four files here, re-land the account and re-run the nightly
+publish. `docs/menu-data.md` is that sequence written out.
 
 ## Re-exporting it
 
-Only after a deliberate retune. Changing `population.toml` changes the
-population, which changes every table, which makes the *whole* account stale —
-including the gold marts, which are computed from `orders` in Databricks. The
-export is the easy half; re-landing the account and re-running the nightly
-publish is the rest of it, and the sequence is in
-`docs/snowflake-schema.md` §9.
+Only after a deliberate retune, or a deliberate refresh of `inputs/`. Either one
+changes the population, which changes every table, which makes the *whole*
+account stale — including the gold marts, which are computed from `orders` in
+Databricks. The export is the easy half; re-landing the account and re-running
+the nightly publish is the rest of it, and the sequence is in
+`docs/snowflake-schema.md` §9 and `docs/menu-data.md`.
+
+```bash
+cp landing/accounts/synthetic/{personas,persona_fixtures,demo_visitors}.jsonl \
+   landing/accounts/synthetic/manifest.json data-gen/roster/
+cp landing/catalog/chipotle/* data-gen/roster/inputs/catalog/chipotle/
+cp landing/parsed/chipotle/policy/{rewards,policy_sections,faq_entries}.jsonl \
+   data-gen/roster/inputs/parsed/chipotle/policy/
+uv run pytest data-gen/tests/test_roster.py
+```
+
+[#106]: https://github.com/gganssle/chip_chat/issues/106
 
 [#39]: https://github.com/gganssle/chip_chat/issues/39

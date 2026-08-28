@@ -17,6 +17,12 @@ dependencies = [
     # The draft store prices from the catalogue and validates against it, so
     # `drafts.py` holds a `MenuCatalog`. Nothing else in this package does.
     "chip-chat-catalog",
+    # The knowledge lane the gate hands to the agent. Named here for the same
+    # reason `chip-chat-vision` is: `build_lanes` imports
+    # `chip_chat.search.client`, `.retrieve` and `.lane` directly to construct
+    # one `Retriever` per process, and a dependency reached only through
+    # `chip-chat-agent` is one a refactor over there can take away.
+    "chip-chat-search",
     # `pool.py` spells the session variable it sets from
     # `chip_chat.snowflake.schema.SESSION_VARIABLE`, which is the same constant
     # `sql/10_policies.sql` compares against. A pool that set `DEMO` while the
@@ -65,6 +71,7 @@ packages = ["src/chip_chat"]
 chip-chat-agent = { workspace = true }
 chip-chat-catalog = { workspace = true }
 chip-chat-otel = { workspace = true }
+chip-chat-search = { workspace = true }
 chip-chat-snowflake = { workspace = true }
 chip-chat-vision = { workspace = true }
 chip-chat-web = { workspace = true }
