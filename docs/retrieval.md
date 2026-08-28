@@ -317,10 +317,16 @@ recovers it.
 
 ## 9. The vector half comes back empty, and the service calls that a success
 
-This section is a defect report. It was found on 2026-08-27 by re-running the
-ablation against the live alias, and it is the most consequential thing anybody
-has learned about this lane since it was built, because it means *hybrid* is not
-reliably what the service is doing when the application asks for hybrid.
+This section was a defect report and is now a defect report with a remedy
+attached. The fault was found on 2026-08-27 by re-running the ablation against
+the live alias, and it is the most consequential thing anybody has learned about
+this lane since it was built, because it means *hybrid* is not reliably what the
+service is doing when the application asks for hybrid. The remedy, decided the
+same day and argued in
+[decisions/vector-arm-degradation.md](decisions/vector-arm-degradation.md), does
+not fix it — the tier is the fault and the tier is staying. It makes it **loud**:
+detected at the retrieval boundary, said on the span, said at the tool boundary,
+and refused a score in the eval. §9.1 below is what now happens.
 
 **The symptom.** A vector query against the live index returns
 
@@ -370,27 +376,16 @@ degrades under a burst of vector queries and reports the degradation as an empty
 result set.** The lexical half is unaffected throughout — every one of those
 runs had BM25 answering normally beside it.
 
-**Why the application cannot see it.** A hybrid query fuses two rankers by
+**Why the application could not see it.** A hybrid query fuses two rankers by
 reciprocal rank, and RRF has no field saying which ranker contributed. When the
 vector half returns nothing, the response is a well-formed hybrid response whose
 documents happen to all come from BM25, and every score on it is a legal fused
-score. There is one tell and it is arithmetic rather than reported: RRF at
-`k = 60` gives a document found by exactly one ranker `1/(60 + rank)`, so a
-result set whose top score is 0.0167 was found by one half and one whose top
-score is 0.0321 was found by two. Both appear in this document — §2's worked
-example and §8's latency table were taken on a healthy service; the probes in
-this section were not.
-
-**What has not been done about it.** Nothing, deliberately, in this lane. A
-retriever that retried until the vector half answered would be measuring a
-service that does not exist, and one that inferred the tell above and declined
-would be turning a degraded answer into no answer — which §7 argues against for
-the reranker and the argument does not change here. The three candidates are
-tracked rather than chosen: recording the tell on the `retriever.search` span so
-a trace says *this hybrid query was lexical only*; pacing the eval sweep so its
-vector arms are a measurement rather than a race; and the Basic tier, which is
-the same $73.73/month that [retrieval-index.md](retrieval-index.md) §3 declines
-for a different reason and would settle both. Filed as **chip-wez**.
+score. There is one tell and it is arithmetic rather than reported, and it is
+the whole basis of §9.1: RRF at `k = 60` gives a document found by exactly one
+ranker `1/(60 + rank)`, so a result set with no score above `1/60` was found by
+one half. Both states appear in this document — §2's worked example and §8's
+latency table were taken on a healthy service; the probes in this section were
+not.
 
 **What it does not touch.** The reranked arm — the one production sends — is
 unaffected in every measurement here, because the semantic ranker reorders the
@@ -398,6 +393,128 @@ union it is given and the lexical half is always in that union. #50's demo
 criterion, top-3 recall on the allergen questions under `hybrid + reranker`,
 measured **100%** on the run this section is about. The blast radius of this
 defect is the degrade path and the ablation's two vector arms.
+
+### 9.1 What now happens when it occurs
+
+`chip_chat.search.fusion` is the reading and it is four values, not a boolean.
+That is the part worth reading first, because a detector that fired on the
+negative set would have cost more than the fault does.
+
+**`CONTRIBUTED`** — some returned document scores above `1/60`, so two rankers
+placed it, so the vector half ran. The reading is taken over *every* returned
+passage rather than the top one: the reranked arm reorders by relevance, and a
+healthy reranked response was observed on the live alias with a single-ranker
+top hit and two-ranker scores at ranks four and five. Reading the first score
+alone would have called that healthy query degraded.
+
+**`DROPPED`** — passages came back and none of them was placed by both. This is
+lexical-only, and it is claimed **only** from that arithmetic.
+
+**`NOT_SENT`** — the `keyword only` arm, which asked for no vector half and
+therefore lost nothing.
+
+**`UNDETERMINED`** — nothing came back at all. A filter that matches no
+published item produces this, and so does an index with nothing in it, and
+neither is separable from a dropped vector half inside one response. So it is
+not called a fault. The case that gives up — a query whose vector half dropped
+*and* whose lexical half matched nothing — has never been observed and is
+already safe, because no passages is `Confidence.NONE` and nothing downstream
+builds a confident answer out of no passages. The `vector only` arm is the one
+exception: it *is* the vector half, so an unfiltered empty response there is the
+fault, and that arm only ever runs beside three others against the same index.
+
+Two details in that arithmetic cost more to find than they look, and both are
+one-character mistakes that would have silently disabled the whole thing. Azure's
+RRF rank is **zero-based**, so the ceiling is `1/60` and not `1/61` — off by one
+and the threshold sits below the value a degraded query returns and reports every
+one of them as healthy. And the service answers in **single precision**, so its
+own `1/60` arrives as `0.01666666753590107`, *above* the exact double; the
+comparison carries a relative tolerance, and `search/tests/fakes.py` was changed
+to narrow scores through float32 instead of rounding them to six places, because
+rounding sends `0.016667` and the test suite written to prove the defect is
+caught would not have caught it.
+
+**On the span.** `retriever.search` carries `vector_arm` and `degraded` in its
+metadata, `fused_by_both` on every document — so a trace says *which* passages
+the vector half placed, not merely that some were — and the tag
+`retrieval.lexical_only`, which is what makes the rate in the table above
+countable over a day instead of measurable by hand. The span is **not** marked
+failed. The service answered 200 and returned real passages; putting this in the
+same bucket as an outage would send somebody to the wrong page.
+
+**At the tool boundary.** `search_menu_knowledge` now carries `degraded` and
+`vector_arm` beside `confidence` and `reranked`, so *declined*, *low confidence*
+and *answered with half a retriever* are three states the agent can tell apart —
+and it could not previously infer the third from the other two, because a
+lexical-only hybrid result looks exactly like a hybrid one. Two notes go with it.
+The first forbids the single inference this result cannot support: **do not say
+the restaurant does not publish something**, because half the retriever did not
+look and an absence measured through it is not an absence. The second fires when
+nothing cleared the confidence bar either, and tells the agent to say the lookup
+is only partly working rather than to report a gap. The notes that would
+contradict those — *"these are the nearest passages in the corpus"*, *"nothing in
+the published corpus matched"* — are withheld, because both are claims about the
+corpus and neither is available here.
+
+**In the eval.** A question whose vector half dropped is **unscored**: in no
+numerator and no denominator, exactly as an unresolved label already is, and
+counted again by its own name so that a service defect and a harvest gap do not
+read the same. An arm with even one degraded question is marked *not comparable*
+and stamped above its own table. Restraint on the negative set goes unscored too,
+and that column is the one to read first — it is the only metric in the report a
+broken retriever makes look *better*, since a retriever returning less is a
+retriever declining more. This follows `eval/adversarial`, which refuses to score
+a concurrent round that never contended a connection and prints *could have
+caught a bleed: no* rather than a clean pass; the optimistic reading of a run
+nobody could measure is available in the raw numbers and is never the headline.
+
+**On a live turn: served, flagged, never retried.** The full argument is in
+[decisions/vector-arm-degradation.md](decisions/vector-arm-degradation.md); the
+short form is that retrying costs the scarce budget to buy almost nothing. The
+fault does not clear in minutes, so a retry is a second draw from the same
+distribution — 80–90% empty on a hot service — and on the reranked path it is
+paid for with a second of the month's 1,000 semantic requests. At an 80% drop
+rate, retry-once turns 1,000 requests a month into about 555 to recover roughly
+one turn in eight. Declining is worse still: it would take the lane out four
+turns in five for a defect whose blast radius is *some recall*, and what is
+actually served instead is the `keyword only` arm, which measured `recall@3` of
+84% on all three sweeps in §10 and is the most reproducible number in the file.
+Confidence is deliberately **not** capped either — the passages that came back
+are published data the reranker scored, this fault costs recall rather than
+precision, and a blanket cap would fold a service defect into the same signal the
+product already uses for a thin corpus, which is the exact conflation that let
+this run unnoticed for three sweeps.
+
+**Measured against the live service, 2026-08-27, through the shipped detector.**
+`make search-vector-arm` sends forty hybrid queries through the ordinary
+retriever and reports what the reading was on each. It costs no semantic requests
+and it is the thing to run before `make retrieval-baseline` spends forty of them
+on a sweep whose vector arms would be unscored.
+
+| | |
+|---|---:|
+| queries | 40 |
+| vector half dropped | **32 (80%)** |
+| first half of the run | 16 of 20 |
+| second half of the run | 16 of 20 |
+| distinct top scores observed | `0.016667`, `0.032292`, `0.033333` |
+
+Three top scores across forty queries, and the first of them is `1/60` exactly.
+The service was already hot from the probes that produced the tables above, which
+is why the rate did not climb across the run — it had already climbed. Two live
+retrievals from the same session, one on each path:
+
+```
+"query": "what are the ingredients in barbacoa"     reranked: false
+"degraded": true,  "vector_arm": "dropped"          → both notes fired
+
+"query": "is the sofritas vegan"                    reranked: true
+"degraded": true,  "vector_arm": "dropped"          → the note fired beside
+                                                      the existing diet caveat
+
+"query": "which items are marked as containing dairy"  reranked: true
+"degraded": false, "vector_arm": "contributed"      → silent, correctly
+```
 
 ---
 
@@ -445,7 +562,28 @@ vector-only at 80% on ingredients, 100% on nutrition and 83% on allergens, which
 says sweep 1 was reading a service fault as a finding. **A number that is not
 reproducible is not evidence, whichever way it points.** The ablation is
 repeatable — that is #50's fourth criterion and it holds — so this becomes
-measurable again the day chip-wez does.
+measurable again the day the service does.
+
+Those three tables are the last ones that can be printed this way. §9.1 is what
+changed, and **sweep 4 is what it produced.** Taken the same day against the same
+release, through the shipped detector, it does not add a fourth column here — it
+marks three of the four arms **not comparable** and names the questions that made
+them so:
+
+| Arm | questions | vector half dropped | comparable |
+|---|---:|---:|---|
+| keyword only | 40 | 0 | yes |
+| vector only | 40 | 8 | **no** |
+| hybrid | 40 | 13 | **no** |
+| hybrid + reranker | 40 | 12 | **no** |
+
+`keyword only` is zero because it asks for no vector half and therefore cannot
+lose one. The other three are why the rows above move by a factor of eleven.
+Whether §2's claim is confirmed still waits on a rested service — but a sweep can
+no longer *appear* to answer it, and the demo bar in
+[`eval/retrieval/BASELINE.md`](../eval/retrieval/BASELINE.md) now reads 100% over
+**four** allergen questions with the other four named, rather than 100% over
+eight with three of them quietly lexical-only.
 
 **The degrade path is not distinguishable from keyword-only, which is itself the
 finding.** `hybrid` came out equal to `keyword only` in every single cell of
@@ -456,7 +594,8 @@ response, and §9's arithmetic tell — a fused top score of 0.0167 rather than
 question's vector-only query answered normally. What the degrade path costs is
 therefore still unpriced. **cc-t1o1** holds the question, whose most interesting
 candidate is falling back to *keyword* rather than to *hybrid*; on the evidence
-here that fallback may already be what is happening.
+here that fallback is exactly what was happening, and §9.1 is now the thing that
+says so on each individual query rather than in hindsight across a table.
 
 **And section 5's floor is too low.** This one is stable across all three
 sweeps and is a real result. Restraint on the eight questions the corpus cannot

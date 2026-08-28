@@ -731,7 +731,7 @@ SEARCH_ENV = AZURE_SEARCH_ENDPOINT="$(SEARCH_ENDPOINT)" \
 SEARCH_SOURCE = $(if $(CHUNKS),--chunks $(CHUNKS) --run-id $(RUN_ID),--landing $(LANDING))
 
 .PHONY: search-schema search-status search-build search-build-only search-rollback \
-        search-verify search-retrieve
+        search-verify search-retrieve search-vector-arm
 
 search-schema: ## Print the index definition. Free, no credential, no network
 	$(UV) run python -m chip_chat.search schema
@@ -781,6 +781,36 @@ search-retrieve: ## Ask the live corpus a question. Q="..." [RERANK=0]
 	AZURE_SEARCH_ENDPOINT="$(SEARCH_ENDPOINT)" $(UV) run python -m chip_chat.search retrieve \
 		--alias $(ALIAS) --landing $(LANDING) --query '$(Q)' \
 		$(if $(filter 0,$(RERANK)),--no-rerank,)
+
+# --- The vector half that does not answer -----------------------------------
+#
+# `chip-wez`, and the only target in this file whose purpose is to REPRODUCE A
+# DEFECT rather than to run the product. Free-tier vector search returns
+# `{"value": []}` with HTTP 200 for a vector query, no error and no warning, at
+# a rate that climbs with query volume within a run -- so a hybrid query
+# silently becomes the keyword query and the response looks exactly the same.
+# `docs/retrieval.md` section 9 is the investigation and
+# `docs/decisions/vector-arm-degradation.md` is what now happens about it.
+#
+# This sends REPEAT hybrid queries through the ordinary retriever and prints, per
+# query, what `chip_chat.search.fusion` read off the fused scores: a top score
+# above 1/60 means two rankers contributed, at 1/60 means one did. It reports the
+# first and second halves of the run separately, because the rate climbing
+# within a single burst IS the shape of the defect and an aggregate hides it.
+#
+# It costs NO semantic requests -- reranking is off throughout, and the fused
+# `@search.score` the reading comes from is the same number on both paths. It
+# does cost REPEAT ordinary queries, which are free on every tier.
+#
+# Run it before `retrieval-baseline`. A sweep against a service already dropping
+# most of its vector queries spends 40 of the month's 1,000 semantic requests to
+# produce a report whose two vector arms are unscored.
+
+REPEAT ?= 40
+
+search-vector-arm: ## Measure how often the Free tier drops the vector half. [REPEAT=40]
+	AZURE_SEARCH_ENDPOINT="$(SEARCH_ENDPOINT)" $(UV) run python -m chip_chat.search vector-arm \
+		--alias $(ALIAS) --repeat $(REPEAT)
 # --- The Snowflake serving layer --------------------------------------------
 #
 # Issue #41. Every role, grant and warehouse in `snowflake/sql/`, so the whole

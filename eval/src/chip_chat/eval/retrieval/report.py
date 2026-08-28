@@ -21,6 +21,17 @@ and a criterion buried in a row of a five-by-four grid is a criterion nobody
 reads. It is printed with the questions that produced it, because the next
 action after reading a bad one is opening one of those questions.
 
+**Whether the vector half actually ran is printed above every arm that needed
+one.** This report's own history is the argument. Three committed sweeps of the
+same forty questions put `hybrid` at 53%, 84% and 84% and `vector only` at 41%,
+7% and 83%, and the first of them was read as evidence that embeddings fail on
+proper nouns exactly as RFC-001 §08 predicted. It was the Free tier dropping the
+vector half of the query and returning HTTP 200 — ``docs/retrieval.md`` §9 — and
+nothing in a rendered table could have said so, because a hybrid response whose
+vector half returned nothing looks exactly like a hybrid response. So the count
+now sits above the tables it invalidates, and an arm carrying any degraded
+question is stamped rather than printed as a column beside the others.
+
 **A number that does not exist is printed as an em dash.** Never as zero. A
 category whose labels do not resolve against this corpus has no recall, and a
 nought in that cell reads as a category that failed.
@@ -154,6 +165,7 @@ def render(report: Report) -> str:
     lines += _preamble(report)
     lines += _coverage(report.coverage)
     lines += _resolution(report.resolution)
+    lines += _vector_arm(report)
     lines += _demo_bar(report)
     lines += _ablation(report)
     lines += _negatives(report)
@@ -249,6 +261,69 @@ def _resolution(resolution: Resolution) -> list[str]:
     return lines
 
 
+def _vector_arm(report: Report) -> list[str]:
+    """Did the vector half run. `chip-wez`, printed before anything it invalidates.
+
+    Above the demo bar rather than beside the errors, because it is a
+    precondition for reading a table rather than a footnote to one. The section
+    is printed even when every arm is clean: *the vector half answered on all
+    forty questions* is a fact somebody re-reading this in six months needs
+    stated, and a section that appears only on a bad day is a section whose
+    absence means nothing.
+    """
+    lines = [
+        "## Did the vector half actually run",
+        "",
+        "Azure AI Search's Free tier drops the vector half of a query and "
+        "returns HTTP 200 with an empty vector result, so a hybrid response "
+        "that is silently lexical-only is well formed and looks exactly like a "
+        "hybrid one. The tell is arithmetic: reciprocal rank fusion gives a "
+        "document placed by one ranker at most `1/60`, so a result set with no "
+        "score above that was found by one half. See `docs/retrieval.md` §9 and "
+        "`chip_chat.search.fusion`.",
+        "",
+        "| Configuration | questions | vector half dropped | comparable |",
+        "|---|---:|---:|---|",
+    ]
+    for arm in report.arms:
+        degraded = arm.degraded
+        lines.append(
+            f"| {arm.arm.name} | {len(arm.judgements)} | {len(degraded)} "
+            f"| {'yes' if arm.comparable else '**NO**'} |"
+        )
+    lines.append("")
+    spoiled = [arm for arm in report.arms if not arm.comparable]
+    if not spoiled:
+        lines += [
+            "Every arm ran the configuration its name claims, on every question. "
+            "The tables below are a measurement.",
+            "",
+        ]
+        return lines
+    lines += [
+        "**The arms marked NO are not measurements and their rows are not "
+        "comparable with anything.** Each degraded question is **unscored** — "
+        "in no numerator and no denominator, exactly like a label this corpus "
+        "does not hold — because the retriever was not asked the question the "
+        "arm's name says it was asked. What a degraded `hybrid` row would show "
+        "is the `keyword only` row, and that is how three previous sweeps came "
+        "to report a service fault as a finding about embeddings.",
+        "",
+        "Re-run the sweep against a rested service. The rate climbs with query "
+        "volume within a run, so an arm that degraded late did not degrade "
+        "randomly — `make search-vector-arm` measures the rate before a sweep "
+        "is worth spending.",
+        "",
+    ]
+    for arm in spoiled:
+        lines += [f"Degraded under `{arm.arm.name}`:", ""]
+        lines += [
+            f"- `{j.question.question_id}` — {j.question.text}" for j in arm.degraded
+        ]
+        lines.append("")
+    return lines
+
+
 def _demo_bar(report: Report) -> list[str]:
     """#50's own criterion, printed on its own above everything else."""
     lines = [
@@ -272,6 +347,14 @@ def _demo_bar(report: Report) -> list[str]:
     serving = report.serving
     if serving is not None:
         allergens = serving.allergens
+        if allergens.degraded:
+            lines += [
+                f"⚠ The vector half was dropped on {allergens.degraded} of these "
+                f"questions under `{serving.arm.name}`, so the number above is "
+                f"taken over the {allergens.scored} that ran the configuration "
+                f"production actually sends. It is not the baseline; re-run it.",
+                "",
+            ]
         if allergens.scored == 0:
             lines += [
                 "**The bar is unmeasured.** No allergen question's labels "
@@ -316,12 +399,24 @@ def _ablation(report: Report) -> list[str]:
             "",
             arm.arm.note,
             "",
-            "| Category | recall@3 | hit@3 | MRR | P@1 | ceiling | scored | unscored |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+        if not arm.comparable:
+            lines += [
+                f"> **Not a measurement of `{arm.arm.name}`.** The service "
+                f"dropped the vector half on {len(arm.degraded)} of "
+                f"{len(arm.judgements)} questions, so this arm ran two "
+                f"different configurations and the degraded ones are unscored. "
+                f"Read the section above before any cell below.",
+                "",
+            ]
+        lines += [
+            "| Category | recall@3 | hit@3 | MRR | P@1 | ceiling "
+            "| scored | unscored | degraded |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
         lines += [_category_row(category) for category in arm.categories]
         lines += [
-            f"| **all categories** | **{_rate(arm.recall)}** | | | | | | |",
+            f"| **all categories** | **{_rate(arm.recall)}** | | | | | | | |",
             "",
         ]
         if arm.skew:
@@ -339,7 +434,7 @@ def _category_row(category: CategoryScores) -> str:
         f"| {category.category.value} | {_rate(category.recall)} "
         f"| {_rate(category.hit_rate)} | {_rate(category.mrr)} "
         f"| {_rate(category.precision_at_one)} | {_rate(category.ceiling)} "
-        f"| {category.scored} | {category.unscored} |"
+        f"| {category.scored} | {category.unscored} | {category.degraded} |"
     )
 
 
@@ -354,16 +449,27 @@ def _negatives(report: Report) -> list[str]:
         "cover it. Scored apart from recall, because a retriever that returned "
         "nothing for everything would score perfectly here and nowhere else.",
         "",
-        "| Configuration | restrained | asked | rate |",
-        "|---|---:|---:|---:|",
+        "| Configuration | restrained | scored | degraded | rate |",
+        "|---|---:|---:|---:|---:|",
     ]
     for arm in report.arms:
         negatives = arm.negatives
         lines.append(
             f"| {arm.arm.name} | {negatives.restrained} | {negatives.scored} "
-            f"| {_rate(negatives.rate)} |"
+            f"| {negatives.degraded} | {_rate(negatives.rate)} |"
         )
     lines.append("")
+    if any(arm.negatives.degraded for arm in report.arms):
+        lines += [
+            "The **degraded** column is the one to read first here, because "
+            "restraint is the only metric in this document that a broken "
+            "retriever makes look better: a retriever returning less is a "
+            "retriever declining more. Those questions are unscored — neither "
+            "restrained nor overconfident — since a lexical-only retriever did "
+            "not look with half of itself, and both readings of that are "
+            "unearned.",
+            "",
+        ]
     for arm in report.arms:
         overconfident = arm.negatives.overconfident()
         if not overconfident:

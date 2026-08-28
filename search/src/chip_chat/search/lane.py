@@ -16,6 +16,17 @@ and split the trace at exactly the point somebody is trying to read it.
 there was one, its citation, and its lexical overlap, so a trace answers *why
 did it return that* rather than only *what did it return*.
 
+**And whether the result is lexical-only is on the span, because the scores
+alone say it and nobody reads scores that way.** The Free tier drops the vector
+half of a hybrid query and returns HTTP 200 (``docs/retrieval.md`` §9), and the
+only evidence is that every fused score is at or below ``1/60``. An operator can
+work that out from the numbers already here; an operator *will* work it out from
+the ``retrieval.lexical_only`` tag and the ``vector_arm`` attribute, which is a
+different thing. Both the roll-up and the per-document reading are recorded —
+:attr:`fused_by_both` on each document is the individual arithmetic, so a trace
+shows which passages the vector half actually placed and not merely that some
+did.
+
 **A declining lane is not a failing turn.** RFC-001 §10 gives this lane a blast
 radius of one row — *AI Search unavailable → the knowledge lane declines and
 says why; other lanes unaffected* — and that is a property of this method: it
@@ -34,10 +45,21 @@ nobody can fix before the first of the month.
 
 from chip_chat.otel import Document, retriever_search
 from chip_chat.search.errors import SearchError
+from chip_chat.search.fusion import VectorArm, placed_by_both
 from chip_chat.search.query import Constraints
 from chip_chat.search.retrieve import Confidence, Retrieval, Retriever
 
-__all__ = ["KnowledgeLane"]
+__all__ = ["LEXICAL_ONLY_TAG", "KnowledgeLane"]
+
+LEXICAL_ONLY_TAG = "retrieval.lexical_only"
+"""The tag on a ``retriever.search`` span whose vector half did not answer.
+
+Beside ``retrieval.low`` and ``retrieval.none`` rather than instead of them: a
+lexical-only retrieval can carry any of the three confidences, and the two facts
+are independent. A dashboard counting this tag over a day is measuring the rate
+``docs/retrieval.md`` §9 had to measure by hand, which is the difference between
+a defect somebody remembers and one somebody can watch.
+"""
 
 DECLINED = (
     "The published-menu search service is not answering, so I cannot look "
@@ -105,6 +127,7 @@ class KnowledgeLane:
                 return Retrieval(
                     query=text,
                     confidence=Confidence.NONE,
+                    vector_arm=VectorArm.UNDETERMINED,
                     notes=(DECLINED,),
                     declined=str(error),
                 )
@@ -122,6 +145,7 @@ class KnowledgeLane:
                             "score": passage.score,
                             "reranker_score": passage.reranker_score,
                             "overlap": round(passage.overlap, 3),
+                            "fused_by_both": placed_by_both(result.halves, passage.score),
                         },
                     )
                     for passage in result.passages
@@ -134,6 +158,8 @@ class KnowledgeLane:
                 index=self._retriever.alias,
                 confidence=result.confidence.value,
                 reranked=result.reranked,
+                degraded=result.degraded,
+                vector_arm=result.vector_arm.value,
                 floor=result.floor,
                 uncitable=result.uncitable,
                 constraints=result.constraints.as_dict(),
@@ -144,4 +170,13 @@ class KnowledgeLane:
                 # but it is the case #49 asks to be legible, and a tag is how a
                 # trace is sliced without parsing metadata JSON.
                 span.add_tags(f"retrieval.{result.confidence.value}")
+            if result.degraded:
+                # Also not an error, and for a worse reason: the service
+                # answered 200 and the retrieval is real, it is just half of
+                # the retrieval that was asked for. Marking the span failed
+                # would put it in the same bucket as an outage, which is a
+                # different remedy and a different blast radius. A tag is what
+                # lets somebody count these across a day and see the rate
+                # docs/retrieval.md section 9 measured.
+                span.add_tags(LEXICAL_ONLY_TAG)
             return result

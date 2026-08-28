@@ -47,6 +47,31 @@ requirement, and PRD K3's. It is kept in its own table because averaging it into
 recall would let a retriever that returns nothing for everything score well on
 half the set.
 
+**A question whose vector half never ran is unscored, not missed.** The Free
+tier drops the vector half of a query and returns HTTP 200 with an empty vector
+result — ``docs/retrieval.md`` §9 — and the three sweeps committed before this
+was understood are the argument for treating it as a hole rather than as a
+number. Sweep 1 read the vector arm scoring 0% on three menu-row categories as
+*confirmation* of RFC-001 §08's argument about proper nouns; sweep 3 scored the
+same arm 80% to 100% on the same categories. And ``hybrid`` came out identical to
+``keyword only`` in every cell of two sweeps, which is not a coincidence: a
+hybrid response whose vector half returned nothing **is** the keyword response.
+
+So :attr:`Judgement.scored` is false when
+:attr:`~chip_chat.search.retrieve.Retrieval.degraded` is, exactly as it is for a
+label the corpus does not hold, and for the same reason — the retriever was not
+asked the question the arm's name says it was asked. This follows
+:mod:`chip_chat.eval.adversarial.scoring`, which refuses to score a concurrent
+round that never contended a connection and prints *could have caught a bleed:
+no* rather than a clean pass. The optimistic reading of a run nobody could
+measure is available in the raw numbers and is never the headline.
+
+The one thing that stays scored on a degraded arm is the **constraint**: an
+OData ``$filter`` is applied by the service whichever ranker placed the
+document, so a passage that came back in breach of one came back in breach of
+one. Recall is about what the retriever could reach; a violation is about what
+it handed over.
+
 **Constraints are scored on the filter, not on the ranking.** #49 answers
 *"without any dairy"* with an OData filter, and a filter is exact. Two things
 are checked: that the constraint was read out of the sentence at all, and that
@@ -64,6 +89,7 @@ from chip_chat.eval.retrieval.configurations import Configuration
 from chip_chat.eval.retrieval.corpus import Resolution, fields_of
 from chip_chat.eval.retrieval.questions import Category, Question, RetrievalSet
 from chip_chat.eval.retrieval.run import Answer
+from chip_chat.search.fusion import VectorArm
 from chip_chat.search.retrieve import Confidence
 
 __all__ = [
@@ -105,6 +131,10 @@ class Judgement:
             ``None``. What MRR is computed from.
         returned: How many passages came back.
         confidence: What the retriever said about them.
+        vector_arm: Whether the vector half of the query actually answered.
+            :attr:`~chip_chat.search.fusion.VectorArm.DROPPED` means this arm
+            did not run the configuration its name claims, and the ranking
+            metrics below go unscored on it.
         violations: Passages that came back in breach of the question's
             constraint, by id. Empty where the question has none.
         constraint_read: Whether the constraint was read out of the sentence,
@@ -121,15 +151,29 @@ class Judgement:
     first_rank: int | None = None
     returned: int = 0
     confidence: Confidence = Confidence.NONE
+    vector_arm: VectorArm = VectorArm.CONTRIBUTED
     violations: tuple[str, ...] = ()
     constraint_read: bool | None = None
     skew: int = 0
     error: str | None = None
 
     @property
+    def degraded(self) -> bool:
+        """Whether the vector half of this arm's query silently did not run."""
+        return self.vector_arm.degraded
+
+    @property
     def scored(self) -> bool:
-        """Whether this question's ranking can be scored under this arm at all."""
-        return self.error is None and bool(self.labels)
+        """Whether this question's ranking can be scored under this arm at all.
+
+        Three ways it cannot: the source refused, the corpus holds none of the
+        question's places, or the service dropped the vector half and this arm
+        therefore measured a configuration nobody asked for. All three are
+        counted out loud in :attr:`CategoryScores.unscored`; the third is
+        counted again by name in :attr:`CategoryScores.degraded`, because a
+        harvest gap and a service defect have different fixes.
+        """
+        return self.error is None and bool(self.labels) and not self.degraded
 
     @property
     def recalled(self) -> int:
@@ -175,10 +219,16 @@ class Judgement:
     def restrained(self) -> bool | None:
         """Whether an unanswerable question was answered without confidence.
 
-        ``None`` on an answerable question and on one nothing came back for --
-        a source failure is not restraint.
+        ``None`` on an answerable question, on one nothing came back for -- a
+        source failure is not restraint -- and on one whose vector half was
+        dropped. That last exclusion is the one worth arguing. Restraint is the
+        claim that a retriever *looked* and correctly reported that the corpus
+        does not cover this; a lexical-only retriever did not look with half of
+        itself, so both of its possible answers are unearned. Called restrained
+        it flatters a defect; called overconfident it blames the retriever for
+        the service. Neither, and the report says how many.
         """
-        if self.question.answerable or self.error is not None:
+        if self.question.answerable or self.error is not None or self.degraded:
             return None
         return self.confidence is not Confidence.GROUNDED
 
@@ -212,8 +262,18 @@ class CategoryScores:
 
     @property
     def unscored(self) -> int:
-        """Those the corpus cannot support, or the source failed on."""
+        """Those the corpus cannot support, the source failed on, or degraded."""
         return self.total - self.scored
+
+    @property
+    def degraded(self) -> int:
+        """Those whose vector half the service dropped. Named, not just counted.
+
+        A subset of :attr:`unscored`, reported separately because it is the only
+        one of the three reasons that is a fault in something running rather
+        than a gap in something committed.
+        """
+        return sum(1 for judgement in self.judgements if judgement.degraded)
 
     @property
     def recall(self) -> float | None:
@@ -269,8 +329,19 @@ class NegativeScore:
 
     @property
     def scored(self) -> int:
-        """Those something came back for."""
+        """Those something came back for, through a retriever that fully ran."""
         return sum(1 for j in self.judgements if j.restrained is not None)
+
+    @property
+    def degraded(self) -> int:
+        """Those whose vector half the service dropped, and so are unscored.
+
+        The count this table needs most. Restraint is the one metric in the
+        report that a broken retriever makes look *better* — a retriever that
+        returns less is a retriever that declines more — so a rate here taken
+        over a degraded run is a number that improves as the service worsens.
+        """
+        return sum(1 for j in self.judgements if j.degraded)
 
     @property
     def restrained(self) -> int:
@@ -383,6 +454,30 @@ class ArmScores:
         return tuple(j for j in self.judgements if j.error is not None)
 
     @property
+    def degraded(self) -> tuple[Judgement, ...]:
+        """Every question whose vector half the service silently dropped.
+
+        Not an error — each of these came back HTTP 200 with real passages on
+        it. What did not come back is half the recall the arm's name promises.
+        """
+        return tuple(j for j in self.judgements if j.degraded)
+
+    @property
+    def comparable(self) -> bool:
+        """Whether this arm's rates may be set beside another arm's.
+
+        False as soon as one question degraded, and that is deliberately strict.
+        The failure this guards against is not a rate being slightly off: it is
+        the specific reading that produced sweep 1's headline, where a vector
+        arm that had stopped answering partway down the question file was
+        reported as a finding about embeddings and proper nouns. An arm that
+        measured a different configuration on some of its questions than on
+        others is not one column of a table, and a report that prints it as one
+        is inviting exactly that reading again.
+        """
+        return not self.degraded
+
+    @property
     def skew(self) -> int:
         """Passages returned that the corpus export does not hold. Should be zero."""
         return sum(j.skew for j in self.judgements)
@@ -473,6 +568,7 @@ def _judge(
             arm=arm,
             labels=names,
             found_at=dict.fromkeys(names),
+            vector_arm=VectorArm.UNDETERMINED,
             error=answer.error or "the source returned nothing",
         )
 
@@ -520,6 +616,7 @@ def _judge(
         first_rank=min(ranks) if ranks else None,
         returned=len(passages),
         confidence=retrieval.confidence,
+        vector_arm=retrieval.vector_arm,
         violations=violations,
         constraint_read=constraint_read,
         skew=skew,

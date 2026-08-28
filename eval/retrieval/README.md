@@ -223,7 +223,43 @@ repeatable, and repeating it is what this cost.
 rest of the month once the Free tier's 1,000 semantic requests are spent — so
 what the fallback costs is still unpriced. Tracked as `cc-t1o1`, whose most
 interesting candidate is to fall back to *keyword* rather than to *hybrid*; on
-this evidence that may already be what happens.
+this evidence that is already what happens.
+
+**And `BASELINE.md` beside this file is now sweep 4, taken after all of the
+above.** It is a *thinner* document than the one it replaced and that is the
+improvement: `hybrid + reranker` reads 100% on the allergen questions over
+**four** of them rather than eight, with the other four named as degraded and a
+warning printed above the number. The eight were never eight. A baseline with
+holes you can see is worth more than one with errors you cannot, and the
+previous file — 100% over eight, silently including three lexical-only
+retrievals — is the artifact `chip-wez` was filed about.
+
+**A fourth sweep cannot produce a fourth row of that table.** `chip-wez` closed
+on 2026-08-27 and what closed it was not a fix — the tier is the fault and the
+tier is staying — but a detector. Reciprocal rank fusion gives a document placed
+by one ranker at most `1/60`, so a result set with no score above that was found
+by one half; `chip_chat.search.fusion` reads it, every retrieval carries the
+verdict, and this harness scores a question whose vector half dropped as
+**unscored** — in no numerator and no denominator, exactly as an unresolved
+label already is. An arm with even one such question is marked *not comparable*
+and stamped above its own table with the questions named. The section **Did the
+vector half actually run** is printed above the demo bar on every report,
+including clean ones, because a warning that appears only on a bad day is one
+whose absence means nothing.
+
+Run `make search-vector-arm` before `make retrieval-baseline`. It sends forty
+hybrid queries through the ordinary retriever, costs no semantic requests, and
+says what the drop rate is right now — which is worth knowing before a sweep
+spends forty of the month's thousand producing a report with two unscored arms.
+A run of it on 2026-08-27 measured **32 of 40 dropped**, with only three distinct
+top scores across the whole run and the lowest of them `1/60` exactly.
+
+The restraint numbers below are from sweeps taken before any of this existed, so
+they are restraint *and* the service's availability mixed together. The report
+now separates them: a degraded negative is neither restrained nor overconfident,
+and it is counted in its own column. That column is the one to read first, since
+restraint is the only metric here that a broken retriever makes look better — a
+retriever returning less is a retriever declining more.
 
 **The negative set is where it is bad, and the floor is why.** This result is
 stable across all three sweeps. Restraint — answering an unanswerable question

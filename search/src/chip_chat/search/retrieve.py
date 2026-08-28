@@ -38,6 +38,17 @@ and :attr:`Passage.overlap` are all on the payload and all on the span, so issue
 #50 can sweep the floor over recorded runs rather than re-querying to move a
 threshold — which matters, because the floor below is the one number in this
 module that has not been measured.
+
+**And a hybrid result says whether it was actually hybrid.** The Free tier drops
+the vector half of a query and returns HTTP 200 with an empty vector result,
+which fuses into a well-formed hybrid response that is silently the keyword
+response — ``docs/retrieval.md`` §9. :mod:`chip_chat.search.fusion` reads the
+fused scores and says which happened, :attr:`Retrieval.vector_arm` carries the
+reading, and :attr:`Retrieval.degraded` is the one-word form of it. The answer
+is still served — a lexical-only result is real published data, and the keyword
+arm is the second-best arm this repository has measured — but it is served
+*saying so*, because the one thing a retrieval that lost half its recall must
+never do is assert that the corpus does not cover something.
 """
 
 from collections.abc import Mapping, Sequence
@@ -45,10 +56,11 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Final
 
-from chip_chat.search import chunks
+from chip_chat.search import chunks, fusion
 from chip_chat.search import query as query_module
 from chip_chat.search.allowance import SemanticAllowance
 from chip_chat.search.client import SearchService, ServiceError
+from chip_chat.search.fusion import VectorArm
 from chip_chat.search.schema import ALIAS
 
 __all__ = [
@@ -253,6 +265,9 @@ class Retrieval:
             :attr:`~chip_chat.search.query.Halves.HYBRID` on any path that
             serves a visitor; carried so that #50's ablation cannot label a
             single-half run as a hybrid one.
+        vector_arm: Which halves actually *answered*, which on the Free tier is
+            a different question from which were asked for. See
+            :mod:`chip_chat.search.fusion`.
         constraints: What was read out of the query, including what could not
             be applied.
         floor: The reranker floor this result was judged against, so a later
@@ -270,6 +285,7 @@ class Retrieval:
     confidence: Confidence = Confidence.NONE
     reranked: bool = False
     halves: query_module.Halves = query_module.Halves.HYBRID
+    vector_arm: VectorArm = VectorArm.UNDETERMINED
     constraints: query_module.Constraints = field(
         default_factory=query_module.Constraints
     )
@@ -287,6 +303,17 @@ class Retrieval:
     def grounded(self) -> bool:
         """Whether an answer may be drawn from these passages."""
         return self.confidence is Confidence.GROUNDED
+
+    @property
+    def degraded(self) -> bool:
+        """Whether the vector half was asked for and did not answer.
+
+        The one-word form of :attr:`vector_arm`, and the thing every consumer of
+        this type actually branches on: a degraded retrieval has the recall of
+        the keyword arm and the name of the hybrid one, so it may be answered
+        from and may not be used to conclude that the corpus is silent.
+        """
+        return self.vector_arm.degraded
 
     def citations(self) -> dict[str, dict[str, str]]:
         """Return the citations, keyed by id.
@@ -306,6 +333,15 @@ class Retrieval:
         Carries the ids, the text, the scores and the published fields — and
         **not** ``source_url``, which reaches the visitor through
         :meth:`citations` and the renderer instead. See :data:`_MODEL_HIDDEN`.
+
+        Three keys are about the *health* of the retrieval rather than about
+        what it found, and they are three different states the agent has to be
+        able to tell apart. ``declined`` means the lane is out and there is
+        nothing here at all. ``confidence`` means the lane worked and says how
+        much the corpus had to say. ``degraded`` means the lane worked, returned
+        real passages, and did so with half of itself missing — which the agent
+        can neither infer from the other two nor see in the passages, because a
+        lexical-only hybrid result looks exactly like a hybrid one.
 
         Returns:
             A JSON-ready tool result.
@@ -332,6 +368,8 @@ class Retrieval:
             ],
             "confidence": self.confidence.value,
             "reranked": self.reranked,
+            "degraded": self.degraded,
+            "vector_arm": self.vector_arm.value,
             "notes": list(self.notes),
         }
 
@@ -437,6 +475,18 @@ class Retriever:
             search that found nothing is :attr:`Confidence.NONE` with no
             passages.
 
+            **A retrieval whose vector half was dropped is returned, not
+            retried and not refused.** It carries
+            :attr:`Retrieval.vector_arm` as
+            :attr:`~chip_chat.search.fusion.VectorArm.DROPPED`,
+            two notes that say so, and passages that are real published data —
+            the keyword arm is the second-best of #50's four and measured 84%
+            recall on three consecutive sweeps. Retrying is deliberately not
+            done here and ``docs/decisions/vector-arm-degradation.md`` is the
+            argument: the fault does not clear in minutes, so a retry buys about
+            one recovery in eight on a hot service, and on the reranked path it
+            buys it with a second of the month's 1,000 semantic requests.
+
         Raises:
             chip_chat.search.errors.SearchError: If the service refuses for any
                 reason other than a spent semantic allowance. RFC-001 §10's
@@ -477,8 +527,14 @@ class Retriever:
             )
 
         passages, uncitable = self._passages(text, response)
+        arm = fusion.contribution(
+            halves=halves,
+            scores=[passage.score for passage in passages],
+            filtered=narrowing.filtered,
+        )
         confidence = self._confidence(passages, reranked=reranked)
-        notes.extend(_confidence_notes(confidence, narrowing))
+        notes.extend(_degraded_notes(arm, confidence))
+        notes.extend(_confidence_notes(confidence, narrowing, arm))
         if uncitable:
             notes.append(
                 f"{uncitable} passage(s) were dropped for arriving without a "
@@ -491,6 +547,7 @@ class Retriever:
             confidence=confidence,
             reranked=reranked,
             halves=halves,
+            vector_arm=arm,
             constraints=narrowing,
             floor=self._floor,
             notes=tuple(notes),
@@ -564,11 +621,65 @@ _EMPTY_FILTERED_NOTE: Final = (
     "a finding rather than a gap: no published item meets what was asked for."
 )
 
+_LEXICAL_ONLY_NOTE: Final = (
+    "DEGRADED RETRIEVAL: only the keyword half of the search ran. The search "
+    "service dropped the vector half and reported that as a success, so these "
+    "passages are what a word match found and anything the published pages say "
+    "in different words than the question used was never looked at. Answer from "
+    "what is here if it genuinely answers the question. Do NOT say the "
+    "restaurant does not publish something — half the retriever did not look, "
+    "and an absence measured through it is not an absence. Say instead that the "
+    "search is only partly working and offer to try again."
+)
+
+_LEXICAL_ONLY_ABSENCE_NOTE: Final = (
+    "And nothing that came back cleared the bar, which on a degraded retrieval "
+    "is evidence about the retrieval rather than about the corpus. This is the "
+    "case to say out loud: the lookup is not working properly right now, so you "
+    "cannot answer this one and are not concluding anything from the silence."
+)
+
+
+def _degraded_notes(arm: fusion.VectorArm, confidence: Confidence) -> tuple[str, ...]:
+    """Return the sentences that go with a vector half that did not answer.
+
+    Two, and the second one only where it applies. The first says what happened
+    and forbids the one inference a lexical-only result cannot support. The
+    second fires when nothing cleared the bar either, which is the combination
+    that would otherwise reach a visitor as a confident *"the published data
+    does not cover that"* — the exact sentence a retriever missing half its
+    recall has no standing to say.
+
+    Args:
+        arm: What :mod:`chip_chat.search.fusion` read off the fused scores.
+        confidence: How much the passages that did come back had to say.
+
+    Returns:
+        The notes, empty on a healthy retrieval.
+    """
+    if not arm.degraded:
+        return ()
+    if confidence is Confidence.GROUNDED:
+        return (_LEXICAL_ONLY_NOTE,)
+    return (_LEXICAL_ONLY_NOTE, _LEXICAL_ONLY_ABSENCE_NOTE)
+
 
 def _confidence_notes(
-    confidence: Confidence, constraints: query_module.Constraints
+    confidence: Confidence,
+    constraints: query_module.Constraints,
+    arm: fusion.VectorArm = fusion.VectorArm.CONTRIBUTED,
 ) -> tuple[str, ...]:
-    """Return the sentences that go with a confidence, for the agent to read."""
+    """Return the sentences that go with a confidence, for the agent to read.
+
+    The ``arm`` argument is here to *withhold* a sentence rather than to add
+    one. Both of the notes below tell the agent something about the corpus —
+    that nothing in it matched, or that these are the nearest things in it — and
+    neither claim is available from a retrieval whose vector half never ran.
+    :func:`_degraded_notes` has already said the true thing in that case, and
+    saying both would hand the agent one instruction and its contradiction.
+    """
+    if arm.degraded:
+        return ()
     if confidence is Confidence.NONE:
         return (_EMPTY_FILTERED_NOTE if constraints.filtered else _EMPTY_NOTE,)
     if confidence is Confidence.LOW:

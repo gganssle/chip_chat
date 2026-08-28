@@ -17,6 +17,7 @@ from chip_chat.eval.retrieval.questions import (
 )
 from chip_chat.eval.retrieval.run import Answer
 from chip_chat.eval.retrieval.scoring import RECALL_AT, score_arm
+from chip_chat.search.fusion import VectorArm
 from chip_chat.search.retrieve import Confidence, Passage, Retrieval
 
 CHEESE = Label(kind="MENU_ITEM", fields={"item_id": "CMG-5252"}, why="cheese")
@@ -66,6 +67,7 @@ def scored(
     confidence: Confidence = Confidence.GROUNDED,
     resolved: tuple[bool, ...] | None = None,
     without_allergens: tuple[str, ...] = (),
+    vector_arm: VectorArm = VectorArm.CONTRIBUTED,
 ):
     """Score one question under one arm, with its labels resolved as told."""
     from chip_chat.search.query import Constraints
@@ -89,6 +91,7 @@ def scored(
         query=question_.text,
         passages=passages,
         confidence=confidence,
+        vector_arm=vector_arm,
         constraints=Constraints(without_allergens=without_allergens),
     )
     arm = score_arm(
@@ -351,6 +354,105 @@ def test_every_category_appears_in_every_arm_even_when_empty() -> None:
 def test_the_demo_bar_is_reachable_by_name() -> None:
     arm, _ = scored(question(CHEESE), (passage("CMG-5252"),))
     assert arm.allergens.category is Category.ALLERGENS
+
+
+# --- The arm whose vector half did not run -----------------------------------
+#
+# chip-wez. Three committed sweeps scored a vector arm at 41%, 7% and 83% on the
+# same questions against equivalent corpora, and the first of those was written
+# up as a finding about embeddings and proper nouns. It was the service dropping
+# the vector half and answering 200. What follows is the treatment that stops a
+# fourth sweep doing it again: unscored, exactly like a label the corpus does
+# not hold, and named apart from that so a defect and a harvest gap do not read
+# the same.
+
+
+def test_a_question_whose_vector_half_dropped_is_in_no_numerator() -> None:
+    _, judgement = scored(
+        question(CHEESE), (passage("CMG-5252"),), vector_arm=VectorArm.DROPPED
+    )
+    assert judgement.degraded
+    assert not judgement.scored
+    # A perfect hit, and it counts for nothing: the retriever was not asked the
+    # question this arm's name says it was asked.
+    assert judgement.recall is None
+    assert judgement.hit is None
+    assert judgement.reciprocal_rank is None
+    assert judgement.precise is None
+
+
+def test_a_degraded_question_is_counted_apart_from_an_unheld_label() -> None:
+    # Both are unscored. Only one of them is a fault in something running, and a
+    # report that could not tell them apart would send somebody to the harvest.
+    arm, _ = scored(
+        question(CHEESE), (passage("CMG-5252"),), vector_arm=VectorArm.DROPPED
+    )
+    assert arm.allergens.unscored == 1
+    assert arm.allergens.degraded == 1
+    assert arm.allergens.recall is None
+
+    clean, _ = scored(question(CHEESE), (passage("CMG-1"),), resolved=(False,))
+    assert clean.allergens.unscored == 1
+    assert clean.allergens.degraded == 0
+
+
+def test_an_arm_with_one_degraded_question_is_not_comparable() -> None:
+    # Strict on purpose. An arm that measured a different configuration on some
+    # of its questions than on others is not one column of a table, and printing
+    # it as one is how sweep 1's headline happened.
+    arm, _ = scored(
+        question(CHEESE), (passage("CMG-5252"),), vector_arm=VectorArm.DROPPED
+    )
+    assert not arm.comparable
+    assert len(arm.degraded) == 1
+    healthy, _ = scored(question(CHEESE), (passage("CMG-5252"),))
+    assert healthy.comparable
+    assert healthy.degraded == ()
+
+
+def test_a_degraded_negative_is_neither_restrained_nor_overconfident() -> None:
+    # Restraint is the one metric here a broken retriever flatters: a retriever
+    # returning less declines more. Scoring it either way is unearned.
+    arm, judgement = scored(
+        question(CHEESE, answerable=False),
+        (passage("CMG-1"),),
+        confidence=Confidence.LOW,
+        vector_arm=VectorArm.DROPPED,
+    )
+    assert judgement.restrained is None
+    assert arm.negatives.scored == 0
+    assert arm.negatives.degraded == 1
+    assert arm.negatives.rate is None
+    assert arm.negatives.overconfident() == ()
+
+
+def test_a_degraded_arm_still_counts_a_constraint_it_breached() -> None:
+    # A filter is applied by the service whichever ranker placed the document,
+    # so a passage that came back in breach came back in breach. Recall is about
+    # what the retriever could reach; a violation is about what it handed over.
+    arm, _ = scored(
+        question(CHEESE, constraint=Constraint(without_allergens=("dair",))),
+        (passage("CMG-5252", allergens=("dair",)),),
+        without_allergens=("dair",),
+        vector_arm=VectorArm.DROPPED,
+    )
+    assert arm.constraints.violations == 1
+
+
+def test_the_other_three_readings_are_not_degradation() -> None:
+    # NOT_SENT is the keyword arm, which asked for no vector half and lost
+    # nothing. UNDETERMINED is an empty result set, which a filter and an empty
+    # index produce as readily as this defect does.
+    for arm_reading in (
+        VectorArm.CONTRIBUTED,
+        VectorArm.NOT_SENT,
+        VectorArm.UNDETERMINED,
+    ):
+        _, judgement = scored(
+            question(CHEESE), (passage("CMG-5252"),), vector_arm=arm_reading
+        )
+        assert not judgement.degraded
+        assert judgement.scored
 
 
 def test_the_ablation_is_the_four_the_ticket_names() -> None:
