@@ -14,7 +14,9 @@ editing a file.
     #41.3  the write role cannot read another visitor's rows either
     #41.4  the account is rebuildable from snowflake/ in one run
     #42    the schema is the tables the DDL declares, every one of them
-           commented, and every visitor-scoped one carrying demo_id
+           commented, every visitor-scoped one carrying demo_id, and the
+           roster describing the history it sits beside rather than another
+           generation's
     #43    every visitor-scoped table carries a row access policy, and an
            unbound session reads nothing at all
     #45    the account lane's semantic view exists, the read role can ask it a
@@ -1218,6 +1220,181 @@ def _check_reset_baseline() -> list[Check]:
                 "of them under held_no_baseline rather than fail, so this is a "
                 "reset that silently does nothing. Re-run `make snowflake-load` "
                 "over the same landing zone the population came from"
+            ),
+        )
+    ]
+
+
+ROSTER_AGREEMENT = """
+WITH placed AS (
+  SELECT demo_id, COUNT(*) AS n, SUM(total) AS spend,
+         MIN(placed_at) AS first_at, MAX(placed_at) AS last_at
+    FROM {orders} GROUP BY demo_id
+), earned AS (
+  SELECT demo_id, SUM(delta) AS pts FROM {ledger} GROUP BY demo_id
+), basket AS (
+  SELECT demo_id, order_id,
+         LISTAGG(item_id || '/' || qty || '/' ||
+                 COALESCE(ARRAY_TO_STRING(modifiers, '+'), ''), ' ')
+           WITHIN GROUP (ORDER BY item_id, qty) AS signature
+    FROM {lines} GROUP BY demo_id, order_id
+), repeats AS (
+  SELECT demo_id, signature, COUNT(*) AS seen,
+         MAX(COUNT(*)) OVER (PARTITION BY demo_id) AS most
+    FROM basket GROUP BY demo_id, signature
+), usual AS (
+  SELECT DISTINCT b.demo_id, i.item_id
+    FROM repeats r
+    JOIN basket b ON b.demo_id = r.demo_id AND b.signature = r.signature
+    JOIN {lines} i ON i.order_id = b.order_id
+   WHERE r.seen = r.most
+)
+SELECT COUNT(*)                             AS FIXTURES,
+       COUNT_IF(f.points_balance = e.pts)   AS POINTS,
+       COUNT_IF(f.order_count = p.n)        AS ORDERS,
+       COUNT_IF(f.lifetime_spend = p.spend) AS SPEND,
+       COUNT_IF(f.first_order_at = p.first_at
+            AND f.last_order_at = p.last_at) AS DATES,
+       COUNT_IF(u.item_id IS NOT NULL)      AS USUAL,
+       COUNT_IF(f.narrative NOT ILIKE '%point%'
+             OR POSITION(TRIM(TO_CHAR(f.points_balance, '999,999,999'))
+                         IN f.narrative) > 0) AS NARRATIVE,
+       COALESCE(MIN(CASE WHEN f.points_balance <> e.pts
+                         THEN f.demo_id || ' says ' || f.points_balance ||
+                              ' points and the ledger sums to ' || e.pts END),
+                MIN(CASE WHEN f.order_count <> p.n
+                         THEN f.demo_id || ' says ' || f.order_count ||
+                              ' orders and there are ' || p.n END),
+                MIN(CASE WHEN u.item_id IS NULL
+                         THEN f.demo_id || ' calls ' ||
+                              COALESCE(f.usual_item_id, 'nothing') ||
+                              ' its usual and no basket of that many repeats '
+                              || 'holds it' END),
+                '') AS EXAMPLE
+  FROM {fixtures} f
+  LEFT JOIN placed p ON p.demo_id = f.demo_id
+  LEFT JOIN earned e ON e.demo_id = f.demo_id
+  LEFT JOIN usual  u ON u.demo_id = f.demo_id AND u.item_id = f.usual_item_id;
+"""
+"""The whole of the roster-against-history comparison, in one statement.
+
+One statement rather than six because the interesting answer is a *profile* --
+four of twenty-eight agreeing on points and four on order count, as the account
+read on 2026-08-27, is a different diagnosis from twenty-seven of twenty-eight,
+and the second is a bug in one row while the first is two generations in one
+database. Six separate queries would each be a pass or a fail and the shape
+would have to be reassembled by whoever read the output.
+
+The usual-item column is deliberately not a recomputation of the generator's
+definition. `chip_chat.data_gen.fixtures._commonest` breaks a tie between two
+equally frequent baskets on ``repr`` of a Python tuple, which no SQL expression
+reproduces, so a check that rebuilt that rule would raise a false alarm the
+first time a fixture had two joint-commonest baskets. What is asked instead is
+strictly weaker and never wrong: the item the fixture calls the usual must
+appear in *some* basket the customer repeated as often as any other. A fixture
+from another generation fails that essentially always; a tie never does.
+"""
+
+
+def _check_the_roster_matches_the_history() -> list[Check]:
+    """Hold `persona_fixtures` to the tables it claims to describe.
+
+    Two loaders fill `CHIP_CHAT.ACCOUNTS` and they do not know about each other.
+    [#39]'s nightly publish writes ``orders``, ``order_items`` and
+    ``loyalty_ledger`` out of Databricks silver; `chip_chat.snowflake.load`
+    writes ``personas``, ``persona_fixtures`` and ``demo_visitors``, which the
+    publish role cannot see at all. `chip_chat.data_gen` generates all six from
+    one population and asserts they agree by construction --
+    ``data-gen/tests/test_referential_integrity.py`` holds
+    ``sum(entry.delta) == fixture.points_balance`` for every fixture -- so
+    nothing in the generator and nothing in either loader is capable of
+    producing a disagreement. Loading one half from one generation and the other
+    half from another is.
+
+    That is what this account was in on 2026-08-27, and the measurement was
+    ``FIXTURES 28 · POINTS_AGREE 4 · ORDERS_AGREE 4``: a history generated for
+    five hundred customers under a roster generated for sixty. It cost nothing
+    while ``get_points_balance`` returned a hardcoded fixture, and became
+    visible to a visitor the moment the account lane was wired onto the ledger:
+    the opening message is composed from the fixture's narrative and the tool
+    sums ``delta``, so ``demo-0048`` was introduced as having 397 points and
+    then told it had 1,363, inside one conversation.
+
+    The narrative column is here because two of the seven archetypes quote the
+    balance in prose -- "433 points on the card" -- so a repair that corrected
+    the numeric columns and left the sentences alone would have traded a visible
+    contradiction for a quieter one. The generator renders the sentence from the
+    same measured facts as the columns; this asks the loaded rows whether it
+    still did.
+
+    Asked with the maintenance escape set, for the reason `_check_reset_baseline`
+    gives: a comparison across every visitor is exactly the cross-visitor read
+    [#43]'s policies deny to every role, and without the variable both sides
+    come back empty and subtract to a clean pass.
+
+    Reports rather than fails on an empty account. Zero fixtures is a load that
+    has not happened, which `_check_the_serving_joins_answer` already names; a
+    roster that disagrees with a history is a different thing and this is the
+    check for it.
+    """
+    name = "persona_fixtures describes the orders and the ledger it sits beside"
+    sql = ROSTER_AGREEMENT.format(
+        orders=account.table("ACCOUNTS", "orders"),
+        ledger=account.table("ACCOUNTS", "loyalty_ledger"),
+        lines=account.table("ACCOUNTS", "order_items"),
+        fixtures=account.table("ACCOUNTS", "persona_fixtures"),
+    )
+    preamble = _session(
+        account.ADMIN_ROLE, {schema.MAINTENANCE_VARIABLE: "comparing the roster"}
+    )
+    try:
+        rows = snow.query(f"{preamble}\n{sql}")[-1]
+    except snow.SnowError as error:
+        return [
+            Check(
+                "#42",
+                name,
+                passed=False,
+                detail=f"the comparison did not run: {_refusal_line(str(error))}",
+            )
+        ]
+    if not rows:
+        return [Check("#42", name, passed=False, detail="the comparison returned no row")]
+
+    row = rows[0]
+    fixtures = int(row["FIXTURES"])
+    columns = ("POINTS", "ORDERS", "SPEND", "DATES", "USUAL", "NARRATIVE")
+    agreeing = {column: int(row[column]) for column in columns}
+    if fixtures == 0:
+        return [
+            Check(
+                "#42",
+                name,
+                passed=True,
+                detail=(
+                    "there are no fixtures to compare -- ACCOUNTS is empty. "
+                    "`make snowflake-load-roster` fills the roster"
+                ),
+            )
+        ]
+    profile = " · ".join(f"{column} {count}" for column, count in agreeing.items())
+    disagreeing = [column for column, count in agreeing.items() if count != fixtures]
+    return [
+        Check(
+            "#42",
+            name,
+            passed=not disagreeing,
+            detail=(
+                f"{fixtures} fixtures, all agreeing on {profile.lower()}"
+                if not disagreeing
+                else f"{fixtures} fixtures; agreeing: {profile}. "
+                f"{str(row['EXAMPLE']) or 'no example available'}. "
+                "The roster and the history are from different data-gen "
+                "generations -- the numbers a visitor is introduced with are "
+                "not the numbers the tools will read back. Load the committed "
+                "roster with `make snowflake-load-roster`, which is the "
+                "generation `data-gen/tests/test_roster.py` holds the shipped "
+                "config to"
             ),
         )
     ]
@@ -2484,6 +2661,7 @@ def run(*, watch_suspend: bool = True) -> list[Check]:
     checks += _check_default_deny_on_the_real_tables()
     checks += _check_the_roster_inversion()
     checks += _check_the_serving_joins_answer()
+    checks += _check_the_roster_matches_the_history()
     checks += _check_semantic_view()
     # Before #43's fixture and before #41's, for the same reason #42's checks
     # run first: this one writes real rows under its own demo_id, and a probe
