@@ -220,12 +220,18 @@ switch itself is proven cheap: instrumentation diff **empty**, agent-side diff
 **exactly two lines** of the rendered version manifest. AX **Free** is the right
 tier — Pro at $50/mo pushes steady state past the budget's own 50% alert.
 
-### 4.5 The Snowflake rebuild path is untested and the trial expires 2026-09-24
+### 4.5 ~~The Snowflake rebuild path is untested~~ — superseded 28 Aug 2026
 
-The day-30 plan is *rebuild on demand*. `make snowflake-rebuild` has never been
-run, because running it would destroy the synthetic population irrecoverably —
-the landing zone it was generated from is not in the repository. This is a
-deliberate non-action with a real deadline attached.
+This was a blocker while the day-30 plan was *rebuild on demand*. It is not one
+any more: the owner has decided the trial will **never** be converted to paid and
+the work will be finished before it expires. `docs/decisions/end-of-life.md`.
+
+The rebuild path stays untested, deliberately, and no effort should be spent
+making it testable. What replaces this as the thing to watch is that
+**2026-09-24 is a cliff rather than a slope**: the account, personalization and
+action lanes all read or write Snowflake, so all three stop at once. The
+teardown in `docs/runbook.md` should be run before that date rather than
+discovered after it.
 
 ---
 
