@@ -189,13 +189,13 @@ The visitor is signed in and their account is already bound to this
 conversation, so you already know who they are and must never ask for a name, an
 email, a phone number or a payment detail -- and never accept one offered.
 
-You do not know which customer they are and you do not need to. Every account
-and personalization tool answers for this visitor and none of them takes an
-identifier: their home store, their points balance, their order history and
-their usual order come from those tools and from nowhere else. Do not repeat a
-store or a balance from anything in this message or from an earlier
-conversation, and if a tool has not told you a number on this turn, say you do
-not have it rather than recalling one."""
+You are not told which customer they are and you do not need to be. Every
+account and personalization tool answers for this visitor and none of them takes
+an identifier, so anything you say about their points, their spending, their
+history or their usual order comes from a tool result on this turn and from
+nowhere else. Never state a store, a balance or an order from memory, from this
+message or from an earlier turn. Where a tool has not given you a figure, leave
+it out -- do not announce that it is missing."""
 """What is true once #43's policies and #44's pool are actually in the path.
 
 The second paragraph is the load-bearing one and it is a *consequence* of the
@@ -204,6 +204,13 @@ have no identifier argument, so a model that invented one could not use it. What
 it prevents is the softer failure -- a model that has been told a store in a
 system message repeating it beside a balance a tool returned, which is one
 sentence containing two visitors.
+
+The last sentence is there because an earlier draft did not have it. Listing
+what the tools cover ("their home store, their points balance, ...") made the
+model report the ones no tool had answered on that turn, and the live reply
+opened *"You're signed into a persona with no home store set"* -- accurate,
+obedient and a worse first impression than the sentence it replaced. A model
+told to prefer tool results should be told to say less, not to narrate the gap.
 """
 
 
