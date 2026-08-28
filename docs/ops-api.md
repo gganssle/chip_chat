@@ -214,6 +214,19 @@ make ops-deploy   # build the workspace into wheels, publish, and CHECK
 make ops-verify   # put #63's live criteria to the thing on the internet
 ```
 
+`ops-deploy` needs Azure Functions Core Tools; it says so, with the install line,
+rather than failing on a missing binary. On macOS the tap has to be *trusted*
+before it will install, which is a step recent Homebrew added and which fails
+with nothing else visibly wrong:
+
+```bash
+brew tap azure/functions && brew trust azure/functions
+brew install azure-functions-core-tools@4
+```
+
+`ops-verify` additionally needs the `snow` CLI on the `chipchat` connection, for
+the two `COUNT(*)`s that establish nothing was written.
+
 ### `make ops-deploy` does not believe the publish command
 
 `func azure functionapp publish` exits zero on a deployment whose worker will

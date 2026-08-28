@@ -1123,6 +1123,13 @@ ops-package: ## Build the workspace into the wheels the Functions host installs
 # app as a plain setting beside the Key Vault references that exist so it is not.
 # So the one fact `func` actually needs from it is stated here instead.
 ops-deploy: ops-package ## Publish the ops API and prove all four routes answer
+	@command -v func >/dev/null || { \
+		echo "Azure Functions Core Tools is not on PATH. On macOS:"; \
+		echo "  brew tap azure/functions && brew trust azure/functions"; \
+		echo "  brew install azure-functions-core-tools@4"; \
+		echo "The trust step is required: Homebrew refuses formulae from an"; \
+		echo "untrusted tap, and the first install fails with nothing else wrong."; \
+		exit 2; }
 	@$(MAKE) ops-unset-connection-strings
 	cd $(OPS_DIR) && FUNCTIONS_WORKER_RUNTIME=python \
 		func azure functionapp publish $(OPS_APP) --build remote
