@@ -12,6 +12,7 @@ Every test here is one acceptance criterion, and each names it.
 
 import json
 import threading
+import time
 from collections.abc import Iterator
 from typing import Any
 from unittest import mock
@@ -437,6 +438,42 @@ def test_a_slow_turn_keeps_the_response_alive(limits: SpendLimits) -> None:
     kinds = [frame["type"] for frame in lines]
     assert kinds[0] == "open"
     assert "waiting" in kinds
+
+
+def test_a_slow_turn_keeps_the_object_shape_alive_too(limits: SpendLimits) -> None:
+    """chip-901. The object shape was the half of this route that still died.
+
+    ``waiting`` frames rescued the streamed shape and nothing rescued the other
+    one, so every caller that was not the browser -- the adversarial write-gate
+    harness, ``curl``, anything holding this route as an API -- kept losing the
+    turns that ran past sixty seconds. Measured on the deployment on 28 August
+    2026: eight of thirty-four turns over the line, and eight turns with no
+    response in the container's access log.
+
+    The object shape now writes whitespace on the same timer. Whitespace before a
+    JSON value is insignificant (RFC 8259 §2), so what arrives is still exactly
+    one decodable object -- which is the property this test holds, rather than
+    the byte count of the padding.
+    """
+    def slow(*args: Any, **kwargs: Any) -> Any:
+        time.sleep(0.3)
+        return ChatReply(reply="Took a while.")
+
+    model = ScriptedModel(answer("unused"))
+    with (
+        mock.patch.object(app_module, "_run_turn", slow),
+        mock.patch.object(app_module, "_HEARTBEAT_SECONDS", 0.05),
+        TestClient(create_app(build(model, limits))) as visitor,
+    ):
+        held = visitor.post("/api/chat", json={"message": "something slow"})
+
+    body = held.content
+    assert held.headers["content-type"].startswith("application/json")
+    # Bytes written before any of the answer existed. That is the whole of the
+    # fix: the ingress' idle timer is watching for exactly this and nothing else.
+    assert body.startswith(b" ")
+    assert body.lstrip() != body
+    assert json.loads(body) == ChatReply(reply="Took a while.").model_dump()
 
 
 def test_the_object_and_the_frames_are_the_same_turn(limits: SpendLimits) -> None:

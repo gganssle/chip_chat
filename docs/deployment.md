@@ -10,7 +10,9 @@ asks for exactly this and says why:
 
 Ten things surprised me. They are in section 3, and Phase 8 added two more —
 §3.11, which cost a deploy, and §3.12, which was silently costing every slow
-turn its answer.
+turn its answer. §3.13 is the one §3.12 was half of: the fix went to the shape
+the browser asks for and not to the shape everything else asks for, and it took
+a red-team suite that could not be scored to notice.
 Sections 1 and 2 are the procedure, so that the next deploy is not also an
 investigation; sections 6 and 7 are the measurements and the runbook, added when
 the public demo landed.
@@ -343,6 +345,74 @@ The first attempt at this was an `{"type":"open"}` frame sent before the turn
 started, on the theory that a response with its headers flushed is a response
 the ingress will wait for. It is not: the stream still died at 60.19 s with one
 frame delivered. The timeout is on *idleness*, not on the response having begun.
+
+### 3.13 Half a fix looks exactly like a whole one when only the browser is watching
+
+Read the last paragraph of §3.12 again, because the bug is in it: *"the object
+shape is still there for a test or a `curl`, and is still subject to the sixty
+seconds."* That sentence was written as a note about a minor shape. It was
+actually a description of an open defect in the deployed app, and it survived a
+month because the only client anybody looked at was the widget, and the widget
+asks for frames.
+
+Everything that is not the widget asks for the object. That includes
+`chip_chat.eval.adversarial.writegate`, the live red team for launch gate two,
+which sends `Content-Type: application/json` and no `Accept` at all. Three runs
+against the deployment on 28 August 2026 lost five, six and four probes to
+`RemoteDisconnected: Remote end closed connection without response` or to the
+app's own *"Something went wrong on my side just then."* — and a gate whose
+probes do not come back cannot return `pass`, whatever the gate does. Launch
+gate two read **not measured** for a reason that had nothing to do with the
+gate.
+
+**The evidence, because "slow turns time out" was also the guess and a guess
+costs a deploy.** Three things were read rather than assumed:
+
+- Application Insights, over the window of the three runs: thirty-four
+  `chat.turn` spans, p50 41 s, p95 72.8 s, longest 95.2 s, and **eight of the
+  thirty-four over sixty seconds**. Separately, eight turns ended in
+  `openai.RateLimitError` (twenty-four exception records, three spans deep each).
+  Seven turns were slow, seven were rate-limited, one was both: fifteen bad turns
+  out of thirty-four, against fifteen probes the three runs reported losing.
+- The container's own console log over the same window. Every turn under sixty
+  seconds has a matching `POST /api/chat HTTP/1.1 200 OK` access line. **None of
+  the eight over sixty seconds has one** — and `/healthz` answered every ten
+  seconds throughout, and no revision restarted. So it is not the liveness probe
+  killing the container behind a slow turn, not the event loop being blocked, and
+  not one worker being saturated. The process was healthy and still working; its
+  connection was gone.
+- A controlled experiment against the live app, which is what actually settles
+  it. Four concurrent object-shape turns: `60.2s`, `60.1s`, `60.2s`, `60.1s`, all
+  `RemoteDisconnected`. Three concurrent streamed-shape turns, same app, same
+  minute, same prompt, one header different: `44.4s`, `40.4s`, **`88.2s`**, all
+  complete. One variable, opposite outcomes.
+
+The fix is that the object shape is now written incrementally too. It goes out as
+a `StreamingResponse` that emits a single space every ten seconds while the turn
+runs and then the JSON document, and the reason a space works is RFC 8259 §2:
+whitespace before a JSON value is insignificant, so `json.loads`, `response.json()`
+and `jq` all decode exactly the object they decoded before. **The route's contract
+did not change — only its timing did**, which is the property that let this land
+without touching a single caller. `api/tests/test_public_demo.py::test_a_slow_turn_keeps_the_object_shape_alive_too`
+holds it.
+
+Two things are given up and both are real. The response is chunked, so there is
+no `Content-Length`; nothing reads it, and a caller that did was reading it off a
+response that could be truncated at sixty seconds anyway. And a failure after the
+first heartbeat can no longer become a 5xx, because the status line has already
+gone out — which costs nothing here only because `_run_turn` answers every
+failure with a 200 and a sentence the visitor reads, rather than with a status
+code. A route that signalled failure by status could not take this fix as
+written.
+
+**What this does not fix, and the floor it leaves.** The other half of the losses
+is `openai.RateLimitError` from the shared `gpt-5-mini` deployment, which is
+provisioned at capacity 10 — ten thousand tokens a minute — against a
+subscription limit of 500. A reasoning model replaying every tool result into
+every step will exceed that with two visitors in flight, and when it does, the
+app answers honestly and the probe is still unscored. That is a capacity number
+in `infra/terraform/variables.tf`, not a transport bug, and it is the floor under
+any write-gate run taken while something else is also driving that deployment.
 
 ## 4. What it costs
 
