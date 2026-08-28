@@ -207,6 +207,19 @@ draft look identical to a visitor and must not look identical in a log. Making
 the app-tier store shared is the same ticket `BudgetLedger` has been waiting on,
 and this design does not make it easier or harder.
 
+**A lost response is a lost receipt.** The ops API retries a procedure call
+once with the same key, which covers a Snowflake connection dying after the
+commit. It does not cover the outer hop: if the app-to-ops HTTP request fails
+*after* the ops API committed, the visitor is told ordering was unavailable and a
+row exists. `OpsClient` deliberately does not retry — it cannot tell "the request
+never arrived" from "the response was lost", and a retry that cannot tell them
+apart is a second order half the time — and the claim has already retired the
+draft, so nothing can place it again either. It is a lost receipt rather than a
+double write, which is the direction to be wrong in, and it is not new: the same
+window exists for any two-process write. Closing it needs the app to be able to
+*ask* whether a retry key was spent, which is a fifth route on the only service
+that writes and was not worth adding for this.
+
 **Clock skew is assumed small.** The grant's expiry is absolute epoch seconds
 checked against the verifier's own clock. Two Azure services in one region agree
 to well within the two-minute window; nothing checks that they do.

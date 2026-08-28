@@ -368,7 +368,6 @@ class OpsDesk:
             self._write(
                 OpsAction.PLACE_ORDER,
                 visitor.demo_id,
-                draft.draft_id,
                 _order_arguments(draft),
                 reference=draft.draft_id,
             )
@@ -401,7 +400,6 @@ class OpsDesk:
             receipt=self._write(
                 action,
                 visitor.demo_id,
-                claimed.confirmation_id,
                 _action_arguments(action, claimed),
                 reference=reference,
             )
@@ -413,19 +411,29 @@ class OpsDesk:
         self,
         action: OpsAction,
         demo_id: str,
-        retry_key: str,
         arguments: Sequence[Any],
         *,
         reference: str,
     ) -> Mapping[str, Any]:
         """Sign the claimed record and post it. The body of all four writes.
 
-        The retry key is the *record's* id rather than a fresh one, which is what
-        makes a retried HTTP request replay a receipt instead of writing twice:
-        the procedure spends the key inside its own transaction with a ``MERGE``.
-        ``docs/ops-api.md`` describes that mechanism for a connection that dies
-        after the procedure committed, and here it does the same job one layer
-        further out.
+        The retry key is the **grant's** own single-use id, minted with the
+        grant, and it is what makes a replayed grant replay a receipt rather than
+        write twice: the procedure spends the key inside its own transaction with
+        a ``MERGE``. It is random rather than derived from the record because a
+        guessable retry key is a receipt returned to somebody who wrote nothing;
+        :func:`chip_chat.api.grants.new_grant_id` has that argument.
+
+        One residual is worth naming rather than leaving to be discovered. The
+        ops API retries a *procedure call* once with the same key, which covers a
+        Snowflake connection dying after the commit. It does not cover the outer
+        hop: if this HTTP request fails after the ops API committed, the visitor
+        is told nothing was placed and a row exists. This side cannot distinguish
+        "the request never arrived" from "the response was lost" -- which is why
+        it does not retry, because a retry that could not tell them apart is a
+        second order half the time -- and the claim retired the draft, so nothing
+        here can place it again either. It is a lost receipt rather than a
+        double write, which is the direction to be wrong in.
 
         Raises:
             OrderRejectedError: For a refusal and for an outage alike, because
@@ -443,8 +451,6 @@ class OpsDesk:
         except OpsUnavailableError as down:
             _log.warning("the ops API declined %s: %s", action.value, down.detail)
             raise OrderRejectedError(OPS_DECLINED, OPS_UNAVAILABLE_MESSAGE) from down
-        finally:
-            del retry_key
 
     # --- records -----------------------------------------------------------
 
