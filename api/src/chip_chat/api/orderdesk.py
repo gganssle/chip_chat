@@ -41,6 +41,7 @@ published ones from ``docs/action-surface.md`` §7 wherever there is one.
 """
 
 import logging
+import os
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final
 
@@ -343,6 +344,23 @@ class OpsDesk:
         try:
             draft = self._drafts.claim(visitor.demo_id, draft_id)
         except DraftRejectedError as rejection:
+            # Logged, and this is not debugging left in by accident. A draft
+            # store lives in one process, so "the card the visitor is looking at
+            # is not in the store" has two very different causes -- an agent
+            # that skipped the confirmation step, which is the gate working, and
+            # a second replica or a restarted process, which is the honest
+            # limitation `chip_chat.api.ledger.BudgetLedger` carries and which
+            # would otherwise present as the gate refusing a visitor who did
+            # everything right. The count and the pid are what tell them apart
+            # in a log, without either reaching the model or the visitor.
+            _log.warning(
+                "%s refused for %s in pid %d: %s (this process holds %d draft(s))",
+                OpsAction.PLACE_ORDER.value,
+                draft_id,
+                os.getpid(),
+                rejection.code.value,
+                len(self._drafts),
+            )
             raise OrderRejectedError(
                 rejection.code.value, rejection.message
             ) from rejection
