@@ -455,6 +455,7 @@ def test_a_slow_turn_keeps_the_object_shape_alive_too(limits: SpendLimits) -> No
     one decodable object -- which is the property this test holds, rather than
     the byte count of the padding.
     """
+
     def slow(*args: Any, **kwargs: Any) -> Any:
         time.sleep(0.3)
         return ChatReply(reply="Took a while.")
