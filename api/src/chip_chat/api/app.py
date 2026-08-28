@@ -983,15 +983,30 @@ def build_service(
     visitors, pool = build_visitors(resolved_connect)
     resolved_lanes = build_lanes(pool) if lanes is None else lanes
     _log.info("lanes wired on this deployment: %s", resolved_lanes.describe())
-    # Built here rather than on first use, unlike the photo intake, and the
-    # difference is what construction costs. `build_photos` resolves a
-    # credential chain and two Azure SDK clients, which is the thirty-five
-    # seconds `Service.photos` records; this resolves two environment variables
-    # and reads the published catalogue out of blob storage, which the ops API
-    # already does at start-up for the same reason. What it deliberately does
-    # not do is talk to the ops API: `OpsClient.available` is asked when a card
-    # is composed, and a start-up path that waited on another service would be a
-    # liveness probe waiting behind it.
+    # Built here rather than on first use, unlike the photo intake, and it is
+    # worth being precise about the difference because `Service.photos` records
+    # a genuinely expensive lesson: building Azure SDK clients on the start-up
+    # path cost thirty-five seconds and a restart loop.
+    #
+    # This *does* touch Azure — `build_catalog` resolves the app's identity and
+    # reads nine blobs — so it is on the same path for the same kind of work,
+    # and eager anyway, because the alternative is worse. The tool list the
+    # model is offered depends on which desk this is, and a conversation is
+    # opened with that list written into its runtime context; a desk that
+    # appeared on the second turn would make the first turn's registration a lie
+    # and raise `ToolRegistrationError` on the third. There is no lazy version of
+    # this that is also honest.
+    #
+    # What makes it affordable is that the published catalogue is ten items and
+    # the identity is already resolved: measured on `ca-chip-chat-web--0000035`,
+    # the process went from import to "Uvicorn running" in three seconds. If a
+    # future catalogue makes that untrue, the fix is to hand `build_service` a
+    # catalogue rather than to defer the desk.
+    #
+    # What it deliberately does not do is talk to the *ops API*.
+    # `OpsClient.available` is asked when a card is composed, and a start-up
+    # path that waited on another service would be a liveness probe waiting
+    # behind it.
     desk = build_action_lane(visitors, rewards=_reward_lookup(resolved_lanes))
     limits = SpendLimits.from_env()
     return Service(
