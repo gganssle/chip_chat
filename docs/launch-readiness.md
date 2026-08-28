@@ -179,7 +179,7 @@ dozen vector queries. Every other cause was eliminated by measurement. This
 already caused one **false finding in a committed baseline** — vector-only
 scoring 0% was read as confirmation of the hybrid argument and was a service
 fault. `docs/retrieval.md` §9, bead `chip-wez`. The headline retrieval number
-survives: allergen top-3 recall **100%**, stable across three sweeps.
+survives, with a corrected denominator: allergen top-3 recall **100%** on 4 of the 8 allergen questions, under `hybrid + reranker`. The other four are now reported **degraded** rather than counted, because `chip-wez`'s detector showed their vector arm had silently dropped. The number did not move; the honesty of its denominator did.
 
 ### 4.4 Online evals are not live, and #86 requires them before the link
 
@@ -285,7 +285,9 @@ The isolation mechanism is real and proven at the database. The confirmation
 precondition is structural and survives a sabotaged prompt. The spend cap is
 inline, tripped for real, and consumes zero tokens while tripped. Moderation
 runs before the model by construction rather than by convention. The corpus is
-chunked so that no nutrition row splits, and allergen top-3 recall is 100%. The
+chunked so that no nutrition row splits, and allergen top-3 recall is 100% on the
+four allergen questions whose vector arm survived — the other four are reported
+degraded rather than silently counted, which is `chip-wez`'s doing. The
 alias swap is atomic across a live continuous query. The publish is atomic per
 table and leaves a consistent previous generation when killed. The gold marts
 rebuild deterministically and the recommender is registered in Unity Catalog with

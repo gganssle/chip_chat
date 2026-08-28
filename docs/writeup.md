@@ -967,7 +967,7 @@ retried until the vector half answered would be measuring a service that does no
 exist; one that inferred the tell and declined would turn a degraded answer into
 no answer. The candidates are tracked (`chip-wez`) rather than chosen, and the
 headline number survives because the reranked arm production sends reorders a
-union the lexical half is always in: **allergen top-3 recall 100%, three sweeps
+union the lexical half is always in: **allergen top-3 recall 100% on 4 of 8 allergen questions, three sweeps
 out of three.**
 
 **The general lesson.** A committed baseline is an artefact other people will
@@ -1626,7 +1626,7 @@ convention — `TextModerator` is private to `SpendGate`, and the only object in
 process that can call a model is one that `SpendGate.turn()` yields after both
 checks have passed. The corpus is chunked so that no nutrition row splits, and the
 chunker's guarantee is proved against a real fixed-window chunker kept in the test
-file. Allergen top-3 recall is 100% on three sweeps out of three. The index alias
+file. Allergen top-3 recall is 100% on three sweeps out of three — on the four questions whose vector arm was not silently dropped, a denominator this document could not state until `chip-wez` built the detector that measures it. The index alias
 swap is atomic across a live continuous query; the nightly publish is atomic per
 table and leaves a consistent previous generation when killed. The gold marts
 rebuild deterministically, and the recommender is registered in Unity Catalog
