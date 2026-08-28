@@ -21,6 +21,7 @@ from chip_chat.eval.experiment.results import (
     Metric,
     Target,
 )
+from chip_chat.eval.wiring import NO_WIRING, stated
 
 __all__ = ["render_comparison", "render_result"]
 
@@ -41,6 +42,7 @@ def render_result(result: ExperimentResult) -> str:
         f"- **Dataset** — {result.dataset} `{result.dataset_version}`, "
         f"{result.rows} rows",
         f"- **Answered by** — {result.source}",
+        f"- **Lanes wired** — {_wiring(result)}",
         "- **Judged by** — "
         + (result.judge or "nothing; the judged findings are unscored"),
         f"- **Run at** — {result.ran_at}",
@@ -64,6 +66,28 @@ def render_result(result: ExperimentResult) -> str:
     lines.extend(_lanes_table(result))
     lines.extend(_requirements_table(result))
     return "\n".join(lines) + "\n"
+
+
+def _wiring(result: ExperimentResult) -> str:
+    """The lane configuration, as a header line says it.
+
+    An unstated one is spelled out rather than left blank, because a blank in a
+    header reads as *nothing was wired* and it means *nobody wrote it down*.
+    Those are different runs and only one of them can be compared with anything.
+    """
+    if not stated(result.wiring):
+        return (
+            "**not stated** — this result was recorded before the harness wrote "
+            "the lane configuration down, so what it measured is not known from "
+            "the file. Re-run it before comparing it with anything"
+        )
+    if result.wiring == NO_WIRING.label:
+        return (
+            "`none` — the hardcoded three-item menu and the account fixture "
+            "answered, and `ask_account_question`, `get_recommendations` and "
+            "`match_meal_from_photo` were not offered to the model at all"
+        )
+    return f"`{result.wiring}`"
 
 
 def _targets_table(result: ExperimentResult) -> list[str]:
@@ -161,6 +185,41 @@ def _requirements_table(result: ExperimentResult) -> list[str]:
     return lines
 
 
+def _side_wiring(result: ExperimentResult) -> str:
+    """One side's lane configuration, for the comparison's header lines."""
+    return f"`{result.wiring}`" if stated(result.wiring) else "**not stated**"
+
+
+def _refusal(comparison: Comparison) -> list[str]:
+    """What a comparison prints instead of tables when a side did not say.
+
+    Deliberately not a warning above the numbers. A reader who has seen the
+    numbers has already formed the conclusion the warning was meant to prevent,
+    which is the argument every report in ``eval/`` makes for putting caveats
+    first -- and this is the case where the caveat cannot be qualified into
+    something readable, because the missing information is not *how much* the
+    delta is worth but *whether it is about the model at all*.
+    """
+    sides = " and ".join(comparison.unstated_sides)
+    return [
+        "## No comparison — the lane configuration was not recorded",
+        "",
+        f"**{sides} did not record which lanes were wired, so this comparison "
+        "is not drawn.** It is not that the delta would be uncertain. It is "
+        "that a delta between a run with the account lane wired and one without "
+        "it looks exactly like a model that got better: the tool list a model "
+        "is offered is a function of what is wired, so a lane coming up moves "
+        "whole rows from unscoreable to scored. On 27 August 2026 that "
+        "difference was the entire content of a baseline nobody could read.",
+        "",
+        "Re-run both arms — `--lanes none` for the unwired slice, `--lanes "
+        "wired` for the deployment's own account and personalization lanes — "
+        "and compare the results those write. A recorded result carries its "
+        "wiring from that run onward.",
+        "",
+    ]
+
+
 def render_comparison(comparison: Comparison) -> str:
     """Two experiments, as a Markdown document.
 
@@ -169,7 +228,9 @@ def render_comparison(comparison: Comparison) -> str:
 
     Returns:
         The document. #73's demo criterion is this string existing with two real
-        prompt versions behind it.
+        prompt versions behind it -- or, where one of them did not record its
+        lane configuration, a refusal in place of the tables. See
+        :attr:`~chip_chat.eval.experiment.compare.Comparison.stated`.
     """
     baseline = comparison.baseline
     candidate = comparison.candidate
@@ -177,15 +238,18 @@ def render_comparison(comparison: Comparison) -> str:
         f"# {baseline.experiment} → {candidate.experiment}",
         "",
         f"- **Baseline** — `{baseline.fingerprint}`, prompt "
-        f"{baseline.prompt_version}, run {baseline.ran_at}",
+        f"{baseline.prompt_version}, run {baseline.ran_at}, "
+        f"lanes {_side_wiring(baseline)}",
         f"- **Candidate** — `{candidate.fingerprint}`, prompt "
-        f"{candidate.prompt_version}, run {candidate.ran_at}",
+        f"{candidate.prompt_version}, run {candidate.ran_at}, "
+        f"lanes {_side_wiring(candidate)}",
         f"- **Dataset** — {candidate.dataset} `{candidate.dataset_version}`, "
         f"{candidate.rows} rows",
         "",
-        f"**{comparison.verdict}**",
-        "",
     ]
+    if not comparison.stated:
+        return "\n".join(lines + _refusal(comparison)) + "\n"
+    lines.extend([f"**{comparison.verdict}**", ""])
     if comparison.warnings:
         lines.append("> **Read these first.**")
         lines.extend(f"> - {note}" for note in comparison.warnings)

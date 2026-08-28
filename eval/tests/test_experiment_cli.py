@@ -185,3 +185,110 @@ def test_comparing_a_result_written_by_another_schema_is_refused(
 
     assert status == 1
     assert "schema" in capsys.readouterr().err
+
+
+def test_a_run_records_the_lane_configuration_and_defaults_to_none(
+    repo_root: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default is unwired, and unwired is *recorded* rather than left blank.
+
+    Both halves matter. `make ci` runs free, offline, credential-free targets, so
+    the default cannot be `wired`; and a run that did not say what it measured is
+    the one thing a comparison refuses, so `none` has to reach the file.
+    """
+    monkeypatch.chdir(repo_root)
+    record = tmp_path / "shipped.json"
+
+    status = main(
+        [
+            "--ceiling",
+            "--run",
+            "shipped",
+            "--out",
+            str(tmp_path / "x.md"),
+            "--record",
+            str(record),
+        ]
+    )
+
+    out = capsys.readouterr().out
+    payload = json.loads(record.read_text(encoding="utf-8"))
+    assert status == 0
+    assert payload["wiring"] == "none"
+    assert "lanes: none" in out
+    assert "lanes: none" in payload["source"]
+
+
+def test_the_rendered_result_names_the_lane_configuration(
+    repo_root: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(repo_root)
+    document = tmp_path / "x.md"
+
+    main(["--ceiling", "--run", "shipped", "--out", str(document)])
+
+    capsys.readouterr()
+    assert "**Lanes wired**" in document.read_text(encoding="utf-8")
+
+
+def test_comparing_a_result_that_did_not_state_its_lanes_is_refused(
+    repo_root: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-zero without --fail-on-regression, because this is not a finding.
+
+    That flag gates a regression the harness *found*. This is the harness
+    declining to look, and a caller reading the exit status has to be able to
+    tell the two apart from a green run.
+    """
+    monkeypatch.chdir(repo_root)
+    stated = tmp_path / "stated.json"
+    main(
+        [
+            "--ceiling",
+            "--run",
+            "shipped",
+            "--out",
+            str(tmp_path / "x.md"),
+            "--record",
+            str(stated),
+        ]
+    )
+    capsys.readouterr()
+
+    silent = tmp_path / "silent.json"
+    payload = json.loads(stated.read_text(encoding="utf-8"))
+    del payload["wiring"]
+    silent.write_text(json.dumps(payload), encoding="utf-8")
+    out = tmp_path / "comparison.md"
+
+    status = main(["--compare-recorded", str(silent), str(stated), "--out", str(out)])
+
+    assert status == 1
+    assert "did not record which lanes" in capsys.readouterr().err
+    document = out.read_text(encoding="utf-8")
+    assert "No comparison" in document
+    assert "The targets, side by side" not in document
+
+
+def test_wiring_is_refused_without_a_credential_rather_than_falling_back(
+    repo_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A silent fall back is the failure `cc-lanes` exists to make impossible."""
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("SNOWFLAKE_ACCOUNT", raising=False)
+
+    status = main(["--ceiling", "--run", "shipped", "--lanes", "wired"])
+
+    assert status == 1
+    assert "no Snowflake credential" in capsys.readouterr().err

@@ -28,6 +28,7 @@ chip_chat.eval.golden
 python -m chip_chat.eval.golden --check                    # free
 python -m chip_chat.eval.golden --check --catalog <dir>    # and the menu terms
 python -m chip_chat.eval.golden --catalog <dir> --out eval/golden/BASELINE.md
+python -m chip_chat.eval.golden --lanes wired              # against the deployment
 ```
 
 **The labeled photo set and its scorer** — issue
@@ -326,6 +327,68 @@ twenty-eight attacks, run by `make adversarial-redteam`, which CI blocks on -- a
 `promote-check` fails when an attack is added to the manifest without being
 recorded there. That is #77's *each attack you survive becomes a permanent eval*
 with a check behind it rather than a promise in a document.
+
+## Which lanes a run had, and why every document says so
+
+Every number in this directory is a number about a *configuration*, and the axis
+that moves it furthest is not the prompt or the model. It is which of the five
+lanes were wired when the run happened.
+
+`chip_chat.agent.lanes.CONDITIONAL_TOOLS` withholds `ask_account_question`,
+`get_recommendations` and `match_meal_from_photo` from a deployment that cannot
+answer them — #64's argument, and the right one: *a tool definition the model
+can see and nothing can answer is worse than an absent one.* The consequence for
+an eval is that an unwired run scores those lanes' rows at zero **because the
+tool the row expects does not exist in the process doing the scoring**. That is
+not a model failure and it is not a lane outage. It is a different measurement.
+
+On 27 August 2026 it was an invisible one. `make experiment-baseline` was re-run
+after the account and personalization lanes were wired onto the deployment and
+after the chat deployment's capacity went from 10,000 tokens a minute to
+200,000, and it came back byte-identical: 14.7% task completion, 42.9% tool
+selection. Both were the correct answer to the question the harness had asked,
+which was *how does the unwired slice score* — every entry point took
+`NO_LANES` and none of them could be told otherwise. `docs/launch-readiness.md`
+had been holding a launch target against it.
+
+So `chip_chat.eval.wiring` carries both halves of the fix, and all four runners
+that can execute a deployment take `--lanes`:
+
+```bash
+python -m chip_chat.eval.golden      --lanes wired --out eval/golden/BASELINE.md
+python -m chip_chat.eval.trajectory  --lanes wired --out eval/trajectory/BASELINE.md
+python -m chip_chat.eval.grounding   --lanes wired --judge
+python -m chip_chat.eval.experiment  --lanes wired --run shipped --judge
+```
+
+Three properties, and each one is a way this could have gone wrong instead:
+
+**`none` is the default and it stays the default.** `make ci` is free, offline
+and credential-free, which is a rule here rather than an oversight — a gate that
+needs a logged-in human is not a gate. Every free target above runs unwired.
+
+**`wired` builds what the deployment builds, or refuses.** It calls
+`chip_chat.api.connect.snowflake_connect` and `chip_chat.api.app.build_lanes` —
+the deployment's own two functions, not a copy — reads the roster through the
+pool's one unbound checkout, and binds every case's session to the rank-one
+`regular` fixture through a session store, because `VisitorPool` will not take a
+`demo_id` from a caller and this harness does not get an exception. Without a
+Snowflake credential it raises rather than falling back, since a silent fall back
+to the unwired slice is exactly the failure above with a heading that denies it.
+
+**Every result says which.** The lane configuration is part of the deployment
+name, so it lands in the *Deployment*, *Traces from* and *Answered by* lines of
+the four baselines; a recorded experiment result carries it in its own column;
+and a comparison whose sides do not both state it is **refused rather than
+drawn**. That last one is the discipline `eval/retrieval` already keeps for an
+arm whose vector half dropped. A stated difference is something a reader can
+weigh. An unstated one produces a delta that looks exactly like a better model
+and may be a lane coming up, and on 27 August that difference was the entire
+content of a baseline nobody could read.
+
+`eval/experiments/BASELINE.md` is the wired run and
+`eval/experiments/BASELINE-NO-LANES.md` is the unwired one, kept beside it rather
+than overwritten. `make experiment-wiring` subtracts them.
 
 ## Where the line between them is
 

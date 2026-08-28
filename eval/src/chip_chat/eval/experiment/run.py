@@ -46,6 +46,7 @@ from chip_chat.eval.grounding.run import Judge as GroundingJudge
 from chip_chat.eval.grounding.scoring import score as score_grounding
 from chip_chat.eval.trajectory.expectations import expectations
 from chip_chat.eval.trajectory.scoring import score as score_trajectory
+from chip_chat.eval.wiring import UNSTATED
 
 __all__ = ["DeploymentFactory", "Experiment", "run_experiment"]
 
@@ -100,6 +101,7 @@ def run_experiment(
     factory: DeploymentFactory,
     *,
     environment: Mapping[str, str] | None = None,
+    wiring: str = UNSTATED,
     judge: GroundingJudge | None = None,
     judge_name: str = "",
     judge_tokens: int = 0,
@@ -124,6 +126,16 @@ def run_experiment(
         environment: What to resolve the configuration's empty deployment
             fields against. ``None`` resolves against nothing, which is right
             for a test and wrong for a run.
+        wiring: Which lanes the factory wired, as
+            :attr:`chip_chat.eval.wiring.Wiring.label` spells it. The caller's
+            to state rather than the runner's to discover: everything about a
+            deployment reaches this function through ``factory``, and a runner
+            that reached back through it to ask what it had built would be a
+            runner that knows what a deployment is. The one caller that runs a
+            real arm -- :mod:`chip_chat.eval.experiment.__main__` -- reads it
+            off the very lanes it hands the factory, so the two cannot drift.
+            :data:`~chip_chat.eval.wiring.UNSTATED` is the honest default for a
+            caller that did not say, and a comparison refuses to subtract it.
         judge: Settles the two judged findings of #75. ``None`` leaves both
             unscored, and the report says so.
         judge_name: What to call that judge in the result.
@@ -168,6 +180,7 @@ def run_experiment(
             dataset=dataset.name,
             dataset_version=dataset.version,
             source=deployment.name,
+            wiring=wiring,
             golden_scores=golden_scores,
             trajectory_scores=trajectory_scores,
             grounding_scores=grounding_scores,

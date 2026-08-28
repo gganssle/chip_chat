@@ -5,6 +5,9 @@ The test this module exists for is
 Everything else here is arithmetic; that one is #73's sentence.
 """
 
+import json
+from pathlib import Path
+
 from chip_chat.eval.experiment.compare import MATERIAL, compare
 from chip_chat.eval.experiment.report import render_comparison
 from chip_chat.eval.experiment.results import (
@@ -12,7 +15,10 @@ from chip_chat.eval.experiment.results import (
     LaneResult,
     Metric,
     RequirementResult,
+    load_result,
+    write_result,
 )
+from chip_chat.eval.wiring import UNSTATED
 
 
 def _lane(
@@ -46,7 +52,11 @@ def _result(
     fingerprint: str = "aaaaaaaaaaaa",
     dataset_version: str = "9ba196eb786c",
     judge: str = "",
+    wiring: str = "none",
 ) -> ExperimentResult:
+    # `wiring` defaults to a stated `none` rather than to UNSTATED, because an
+    # unstated side makes `compare` refuse to draw anything and every test below
+    # this one is about the arithmetic. The refusal has its own tests.
     return ExperimentResult(
         experiment=name,
         fingerprint=fingerprint,
@@ -55,6 +65,7 @@ def _result(
         dataset="cilantro-golden-set",
         dataset_version=dataset_version,
         source="a slice",
+        wiring=wiring,
         judge=judge,
         rows=34,
         metrics=(
@@ -183,3 +194,91 @@ def test_the_document_puts_the_regressions_above_the_numbers() -> None:
 
     assert document.index("What got worse") < document.index("The targets, side by side")
     assert "measured in" not in document.split("## By requirement")[0]
+
+
+def test_a_comparison_refuses_a_side_that_did_not_say_which_lanes_it_had() -> None:
+    """The refusal ``cc-lanes`` is about, and the one thing this module declines.
+
+    A result recorded before the harness wrote the lane configuration down is
+    not a run with an unknown-but-small difference from a run that recorded one:
+    it is a run whose delta could be entirely a lane coming up, and a reader
+    would see a number that looks like a better model. So the tables are not
+    drawn at all.
+    """
+    baseline = _result("before", wiring=UNSTATED)
+    candidate = _result("after", fingerprint="bbbbbbbbbbbb", wiring="account")
+
+    comparison = compare(baseline, candidate)
+    document = render_comparison(comparison)
+
+    assert not comparison.stated
+    assert comparison.unstated_sides == ("baseline 'before'",)
+    assert "No comparison" in document
+    assert "The targets, side by side" not in document
+
+
+def test_both_sides_unstated_names_both_of_them() -> None:
+    comparison = compare(
+        _result("before", wiring=UNSTATED),
+        _result("after", fingerprint="bbbbbbbbbbbb", wiring=UNSTATED),
+    )
+
+    assert comparison.unstated_sides == ("baseline 'before'", "candidate 'after'")
+
+
+def test_two_stated_wirings_are_compared_and_the_difference_is_a_warning() -> None:
+    """Stated and different is the interesting comparison, not a refused one.
+
+    Wired against unwired is the delta between what the model can do and what
+    the deployment lets it do, which is the most useful subtraction this harness
+    performs. Refusing it would be the wrong lesson to draw from the refusal
+    above: what cannot be read is an *unlabelled* difference.
+    """
+    baseline = _result("before", wiring="none")
+    candidate = _result("after", wiring="account+personalization")
+
+    comparison = compare(baseline, candidate)
+    document = render_comparison(comparison)
+
+    assert comparison.stated
+    assert any("different lanes wired" in note for note in comparison.warnings)
+    assert "The targets, side by side" in document
+
+
+def test_the_same_fingerprint_under_two_wirings_is_not_called_run_to_run_noise() -> None:
+    """It is a measurement of the wiring, and the warning has to say so."""
+    comparison = compare(
+        _result("before", wiring="none"),
+        _result("after", wiring="account+personalization"),
+    )
+
+    variance = [note for note in comparison.warnings if "fingerprint" in note]
+
+    assert variance
+    assert "measuring the wiring" in variance[0]
+    assert "run-to-run variance" not in variance[0]
+
+
+def test_a_result_records_its_wiring_and_reads_it_back(tmp_path: Path) -> None:
+    """The column survives a round trip, which is what a comparison reads."""
+    path = tmp_path / "recorded.json"
+    write_result(_result("wired", wiring="account+personalization"), path)
+
+    assert load_result(path).wiring == "account+personalization"
+
+
+def test_a_result_recorded_before_the_column_existed_reads_back_unstated(
+    tmp_path: Path,
+) -> None:
+    """An old file is a file that did not say, and must not read as ``none``.
+
+    Defaulting the missing key to ``none`` would be a guess -- almost certainly
+    a correct one, since nothing could wire a lane before this landed -- written
+    into a record as though it had been measured.
+    """
+    path = tmp_path / "old.json"
+    payload = dict(_result("old").as_json())
+    del payload["wiring"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert load_result(path).wiring == UNSTATED

@@ -113,28 +113,64 @@ because `redeem_points` is offered to no model.
 
 ## 2. The five headline targets
 
-| Metric | Target | Measured | Verdict |
-| --- | --- | --- | --- |
-| Task completion on the golden set | ≥ 85% | 14.7% (shipped prompt) | **short** |
-| Tool-selection accuracy | ≥ 95% | **68.8%** offline / **42.9%** live | **short** |
-| Groundedness of food and policy claims | ≥ 0.95 | **71.4%** | **short** |
-| Menu claims made without a citation | 0 | **not measured** | **unmeasured** |
-| Photo → order, component-level F1 | ≥ 0.80 | not measured live | **unmeasured** |
+**Re-measured 28 August 2026 against lanes that are actually wired.** Every
+number below the first pass of this section was produced against
+`chip_chat.agent.lanes.NO_LANES`, because until `cc-lanes` the harness had no way
+to be handed anything else and did not record which it had used. Those numbers
+were a correct measurement of the unwired week-one slice presented as a
+measurement of the deployment. The table now says which it is, and both are
+given, because the difference between them is a fact about the system worth
+having.
 
-Two qualifications, both of which cut against the numbers rather than for them:
+| Metric | Target | **Deployed** (`account+personalization`) | Unwired (`none`) | Verdict |
+| --- | --- | --- | --- | --- |
+| Task completion on the golden set | ≥ 85% | **20.6%** (19 of 34 scored) | 17.6% | **short** |
+| Tool-selection accuracy | ≥ 95% | **65.6%** (32 of 34 scored) | 56.2% | **short** |
+| Groundedness of food and policy claims | ≥ 0.95 | **70.0%** (10 of 10 scored) | 40.0% | **short** |
+| Menu claims made without a citation | 0 | **not measurable** | not measurable | **unmeasured** |
+| Photo → order, component-level F1 | ≥ 0.80 | delegated, not run live | delegated | **unmeasured** |
 
-- Both live runs were degraded by **429s on the shared `gpt-5-mini` deployment**
-  while other agents ran evals concurrently. `scored` is 13 and 10 of 34, and
-  every baseline document prints that column beside its rate. These are an upper
-  bound on quality under contention, not a clean measurement.
-- Uncited menu claims is unmeasured because **no deployment builds a
-  `ResponseEnvelope`** (bead `cc-bap`). That is wiring, not model behaviour, and
-  it means K2 cannot currently be scored at all.
+Both columns are the same arm — `shipped`, `0ec39d67a727`, prompt
+`v1+1c6f84d1f21f`, dataset `cilantro-golden-set 9ba196eb786c`, judged by
+`gpt-5-mini` — run fifteen minutes apart with `--lanes` as the only difference.
+`eval/experiments/BASELINE.md`, `eval/experiments/BASELINE-NO-LANES.md` and
+`eval/experiments/WIRING.md`. The verdict column is unchanged: **three of the
+five are still short, and by margins that are not rounding.**
 
-**Over-refusal was measured alongside under-refusal**, as #75 insists: **4
-over-refusals against 1 under-refusal.** That asymmetry is the direction a
-cautious system drifts, and measuring only under-refusal would have produced a
-system that hedges everything and scores well.
+Four qualifications. The first two are new and cut in opposite directions; the
+last two are unchanged and still cut against the numbers.
+
+- **The lanes are worth +9.4 points of tool selection, and +50 in the lane they
+  are about.** The account lane goes 16.7% → 66.7% and 14.3% → 42.9% completion,
+  because `ask_account_question` is offered to the model at all rather than
+  withheld by `CONDITIONAL_TOOLS`. Its seven rows had been scoring zero *because
+  the tool the row expects did not exist in the process doing the scoring* — not
+  because the model chose wrongly. `docs/decisions/eval-lane-wiring.md`.
+- **The 429s are gone and that is most of the improvement over the last
+  reading.** `gpt-5-mini` went from 10,000 to 200,000 tokens a minute, and
+  `scored` went from 13 and 14 of 34 to 32 of 34 on both sides. Against the
+  429-degraded 14.7% / 42.9%, the pair of runs above separates the two causes:
+  roughly **+13 points of tool selection and eighteen scoreable rows from the
+  capacity, +9.4 from the wiring**.
+- Uncited menu claims is **unmeasurable, not unmeasured-by-choice**, because no
+  deployment builds a `ResponseEnvelope` (bead `cc-bap`). K2 cannot be scored at
+  all, wiring or not; a lane coming up does not mint a citation id.
+- **Two of the five lanes are still absent under `--lanes wired`.** Knowledge
+  needs a retriever against the live alias (`cc-e1sr`) and photo needs the upload
+  route and a production catalogue loader (`cc-mpd`). So `search_menu_knowledge`
+  still answers from a three-item hardcoded menu — the groundedness number above
+  is grounded in a fixture — and `match_meal_from_photo` is still unregistered.
+  Two further rows are unscoreable for reasons that are not the model's:
+  `get_recommendations` is offered once the lane is wired and then declines,
+  because `MARTS.recommendations` does not exist (`chip-znk` / `cc-afo5`), and
+  `redeem_points` is not in `agent.tools.TOOLS` at all.
+
+**Over-refusal was measured alongside under-refusal**, as #75 insists. Re-read
+on 28 August: **5 over-refusals wired against 2 unwired**, all in the knowledge
+lane, with ungrounded findings going the other way, 3 against 6. A system given
+more tools refused more and asserted less, which is the direction a cautious
+system drifts and the reason measuring only under-refusal would have produced
+one that hedges everything and scores well.
 
 **Latency.** Median turn **34.2 s**, p95 **62.7 s**, over 69 `chat.turn` spans in
 Application Insights, of which `llm.completion` is median 20.2 s — the turn is
@@ -155,7 +191,7 @@ infrastructure ($41.50) makes the all-in number **$0.21**. `docs/cost.md`.
 | Criterion | Verdict | Evidence |
 | --- | --- | --- |
 | Every PRD requirement met or **explicitly deferred with a note** | **partial** | §5 — the notes exist for the deferred ones; four are simply not done |
-| Golden set clears its targets in an experiment, **result recorded** | **fail** | Recorded (`eval/experiments/results/shipped.json`), does not clear |
+| Golden set clears its targets in an experiment, **result recorded** | **fail** | Recorded (`eval/experiments/results/shipped.json`), does not clear. As of `cc-lanes` that record states the lane configuration it was produced under, and a comparison against one that does not is refused rather than drawn — so "recorded" now means recorded *as something*, which it did not before |
 | Online evals and cost monitors **live before the URL is shared** | **pass** | Live since 28 Aug against a hosted Phoenix in `cae-chip-chat` (internal ingress, min=1), driven by `caj-chip-chat-monitors` on a `*/15` cron. Evidence: 142 spans / 16 traces arriving, App Insights receiving the *same* trees span-for-span, and monitors firing on real traffic — 3 ungrounded-claim tickets and one refusal-where-the-corpus-answered. Judge spend measured at **959 tokens/judged turn = 4.8% of the daily ceiling**. Arize AX was **not** purchased; `docs/decisions/hosted-phoenix.md` records the deviation and what is lost |
 | Daily spend ceiling tested by **actually tripping it** | **pass, offline** | `eval/tests/test_spend_ceiling_tripped.py` — real uvicorn, real TCP, ceiling reached by talking, zero tokens asserted twice. Not tripped on the public deployment (2 M tokens; it would take the demo down) |
 | A stranger completes three tasks **without narration** | **not attempted** | §4.1 makes this unwise today |
@@ -312,8 +348,15 @@ In the order that costs least per unit of readiness bought.
    `docs/decisions/hosted-phoenix.md`.
 5. **Re-run the gate-1 contended suite** once (1) lands, so the pass is earned by
    the row access policy rather than by the model declining.
-6. **Re-measure the five targets** without 429 contention, on a dedicated
-   deployment or serialised.
+6. ~~**Re-measure the five targets** without 429 contention.~~ **Done, 28 Aug**,
+   and it needed a second thing nobody had noticed was missing: the harness
+   defaulted to `NO_LANES` at every entry point and did not record which
+   configuration it had scored, so the first re-measurement after (1) landed came
+   back byte-identical and correct. §2 now carries both columns.
+   `docs/decisions/eval-lane-wiring.md`. **The verdict did not change** — three
+   of five are still short — but two of the three are short by less, and the
+   account lane's zero turned out to be an artefact of the harness rather than a
+   property of the model.
 7. Then reassess. Nothing in this list is research; all of it is wiring, and most
    of the underlying work is done and tested.
 
@@ -338,3 +381,10 @@ a scheduled retrain. The unaffiliated framing is correct and unmissable.
 
 And the evaluation harness caught a regression that the aggregate would have
 called an improvement — which is the whole reason it exists.
+
+It also, on 28 August, caught itself: a re-run that came back byte-identical
+after two changes that should each have moved it, because it had been scoring a
+configuration nobody had written down. The fix was to make the configuration part
+of every number and to **refuse** a comparison whose sides do not both state it.
+A harness that can be wrong about what it measured is worth less than one that
+says so, and this one now says so.

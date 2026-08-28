@@ -39,6 +39,7 @@ from chip_chat.eval.trajectory.trees import (
     from_readable_spans,
     read_trajectory,
 )
+from chip_chat.eval.wiring import Wiring
 from chip_chat.otel.testing import span_recorder
 
 __all__ = ["RECORDER_COMPONENT", "SliceTraceSource"]
@@ -86,9 +87,24 @@ class SliceTraceSource:
     prompt: SystemPrompt | None = None
 
     @property
+    def wiring(self) -> Wiring:
+        """Which lanes this run has. See :mod:`chip_chat.eval.wiring`."""
+        return Wiring.of(self.lanes)
+
+    @property
     def name(self) -> str:
-        """The source, as the report names it."""
-        return f"week-one slice on {self.model.deployment}, read from spans"
+        """The source, as the report names it.
+
+        The lane configuration is in the name for the reason
+        :attr:`chip_chat.eval.golden.slice.SliceDeployment.name` gives, and it
+        bites hardest here: a tool that is not offered cannot be routed to, so a
+        lane-selection number taken unwired is a number about the tool list
+        rather than about the model.
+        """
+        return (
+            f"week-one slice on {self.model.deployment}, read from spans, "
+            f"lanes: {self.wiring}"
+        )
 
     def trajectory(self, expectation: Expectation) -> Trajectory:
         """Run one row and read its span tree.

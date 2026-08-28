@@ -38,6 +38,15 @@ model calls per *scoreable* row rather than per row, and the run prints what it
 spent, because #76 makes judge tokens a line in the daily budget rather than a
 cost nobody attributed.
 
+``--lanes wired`` runs the turns against the lanes the deployment has, and the
+thing to know about it here is what it does **not** wire: the knowledge lane is
+``cc-e1sr`` and is absent under every value of the flag, so
+``search_menu_knowledge`` still answers off the three-item hardcoded menu and a
+groundedness number is still a number about a fixture. What wiring changes here
+is which *other* lanes a turn could have gone down instead. The report's
+**Answered by** line names the configuration on every run;
+:mod:`chip_chat.eval.wiring` is why it does.
+
 .. code-block:: console
 
     $ python -m chip_chat.eval.grounding --check
@@ -45,6 +54,7 @@ cost nobody attributed.
     $ export CHIP_CHAT_FOUNDRY_ENDPOINT=... CHIP_CHAT_FOUNDRY_API_KEY=...
     $ python -m chip_chat.eval.grounding --judge --out eval/grounding/BASELINE.md
     $ python -m chip_chat.eval.grounding --judge gpt-4.1-mini
+    $ python -m chip_chat.eval.grounding --judge --lanes wired
 """
 
 import argparse
@@ -59,6 +69,7 @@ from chip_chat.eval.dataset.build import Dataset, DatasetError, build_dataset
 from chip_chat.eval.golden.cases import DEFAULT_MANIFEST as GOLDEN_MANIFEST
 from chip_chat.eval.golden.cases import CaseError, GoldenSet
 from chip_chat.eval.golden.run import DEFAULT_SESSION
+from chip_chat.eval.golden.slice import SLICE_PERSONA
 from chip_chat.eval.grounding.coverage import RATE_NEEDS, coverage
 from chip_chat.eval.grounding.judge import ModelJudge
 from chip_chat.eval.grounding.questions import Question, QuestionError, questions
@@ -67,6 +78,7 @@ from chip_chat.eval.grounding.run import run_turns
 from chip_chat.eval.grounding.slice import SliceTurnSource
 from chip_chat.eval.grounding.testing import CEILING_CAVEAT, CEILING_SOURCE, ceiling
 from chip_chat.eval.photos.labels import LabeledSet, LabelError
+from chip_chat.eval.wiring import LaneWiringError, add_lanes_option, run_lanes
 
 PHOTOS_MANIFEST = Path("eval/photos/labels.json")
 DEFAULT_BASELINE = Path("eval/grounding/BASELINE.md")
@@ -112,9 +124,20 @@ def main(argv: list[str] | None = None) -> int:
         except FoundryConfigError as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
-        adapter = SliceTurnSource(golden=golden, model=model, session_prefix=args.session)
-        turns = run_turns(rows, adapter, only=args.only)
-        source = adapter.name
+        try:
+            with run_lanes(args.lanes, SLICE_PERSONA) as wired:
+                print(wired.note)
+                adapter = SliceTurnSource(
+                    golden=golden,
+                    model=model,
+                    lanes=wired.lanes,
+                    session_prefix=args.session,
+                )
+                turns = run_turns(rows, adapter, only=args.only)
+                source = adapter.name
+        except LaneWiringError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
         caveat = ""
 
     try:
@@ -270,6 +293,7 @@ def _parser() -> argparse.ArgumentParser:
         default=DEFAULT_SESSION,
         help="prefix for the session id each row is run under",
     )
+    add_lanes_option(parser)
     parser.add_argument(
         "--out",
         type=Path,

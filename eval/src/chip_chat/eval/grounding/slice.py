@@ -46,6 +46,7 @@ from chip_chat.eval.grounding.evidence import read_evidence
 from chip_chat.eval.grounding.questions import Question
 from chip_chat.eval.grounding.run import Turn
 from chip_chat.eval.trajectory.trees import from_readable_spans
+from chip_chat.eval.wiring import Wiring
 from chip_chat.otel.testing import span_recorder
 
 __all__ = ["RECORDER_COMPONENT", "SliceTurnSource"]
@@ -88,9 +89,24 @@ class SliceTurnSource:
     prompt: SystemPrompt | None = None
 
     @property
+    def wiring(self) -> Wiring:
+        """Which lanes this run has. See :mod:`chip_chat.eval.wiring`."""
+        return Wiring.of(self.lanes)
+
+    @property
     def name(self) -> str:
-        """The source, as the report names it."""
-        return f"week-one slice on {self.model.deployment}, retrieval read from spans"
+        """The source, as the report names it.
+
+        The lane configuration is in the name for the reason
+        :attr:`chip_chat.eval.golden.slice.SliceDeployment.name` gives. It
+        matters here in a way that is easy to miss: without the knowledge lane
+        ``search_menu_knowledge`` still answers, off the three-item hardcoded
+        menu, so a groundedness number taken unwired is grounded in a fixture.
+        """
+        return (
+            f"week-one slice on {self.model.deployment}, retrieval read from "
+            f"spans, lanes: {self.wiring}"
+        )
 
     @property
     def reports(self) -> frozenset[Signal]:
