@@ -1200,12 +1200,13 @@ ops-key: ## Mint the ops API's shared secret in Key Vault if it is not there
 # the container app's revision so it picks the new value up.
 ops-host-key: ## Copy the ops API's platform host key into Key Vault
 	@key=$$(az functionapp keys list -g $(RG) -n $(OPS_APP) \
-		--query functionKeys.default -o tsv) && \
-		test -n "$$key" || { echo "the ops API has no default function key"; exit 1; }; \
+		--query functionKeys.default -o tsv); \
+	if [ -z "$$key" ]; then \
+		echo "$(OPS_APP) has no default host key; is the app deployed?"; exit 1; \
+	fi; \
 	az keyvault secret set --vault-name $(OPS_VAULT) --name $(OPS_HOST_KEY_SECRET) \
 		--description "A copy of $(OPS_APP)'s default host key, so the chat app can present x-functions-key." \
-		--value "$$(az functionapp keys list -g $(RG) -n $(OPS_APP) --query functionKeys.default -o tsv)" \
-		-o none && \
+		--value "$$key" -o none && \
 		echo "copied $(OPS_APP)'s default host key into $(OPS_HOST_KEY_SECRET)"
 
 ops-package: ## Build the workspace into the wheels the Functions host installs
