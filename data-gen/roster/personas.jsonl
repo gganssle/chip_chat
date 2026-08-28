@@ -1,7 +1,7 @@
-{"home_store":2007,"label":"The Weekly Regular","narrative":"Same bowl, same store, the same day nearly every week, for as long as the data goes back.","persona_id":"regular","seed_points":250}
-{"home_store":2016,"label":"The Lapsed Regular","narrative":"Ordered steadily for a year, then stopped about four months ago.","persona_id":"lapsed","seed_points":180}
-{"home_store":2034,"label":"The Explorer","narrative":"Rarely orders the same thing twice, and rarely from the same store.","persona_id":"explorer","seed_points":60}
-{"home_store":2032,"label":"The Office Manager","narrative":"Puts in the midweek lunch order for the whole floor, on delivery.","persona_id":"office_manager","seed_points":900}
-{"home_store":2056,"label":"The Weekend Family","narrative":"Three or four entrees, chips for the table, most weekends.","persona_id":"weekend_family","seed_points":140}
-{"home_store":2007,"label":"The Newcomer","narrative":"First order about five months ago; still working out the usual.","persona_id":"newcomer","seed_points":0}
-{"home_store":2022,"label":"The Occasional Visitor","narrative":"Turns up every couple of months, usually somewhere new.","persona_id":"occasional","seed_points":20}
+{"home_store":840,"label":"The Weekly Regular","narrative":"Same bowl, same store, the same day nearly every week, for as long as the data goes back.","persona_id":"regular","seed_points":250}
+{"home_store":1819,"label":"The Lapsed Regular","narrative":"Ordered steadily for a year, then stopped about four months ago.","persona_id":"lapsed","seed_points":180}
+{"home_store":4166,"label":"The Explorer","narrative":"Rarely orders the same thing twice, and rarely from the same store.","persona_id":"explorer","seed_points":60}
+{"home_store":3826,"label":"The Office Manager","narrative":"Puts in the midweek lunch order for the whole floor, on delivery.","persona_id":"office_manager","seed_points":900}
+{"home_store":6143,"label":"The Weekend Family","narrative":"Three or four entrees, chips for the table, most weekends.","persona_id":"weekend_family","seed_points":140}
+{"home_store":840,"label":"The Newcomer","narrative":"First order about five months ago; still working out the usual.","persona_id":"newcomer","seed_points":0}
+{"home_store":2509,"label":"The Occasional Visitor","narrative":"Turns up every couple of months, usually somewhere new.","persona_id":"occasional","seed_points":20}

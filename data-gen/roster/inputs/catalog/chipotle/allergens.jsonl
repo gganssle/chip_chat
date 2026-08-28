@@ -1,0 +1,4 @@
+{"allergen_code":"dair","badge_text":"!","harvested_at":"2026-08-28T17:58:05.191837+00:00","name":"Dairy","source_url":"https://services.chipotle.com/menu-metadata/v1/menu-metadata/nutrition?channel=web&region=US"}
+{"allergen_code":"glut","badge_text":"!","harvested_at":"2026-08-28T17:58:05.191837+00:00","name":"Gluten","source_url":"https://services.chipotle.com/menu-metadata/v1/menu-metadata/nutrition?channel=web&region=US"}
+{"allergen_code":"soy","badge_text":"!","harvested_at":"2026-08-28T17:58:05.191837+00:00","name":"Soy","source_url":"https://services.chipotle.com/menu-metadata/v1/menu-metadata/nutrition?channel=web&region=US"}
+{"allergen_code":"sulp","badge_text":"!","harvested_at":"2026-08-28T17:58:05.191837+00:00","name":"Sulphites","source_url":"https://services.chipotle.com/menu-metadata/v1/menu-metadata/nutrition?channel=web&region=US"}

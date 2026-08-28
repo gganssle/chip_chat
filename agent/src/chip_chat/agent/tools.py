@@ -160,15 +160,23 @@ def _narrowed_to_the_orderable_menu(
     is the change ``cc-jqs`` had left as a sentence. It used to be pinned to the
     three items in :data:`chip_chat.agent.hardcoded.MENU` with a note saying
     *"when the real catalogue reaches the desk, the enum is generated from it and
-    this is the function that does it"*. The real catalogue has reached the desk
-    -- ``CHIP_CHAT.CATALOGUE.menu_items`` is ten published rows, small enough to
-    enumerate in a tool definition and large enough that pinning it to three
-    would now be the thing that breaks ordering, because ``get_usual_order``
-    answers off the real marts and names real ids the model could not then
-    propose.
+    this is the function that does it"*. The real catalogue has reached the desk,
+    and since GitHub #106 it is the whole published menu -- 192 rows, where it
+    was ten. Pinning the enum to three would break ordering outright, because
+    ``get_usual_order`` answers off the real marts and names real ids the model
+    could not then propose.
+
+    **192 is not free.** The enum and the description it travels with cost
+    about 5,150 tokens of every request, against 120 when the catalogue was ten
+    rows; ``docs/menu-data.md`` §5 has the measurement.
+    :meth:`chip_chat.agent.desk.Desk.orderable_menu` answering ``None`` is the
+    lever if that becomes the wrong trade, and it is deliberately not pulled
+    here -- an open schema is a *policy* change to what the model may name, and
+    it belongs in the desk that knows what it can price rather than in the
+    function that formats a definition.
 
     **The description travels with the enum**, and leaving it out was a real
-    outage rather than a hypothetical one. A model shown ten ``CMG-*`` ids and
+    outage rather than a hypothetical one. A model shown opaque ``CMG-*`` ids and
     nothing else cannot compose a draft: it has no names to match a visitor's
     words against and no way to know a bowl requires a rice. It guesses, gets
     ``REQUIRED_SLOT_EMPTY``, guesses again, and reaches the loop's step ceiling.

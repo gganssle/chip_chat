@@ -1,0 +1,42 @@
+{
+  "catalog_version": "9e74c674a5e049a03f3a0a1a242854fdfc68bf4a49fac4ef22d1f202514fdb9c",
+  "content_version": "920ce7a1edab6623befc246cd9d9b1cb098196fa9188f396a3fccc019c75bbb4",
+  "reference_restaurant_id": 679,
+  "restaurant_ids": [
+    679
+  ],
+  "tables": {
+    "allergens": {
+      "rows": 4,
+      "sha256": "14ec6405aeeba60b7ec5b5828f8320a379a434dfb7fece2953cb531cfeb9ceac"
+    },
+    "caveats": {
+      "rows": 5,
+      "sha256": "e3fe014566f965ed5b65a51dea7b9a81f266d85248b5556ebb474b37ddc144e9"
+    },
+    "item_allergens": {
+      "rows": 768,
+      "sha256": "404b7c02bf843764adfed818ee23aa4acaa9d971a6498da2cca611b0b62990fc"
+    },
+    "item_prices": {
+      "rows": 192,
+      "sha256": "5c54d01c1d0653e0be6e9893306b5695b310b53206835fd3aaef143ca04e7877"
+    },
+    "menu_items": {
+      "rows": 192,
+      "sha256": "74953b2aa8fed1cccb380841b78f41030c29f0902266365c55635e6e206e013a"
+    },
+    "modifiers": {
+      "rows": 1385,
+      "sha256": "8f92ac18e32217fa4894ed395b5afa2680203511ea4865d0440921e02bb06e0a"
+    },
+    "stores": {
+      "rows": 30,
+      "sha256": "149da90b1e7d3cb1817fb8806010837dd9fe7ff1c9583b3a615b36fd7ba4f3f0"
+    },
+    "vocabulary": {
+      "rows": 48,
+      "sha256": "246df3e42024e399a1f7763ad3d5a03d4b0dc3b8c2fa9fa88ecc546eb79e0f65"
+    }
+  }
+}

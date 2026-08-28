@@ -6,9 +6,13 @@ from chip_chat.search import schema
 from chip_chat.search.embedding import (
     DEFAULT_DEPLOYMENT,
     DEFAULT_MODEL,
+    DEFAULT_RETRY_AFTER,
+    MAXIMUM_RETRY_AFTER,
     EmbeddingDeployment,
     EmbeddingError,
+    HttpEmbedder,
     batched,
+    throttled_attempts,
 )
 
 ENDPOINT = "https://aif-example.cognitiveservices.azure.com/"
@@ -95,3 +99,152 @@ def test_batching_keeps_the_order_and_covers_everything() -> None:
 def test_a_batch_of_nothing_is_a_loop_that_never_ends() -> None:
     with pytest.raises(ValueError, match="must be positive"):
         list(batched(["a"], 0))
+
+
+# ---------------------------------------------------------------------------
+# Pacing
+# ---------------------------------------------------------------------------
+#
+# The build embeds every chunk in the corpus and the corpus grew twelve-fold on
+# GitHub #106 -- 31 chunks to 358 -- which is the first time this path met the
+# S0 deployment's rate limit. It met it by dying: `429 RateLimitReached`, a new
+# index created and then abandoned, the alias still serving the old one. The
+# right *failure* semantics and the wrong outcome, because nothing was wrong.
+#
+# Retrying is safe here in a way it is not everywhere, and that is the whole
+# argument for doing it at this layer: embedding is a pure function of the text,
+# so a repeated batch produces the same vectors and costs one more call. There
+# is no partial state, which is why these tests are about *when* it waits and
+# *how long*, and there is nothing about reconciliation to test.
+
+
+class _Response:
+    """One answer from the deployment, with only what the embedder reads."""
+
+    def __init__(
+        self, status_code: int, *, headers: dict[str, str] | None = None, vectors: int = 0
+    ) -> None:
+        self.status_code = status_code
+        self.headers = headers or {}
+        self.text = "rate limited" if status_code != 200 else ""
+        self._vectors = vectors
+
+    def json(self) -> dict[str, object]:
+        return {
+            "data": [{"index": i, "embedding": [0.0, 1.0]} for i in range(self._vectors)]
+        }
+
+
+class _Client:
+    """Answers a scripted sequence and records how many times it was asked."""
+
+    def __init__(self, responses: list[_Response]) -> None:
+        self._responses = responses
+        self.calls = 0
+
+    def post(self, _url: str, **_kwargs: object) -> _Response:
+        response = self._responses[min(self.calls, len(self._responses) - 1)]
+        self.calls += 1
+        return response
+
+
+class _Token:
+    def token(self) -> str:
+        return "a-token"
+
+
+def _embedder(
+    responses: list[_Response], waited: list[float], attempts: int = 6
+) -> "HttpEmbedder":
+    return HttpEmbedder(
+        EmbeddingDeployment(endpoint=ENDPOINT),
+        _Client(responses),
+        _Token(),
+        attempts=attempts,
+        sleep=waited.append,
+    )
+
+
+def test_a_throttled_batch_is_offered_again_rather_than_abandoned() -> None:
+    waited: list[float] = []
+    embedder = _embedder(
+        [
+            _Response(429, headers={"Retry-After": "7"}),
+            _Response(200, vectors=1),
+        ],
+        waited,
+    )
+
+    assert embedder.embed(["one"]) == [[0.0, 1.0]]
+    assert waited == [7.0]
+
+
+def test_it_waits_as_long_as_the_deployment_asked_for() -> None:
+    # The account's own Retry-After has been observed at 54 seconds. Waiting a
+    # fixed shorter interval would be a second refusal rather than a retry.
+    waited: list[float] = []
+    embedder = _embedder(
+        [_Response(429, headers={"Retry-After": "54"}), _Response(200, vectors=1)],
+        waited,
+    )
+
+    embedder.embed(["one"])
+
+    assert waited == [54.0]
+
+
+def test_a_refusal_with_no_header_still_waits_a_defensible_interval() -> None:
+    waited: list[float] = []
+    embedder = _embedder([_Response(429), _Response(200, vectors=1)], waited)
+
+    embedder.embed(["one"])
+
+    assert waited == [DEFAULT_RETRY_AFTER]
+
+
+def test_an_absurd_retry_after_is_capped_rather_than_slept_through() -> None:
+    waited: list[float] = []
+    embedder = _embedder(
+        [_Response(429, headers={"Retry-After": "3600"}), _Response(200, vectors=1)],
+        waited,
+    )
+
+    embedder.embed(["one"])
+
+    assert waited == [MAXIMUM_RETRY_AFTER]
+
+
+def test_a_deployment_that_never_yields_raises_rather_than_looping() -> None:
+    waited: list[float] = []
+    embedder = _embedder([_Response(429)], waited, attempts=3)
+
+    with pytest.raises(EmbeddingError, match="429"):
+        embedder.embed(["one"])
+
+    assert len(waited) == 2, "the last attempt is a call, not a wait"
+
+
+def test_nothing_but_a_429_is_retried() -> None:
+    # A 400 is a request this build will never get right by asking again, and a
+    # 401 is a credential. Retrying either would turn a clear error into a slow
+    # one.
+    waited: list[float] = []
+    embedder = _embedder([_Response(400)], waited)
+
+    with pytest.raises(EmbeddingError, match="400"):
+        embedder.embed(["one"])
+
+    assert waited == []
+
+
+def test_a_batch_that_succeeds_first_time_waits_for_nothing() -> None:
+    waited: list[float] = []
+    embedder = _embedder([_Response(200, vectors=2)], waited)
+
+    assert len(embedder.embed(["one", "two"])) == 2
+    assert waited == []
+
+
+def test_no_attempts_is_a_build_that_reports_success_without_calling_anything() -> None:
+    with pytest.raises(ValueError, match="attempts must be positive"):
+        throttled_attempts(0)

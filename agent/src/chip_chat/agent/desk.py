@@ -50,8 +50,23 @@ was refused with ``REQUIRED_SLOT_EMPTY``, guessed again, and hit the loop's step
 ceiling. A vocabulary the model cannot *use* is not narrower than an open one --
 it is an empty one. So the menu carries the names, the prices and the required
 groups with the modifier ids that fill them, all read off the catalogue rather
-than written out anywhere, and small enough to belong in a tool definition
-because the published catalogue this demo harvests is ten items.
+than written out anywhere.
+
+**It is no longer small.** That sentence used to end "and small enough to belong
+in a tool definition because the published catalogue this demo harvests is ten
+items", and GitHub #106 replaced those ten rows with the 192 Chipotle actually
+publishes. Measured on the built catalogue of 28 August 2026, the description
+:func:`chip_chat.api.orderdesk._describe` composes went from 480 characters to
+20,605 — roughly 120 tokens to 5,150, paid on every turn, because a tool
+definition is part of every request. The enum went from ten values to 192.
+
+The narrowing was kept anyway, and the argument is the one two paragraphs up
+rather than a cost argument: a model given ids with no names and no required
+groups cannot compose a draft at all, and that was watched happening rather
+than hypothesised. :meth:`Desk.orderable_menu` may still answer ``None`` for a
+catalogue that has grown past what belongs in a tool definition, and this one is
+at the edge of that; ``docs/menu-data.md`` §5 records the measurement and what
+would have to change to act on it.
 """
 
 from collections.abc import Mapping, Sequence

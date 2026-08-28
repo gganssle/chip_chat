@@ -33,6 +33,12 @@ harvest/cache
 harvest/output
 data-gen/output
 data/generated
+# The landing zone: twenty-odd megabytes of harvest, catalogue and synthetic
+# population that the *build* has no use for. `build/vision_vocabulary.py` is
+# derived from it and is deliberately not excluded -- the runtime stage copies
+# that one file into site-packages, and it is the only thing the image needs
+# out of a landing zone.
+landing
 node_modules
 **/node_modules
 web/dist

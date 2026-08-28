@@ -286,6 +286,22 @@ variable "vision_deployment" {
   default     = "gpt-4.1-mini"
 }
 
+variable "vision_vocabulary_module" {
+  description = <<-EOT
+    Dotted name of the generated vision vocabulary module the image carries.
+
+    RFC-001 section 07 generates the photo lane's enums from the live catalogue
+    at build time rather than committing a list, so this names a module that
+    `make image` writes and the Dockerfile copies into site-packages. It is a
+    name and not a path because `chip_chat.vision.Vocabulary.from_env` imports
+    it; set it to "" on a deployment that ships no vocabulary, which withdraws
+    `match_meal_from_photo` from the model's tool list rather than answering
+    from a vocabulary nobody generated.
+  EOT
+  type        = string
+  default     = "chip_chat.vision_vocabulary"
+}
+
 variable "embedding_deployment" {
   description = <<-EOT
     Which entry of var.model_deployments answers the knowledge lane (issue #48).

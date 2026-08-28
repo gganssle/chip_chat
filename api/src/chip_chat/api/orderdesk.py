@@ -189,17 +189,28 @@ class OpsDesk:
     def orderable_menu(self) -> OrderableMenu:
         """What the published catalogue can price, as ``propose_order`` needs it.
 
-        The whole catalogue rather than a curated subset, and it is small enough
-        for that to be reasonable -- ``CHIP_CHAT.CATALOGUE.menu_items`` is the
-        ten rows the harvest published. A catalogue that grew past what belongs
-        in a tool definition would want
-        :meth:`chip_chat.agent.desk.Desk.orderable_menu` to answer ``None`` and
-        leave the schema open, and the enforcement would fall back to where it
-        has always really been: the draft store's own pricing, which refuses an
-        unpriced item, and the procedure's catalogue check behind that.
+        The whole catalogue rather than a curated subset. That used to be
+        obviously reasonable -- ``CHIP_CHAT.CATALOGUE.menu_items`` was the ten
+        rows the harvest published -- and GitHub #106 made it 192, which is the
+        case this docstring already named: *a catalogue that grew past what
+        belongs in a tool definition would want*
+        :meth:`chip_chat.agent.desk.Desk.orderable_menu` *to answer* ``None``
+        *and leave the schema open, and the enforcement would fall back to where
+        it has always really been: the draft store's own pricing, which refuses
+        an unpriced item, and the procedure's catalogue check behind that.*
+
+        It still answers the whole catalogue, and that is a decision rather than
+        an oversight. Filtering to the 117 rows with an ``Entree``, ``Side`` or
+        ``Drink`` category saves 13 per cent and drops Guacamole, which has no
+        category and is ordered on its own every day; the weight is the 65
+        entrees' required-group modifier ids, which are the half a model cannot
+        compose a draft without. So the cost is paid and written down --
+        ``docs/menu-data.md`` §5 measures it at about 5,150 tokens of every
+        request against 120 before -- and ``None`` stays available for whoever
+        decides the trade has gone the other way.
 
         The description is composed rather than the ids alone, because a model
-        that can see ten opaque ``CMG-*`` ids and nothing else cannot compose a
+        that can see opaque ``CMG-*`` ids and nothing else cannot compose a
         draft that survives :meth:`DraftStore._require_groups` -- which is not a
         guess, it is what the first deployment of this lane did, three times,
         until it hit the loop's step ceiling. :mod:`chip_chat.agent.desk` records

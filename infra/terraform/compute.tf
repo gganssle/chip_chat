@@ -46,6 +46,16 @@ locals {
       # index's own vectorizer carries the same name, put there by the build.
       CHIP_CHAT_FOUNDRY_EMBEDDING_DEPLOYMENT = var.embedding_deployment
 
+      # The photo lane's vocabulary, as a dotted module name. RFC-001 section 07
+      # generates the model's enums from the live catalogue rather than writing
+      # them down, so the module is produced by `make image` from the built
+      # catalogue and copied into the image's site-packages -- see the Dockerfile
+      # and docs/menu-data.md. This entry is what makes it findable, and it is
+      # deliberately a name rather than a path: `Vocabulary.from_env` imports it,
+      # and an unset value withdraws `match_meal_from_photo` from the model's
+      # tool list instead of describing meals from a vocabulary nobody generated.
+      CHIP_CHAT_VISION_VOCABULARY = var.vision_vocabulary_module
+
       # deployment.environment on every span, so the deployed app's traces are
       # distinguishable from a laptop's in the same backend.
       CHIP_CHAT_ENVIRONMENT = var.environment

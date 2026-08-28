@@ -1,32 +1,32 @@
 {
-  "catalog_content_version": "0e5eb9c65accf0ff50d77903eab0cba31918157bc21402a88a520240d520a604",
-  "population_version": "df584d38e169eff703561cc81f2de7f9fb2db9142ce12e0d5ea9d532d1e0ad55",
-  "rewards_content_version": "79588ff22d15d7dddb650040d7c520caa51d01c046485047dd8cb46edb14477b",
+  "catalog_content_version": "920ce7a1edab6623befc246cd9d9b1cb098196fa9188f396a3fccc019c75bbb4",
+  "population_version": "b888dbe7a977c869085039f7bf81cea427e24ad37c36c7bc931004e4ba6b4e25",
+  "rewards_content_version": "e263d17a4dfb44dbb396d103b8b4a8c6e3a2779d6561d19e153b52b22a4788b5",
   "seed": 20260826,
   "tables": {
     "demo_visitors": {
       "rows": 500,
-      "sha256": "4c72fcfbc6bce5d8a8679bca91b992dce5e4f26b3f98d464edc39620ec37026e"
+      "sha256": "a278c884889f676920db55975245798287cb3e1c205d5d8b6587ea7723adde71"
     },
     "loyalty_ledger": {
-      "rows": 32234,
-      "sha256": "fa48f882aaefd4fe984ca3b5541eb808ec2f6862f20e1a1cfe1cf01f2f8b6b66"
+      "rows": 30428,
+      "sha256": "4d28e8d376c86f3aa7b4d92984baa2fd5ddaec89d4084ab8b5b0b04a3c9e259c"
     },
     "order_items": {
-      "rows": 48767,
-      "sha256": "2b965352da89f123cd00a5f9b4b8771a8739b593901b3ad98fc4158d51d5dcd6"
+      "rows": 73692,
+      "sha256": "8a063127ea01674fa853919e4ae4f5c901c03f7186666c276e3cf660bebea090"
     },
     "orders": {
       "rows": 18898,
-      "sha256": "586078d1854a8ea0b0e12b3904a1a9b5940c776693ba45409aad56acc0397d00"
+      "sha256": "f2783fca4d0fcbc3a3d13fc93aac2e2b35ef576015ec19f8ce4e3774318a0837"
     },
     "persona_fixtures": {
       "rows": 28,
-      "sha256": "48d0a1b3e76c32fbe5f5da7715f4ef1add239109098790de5d4c5519edd39be0"
+      "sha256": "5442e2da5404008498d2f4affa389a8ea64fb2d4f2bf22d54d2d5b4a040e3dff"
     },
     "personas": {
       "rows": 7,
-      "sha256": "9ad933d8311b875af68564e5f0b07424a7be20b90e155fd7dbd79970acfac40a"
+      "sha256": "c2a42237ff2d789a47945df62fa8f6ef20401d67dbf4a782cb128c9803e0367a"
     }
   },
   "window_ends_at": "2026-08-01T00:00:00+00:00",
