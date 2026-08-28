@@ -156,7 +156,7 @@ infrastructure ($41.50) makes the all-in number **$0.21**. `docs/cost.md`.
 | --- | --- | --- |
 | Every PRD requirement met or **explicitly deferred with a note** | **partial** | §5 — the notes exist for the deferred ones; four are simply not done |
 | Golden set clears its targets in an experiment, **result recorded** | **fail** | Recorded (`eval/experiments/results/shipped.json`), does not clear |
-| Online evals and cost monitors **live before the URL is shared** | **fail** | Built (`chip_chat.eval.online`, 6 monitors) but not live — blocked on the AX purchase |
+| Online evals and cost monitors **live before the URL is shared** | **pass** | Live since 28 Aug against a hosted Phoenix in `cae-chip-chat` (internal ingress, min=1), driven by `caj-chip-chat-monitors` on a `*/15` cron. Evidence: 142 spans / 16 traces arriving, App Insights receiving the *same* trees span-for-span, and monitors firing on real traffic — 3 ungrounded-claim tickets and one refusal-where-the-corpus-answered. Judge spend measured at **959 tokens/judged turn = 4.8% of the daily ceiling**. Arize AX was **not** purchased; `docs/decisions/hosted-phoenix.md` records the deviation and what is lost |
 | Daily spend ceiling tested by **actually tripping it** | **pass, offline** | `eval/tests/test_spend_ceiling_tripped.py` — real uvicorn, real TCP, ceiling reached by talking, zero tokens asserted twice. Not tripped on the public deployment (2 M tokens; it would take the demo down) |
 | A stranger completes three tasks **without narration** | **not attempted** | §4.1 makes this unwise today |
 | Unaffiliated notice on entry and persistent in the header | **pass** | Verified live: banner is `position: sticky` and non-dismissible; `x-robots-tag: noindex, nofollow`; `robots.txt` `Disallow: /`; no logo, wordmark or brand colour |
@@ -297,8 +297,13 @@ In the order that costs least per unit of readiness bought.
    makes the action lane reachable.
 3. **Build a `ResponseEnvelope`** (`cc-bap`). K2 becomes measurable; the
    citation-presence eval starts returning a number instead of a gap.
-4. **Purchase Arize AX Free** and repoint. Online evals go live, which is a
-   stated launch criterion. Cheap and proven.
+4. ~~Purchase Arize AX Free and repoint.~~ **Done differently, 28 Aug.** The
+   owner chose free-tier-only and AX Free needs an account signup and a Terms of
+   Service acceptance, which is not a thing to do on somebody's behalf. Phoenix
+   is hosted in the same Container Apps environment instead, the monitors run on
+   a cron, and the switch was proven to be configuration once again:
+   instrumentation diff **empty**, one line of `compute.tf`.
+   `docs/decisions/hosted-phoenix.md`.
 5. **Re-run the gate-1 contended suite** once (1) lands, so the pass is earned by
    the row access policy rather than by the model declining.
 6. **Re-measure the five targets** without 429 contention, on a dedicated
