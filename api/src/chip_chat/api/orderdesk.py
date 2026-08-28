@@ -402,6 +402,7 @@ class OpsDesk:
                 visitor.demo_id,
                 _action_arguments(action, claimed),
                 reference=reference,
+                body=_body_reference(action, claimed, reference),
             )
         )
 
@@ -414,6 +415,7 @@ class OpsDesk:
         arguments: Sequence[Any],
         *,
         reference: str,
+        body: Any = None,
     ) -> Mapping[str, Any]:
         """Sign the claimed record and post it. The body of all four writes.
 
@@ -435,6 +437,19 @@ class OpsDesk:
         here can place it again either. It is a lost receipt rather than a
         double write, which is the direction to be wrong in.
 
+        **``reference`` and ``body`` are the same value three times out of four,
+        and the fourth is the reason this takes two arguments.** ``reference`` is
+        what the confirmation is keyed by and what the grant is bound to;
+        ``body`` is what goes in the request, because that is what the route
+        reads. For ``place_order``, ``cancel_order`` and ``redeem_points`` those
+        are one id. For ``update_preferences`` they are not: the reference is
+        :func:`~chip_chat.api.confirmations.preferences_reference`, a digest,
+        and the body has to be the preferences object itself -- because the ops
+        API recomputes that digest from the body and checks the grant against
+        the result. Sending the digest would be sending a string to a route that
+        requires an object, and the write would be refused as malformed one
+        layer away from anything that explains why.
+
         Raises:
             OrderRejectedError: For a refusal and for an outage alike, because
                 the tool contract is that a write that did not happen is
@@ -444,7 +459,10 @@ class OpsDesk:
         _, token = self._grants.mint(action, demo_id, reference, arguments)
         try:
             return self._client.write(
-                action, demo_id=demo_id, reference=reference, confirmation=token
+                action,
+                demo_id=demo_id,
+                reference=reference if body is None else body,
+                confirmation=token,
             )
         except OpsRejectedError as refused:
             raise OrderRejectedError(refused.code, refused.detail) from refused
@@ -680,6 +698,22 @@ def _order_arguments(draft: Draft) -> Sequence[Any]:
             for line in draft.lines
         ],
     )
+
+
+def _body_reference(action: OpsAction, record: Confirmation, reference: str) -> Any:
+    """What goes in the request body, which is not always what keys the record.
+
+    ``update_preferences`` is the one that differs, and
+    :meth:`OpsDesk._write` says why. The object sent is the **card's** copy of
+    the preferences rather than anything that arrived with the tool call, so
+    the digest the ops API recomputes from it is the digest the grant is bound
+    to -- and a call whose preferences differ by one character from the card's
+    finds no confirmation, which is the same refusal by a different route that
+    ``docs/ops-api.md`` describes for the in-process ledger.
+    """
+    if action is not OpsAction.UPDATE_PREFERENCES:
+        return reference
+    return _plain(record.payload.get("prefs", {}))
 
 
 def _action_arguments(action: OpsAction, record: Confirmation) -> Sequence[Any]:

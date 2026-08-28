@@ -21,6 +21,7 @@ exactly the drift :mod:`chip_chat.snowflake.procedures` exists to catch, and thi
 is where the app tier's copy is held to it.
 """
 
+import json
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
@@ -702,3 +703,142 @@ def test_a_grant_is_the_only_new_thing_on_the_wire(signer: GrantSigner) -> None:
 
     assert verified.demo_id == VISITOR
     assert GRANT_HEADER.startswith("x-cilantro-")
+
+
+# ---------------------------------------------------------------------------
+# The request the client actually composes
+# ---------------------------------------------------------------------------
+
+
+class _RecordingClient(OpsClient):
+    """An ops client that records the body and headers instead of sending them.
+
+    Subclassed at :meth:`OpsClient._post` rather than at
+    :meth:`OpsClient.write`, so everything above it -- the body field each route
+    reads, the two keys, the visitor header, the grant header -- is the real
+    code path. That is the point: the bug this class was written for was in the
+    body, and a double that stubbed ``write`` would have had nothing to say
+    about it.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("https://ops.invalid", OPS_KEY, "function-key")
+        self.sent: list[tuple[str, Mapping[str, Any], Mapping[str, str]]] = []
+
+    def available(self) -> bool:
+        return True
+
+    def _post(
+        self,
+        route: str,
+        body: Mapping[str, Any],
+        demo_id: str,
+        confirmation: str,
+        *,
+        traced: bool = True,
+    ) -> tuple[int, Mapping[str, Any]]:
+        self.sent.append(
+            (route, dict(body), self._headers(demo_id, confirmation, traced=False))
+        )
+        return 200, {"ok": True, "receipt": {"ok": True, "route": route}}
+
+
+@pytest.fixture
+def recorder(
+    visitors: VisitorDesk, catalog: MenuCatalog, clock: FakeClock
+) -> tuple[OpsDesk, _RecordingClient]:
+    """A desk over a client that records what it would have sent."""
+    client = _RecordingClient()
+    desk = OpsDesk(
+        DraftStore(catalog, clock=clock),
+        ConfirmationLedger(clock=clock),
+        client,
+        GrantSigner(OPS_KEY),
+        visitors,
+    )
+    return desk, client
+
+
+def test_every_route_is_sent_the_field_it_reads(
+    recorder: tuple[OpsDesk, _RecordingClient],
+) -> None:
+    """Four routes, four body fields, and the fourth is not like the others.
+
+    ``update_preferences`` is keyed by a *digest* of what was shown and its body
+    must be the preferences **object**, because the ops API recomputes that
+    digest from the body and checks the grant against the result. Sending the
+    digest would be sending a string to a route that requires an object, and the
+    write would be refused as malformed one layer away from anything explaining
+    why -- which is exactly what it did before this test existed.
+    """
+    desk, client = recorder
+    prefs = {"display_name": "Sam"}
+    for action, arguments in (
+        (OpsAction.CANCEL_ORDER, {"order_id": "ord-9000001"}),
+        (OpsAction.REDEEM_POINTS, {"reward_id": "chips"}),
+        (OpsAction.UPDATE_PREFERENCES, {"prefs": prefs}),
+    ):
+        offered = desk.act(SESSION, action, arguments)
+        assert offered.card is not None
+        desk.confirm(SESSION, str(offered.card["confirmation_id"]))
+        assert desk.act(SESSION, action, arguments).confirmed
+
+    sent = {route: body for route, body, _ in client.sent}
+    assert sent["cancel_order"] == {"order_id": "ord-9000001"}
+    assert sent["redeem_points"] == {"reward_id": "chips"}
+    assert sent["update_preferences"] == {"prefs": prefs}
+
+
+def test_the_order_route_is_sent_the_draft_id_and_the_grant(
+    recorder: tuple[OpsDesk, _RecordingClient], visitors: VisitorDesk
+) -> None:
+    """And the four headers that make the write answerable at all.
+
+    The visitor is read back off the desk rather than written down, because the
+    roster assigns one of two archetypes at random -- which is
+    :meth:`VisitorDesk.admit` doing its job, and a test that pinned the answer
+    would be pinning the shuffle.
+    """
+    desk, client = recorder
+    bound = visitors.visitor(SESSION)
+    assert bound is not None
+    card = desk.propose(SESSION, [burrito()]).as_card()
+    draft_id = str(card["draft_id"])
+    desk.confirm(SESSION, draft_id)
+
+    desk.place(SESSION, draft_id)
+
+    route, body, headers = client.sent[-1]
+    assert route == "place_order"
+    assert body == {"draft_id": draft_id}
+    assert headers["x-cilantro-session"] == bound.demo_id
+    assert headers["x-functions-key"] == "function-key"
+    assert headers["x-cilantro-ops-key"] == OPS_KEY
+    # And the grant verifies against exactly the write it accompanies.
+    granted = GrantSigner(OPS_KEY).verify(
+        headers[GRANT_HEADER],
+        action=OpsAction.PLACE_ORDER,
+        demo_id=bound.demo_id,
+        reference_id=draft_id,
+    )
+    assert granted.arguments[0] == card["pricing"]["restaurant_id"]
+
+
+def test_the_visitor_never_reaches_the_body(
+    recorder: tuple[OpsDesk, _RecordingClient], visitors: VisitorDesk
+) -> None:
+    """Invariant 1, at the last tier where an identifier exists at all.
+
+    The ``demo_id`` travels on a header the app composes server-to-server. It is
+    never a body field, because a body field is the shape a model-named value
+    has, and the four routes' bodies carry only what the visitor was shown.
+    """
+    desk, client = recorder
+    bound = visitors.visitor(SESSION)
+    assert bound is not None
+    card = desk.propose(SESSION, [burrito()]).as_card()
+    desk.confirm(SESSION, str(card["draft_id"]))
+    desk.place(SESSION, str(card["draft_id"]))
+
+    for _, body, _ in client.sent:
+        assert bound.demo_id not in json.dumps(body)
