@@ -150,13 +150,21 @@ Snowflake every night. The Snowflake serving layer has its roles, row access pol
 view and stored procedures, and a nightly demo reset. All five lanes, the ops API, content safety,
 the public demo tier and the red-team suites exist and are tested.
 
-**Two things are honestly incomplete, and both are visible.** The tool layer on the deployed
-revision still answers from in-memory fallbacks rather than the lanes behind it —
-`GET /healthz/lanes` returns `not_wired` for all five, which is the correct answer and not a
-contradiction. And a visitor can see one consequence of that: the opening message reads the
-assigned persona while `get_points_balance` reads a hardcoded account, so one conversation can
-present two balances. [`docs/public-demo.md`](docs/public-demo.md) has the transcript. That is the
-first thing to fix before the link is given to a stranger.
+**Two of the five lanes are wired onto the deployment; three are not.** `cc-lpy4` gave the app a
+Snowflake connection, so `GET /healthz/lanes` reports `account` and `personalization` **up** on
+revision `0000025` — personas are assigned from the live `persona_fixtures`, and
+`get_points_balance`, `get_usual_order` and `ask_account_question` answer from the visitor's own
+rows through the pool that binds their identity. Knowledge (`cc-e1sr`) and photo (`cc-mpd`) still
+report `not_wired`, and the ops API has no functions deployed, so the action lane is unreachable
+from the public URL. `not_wired` beside `healthy: true` is the correct answer and not a
+contradiction.
+
+**What that turned up.** Wiring the account lane closed the contradiction a visitor could see —
+`docs/public-demo.md` §9 has the before and after transcripts — and made a narrower one
+measurable: `ACCOUNTS.persona_fixtures` on the live account was loaded from a different generation
+than `ACCOUNTS.orders` and `loyalty_ledger`, so the points figure in a persona's narrative can
+still differ from the ledger the tool sums. Four fixtures of twenty-eight agree. That is a reload
+rather than a code change, and it is the first thing to fix before the link is given to a stranger.
 
 **What it costs, measured rather than projected.** One median conversation is about **1.6 cents**
 of model tokens — inside PRD §05's $0.05 target with room. One *account question* is **$0.20**,

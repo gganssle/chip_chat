@@ -122,6 +122,18 @@ def runtime_context(tools: Sequence[ToolName] = TOOLS, *, lanes: Lanes = NO_LANE
     menu is three items while retrieval returns forty will either contradict the
     corpus or refuse to read it, and both look like a retrieval bug.
 
+    **The paragraph about who the visitor is has the same property, and it cost a
+    live demo to find out.** This function used to name
+    :data:`chip_chat.agent.hardcoded.ACCOUNT` unconditionally, so every
+    conversation opened by telling the model it was serving *"the Ballard
+    regular"*. That was true of a deployment whose account tools read a fixture
+    and false the moment ``cc-lpy4`` wired the account lane: the visitor's own
+    rows say a different store and a different balance, and the model,
+    reasonably, repeated what the system message told it and then quoted what the
+    tool returned. ``docs/public-demo.md`` §9 has that transcript. So the
+    sentence is now conditional on the lane, like the menu paragraph above it and
+    for exactly the same reason.
+
     Args:
         tools: The tools actually registered for this deployment.
         lanes: What is wired, which decides which facts below are facts.
@@ -132,9 +144,7 @@ def runtime_context(tools: Sequence[ToolName] = TOOLS, *, lanes: Lanes = NO_LANE
     return f"""\
 Facts about this turn. These change; the instructions above do not.
 
-The visitor is signed in as {ACCOUNT.display_name}, a rewards member at the
-{STORE.name} store. You already know who they are, so never ask for a name, an
-email, a phone number or a payment detail.
+{_account_facts(lanes)}
 
 {_menu_facts(lanes)}
 
@@ -168,11 +178,84 @@ rather than filling the gap."""
 """What is true of a deployment with the harvested corpus behind #49's lane."""
 
 
+_HARDCODED_ACCOUNT_FACTS = f"""\
+The visitor is signed in as {ACCOUNT.display_name}, a rewards member at the
+{STORE.name} store. You already know who they are, so never ask for a name, an
+email, a phone number or a payment detail."""
+"""What is true of a deployment with no account lane: one fixture, everybody."""
+
+_BOUND_ACCOUNT_FACTS = """\
+The visitor is signed in and their account is already bound to this
+conversation, so you already know who they are and must never ask for a name, an
+email, a phone number or a payment detail -- and never accept one offered.
+
+You are not told which customer they are and you do not need to be. Every
+account and personalization tool answers for this visitor and none of them takes
+an identifier, so anything you say about their points, their spending, their
+history or their usual order comes from a tool result on this turn and from
+nowhere else. Never state a store, a balance or an order from memory, from this
+message or from an earlier turn. Where a tool has not given you a figure, leave
+it out -- do not announce that it is missing.
+
+"Say what the visitor is holding" is already done and it was not done by you.
+The application shows the visitor a sentence describing their account before
+your first reply is written, so do not open by naming their persona, their store
+or their balance again. Answer what they asked."""
+"""What is true once #43's policies and #44's pool are actually in the path.
+
+The second paragraph is the load-bearing one and it is a *consequence* of the
+architecture rather than an instruction bolted on top of it: the tools genuinely
+have no identifier argument, so a model that invented one could not use it. What
+it prevents is the softer failure -- a model that has been told a store in a
+system message repeating it beside a balance a tool returned, which is one
+sentence containing two visitors.
+
+Its last sentence is there because an earlier draft did not have it. Listing
+what the tools cover ("their home store, their points balance, ...") made the
+model report the ones no tool had answered on that turn, and the live reply
+opened *"You're signed into a persona with no home store set"* -- accurate,
+obedient and a worse first impression than the sentence it replaced. A model
+told to prefer tool results should be told to say less, not to narrate the gap.
+
+**The third paragraph overrides an instruction in the versioned prompt, and does
+it here rather than there on purpose.** ``prompts/system-v1.md`` says *"Your
+first message names the persona they were given -- home store, points balance,
+and a characteristic order"*, which was written for a tier where the model was
+the only thing that could say it. It is not any more:
+:func:`chip_chat.web.persona.opening_message` writes that sentence from the
+assigned fixture and the visitor has read it before a model is called. Obeying
+the prompt therefore produces the same sentence twice, and on a wired deployment
+the second copy is assembled from tool results while the first was assembled
+from the roster -- which is how *"AL Town 1 Mall, 397 points on the card"* and
+*"1,363 points"* end up in one screen.
+
+Editing ``system-v1.md`` would be the tidier fix and it is the wrong file to
+reach for from here: the prompt is versioned, ``PROMPT_VERSION`` is recorded on
+every ``chat.turn``, and ``eval/`` holds baselines against it. This is a *fact
+about this deployment* -- the app writes the opening -- which is precisely what
+the runtime context is for, and it costs no version.
+"""
+
+
 def _menu_facts(lanes: Lanes) -> str:
     """Return the menu paragraph that is true for this wiring."""
     if lanes.knowledge is None:
         return _HARDCODED_MENU_FACTS
     return _RETRIEVED_MENU_FACTS
+
+
+def _account_facts(lanes: Lanes) -> str:
+    """Return the identity paragraph that is true for this wiring.
+
+    Keyed on the *account* lane rather than on both Snowflake lanes, because the
+    account lane is the one that makes the visitor's own store and balance
+    readable. A deployment with personalization and no account is not a shape
+    :func:`chip_chat.api.app.build_lanes` produces -- they are wired from one
+    pool -- so the second condition would be a branch nothing takes.
+    """
+    if lanes.account is None:
+        return _HARDCODED_ACCOUNT_FACTS
+    return _BOUND_ACCOUNT_FACTS
 
 
 RUNTIME_CONTEXT = runtime_context()
@@ -198,11 +281,25 @@ class Conversation:
     :func:`run_turn` checks it against -- a conversation told one list while the
     model is offered another is a wiring fault, and a silent one."""
 
+    lanes: Lanes = NO_LANES
+    """What is wired, for the two paragraphs of :func:`runtime_context` whose
+    truth depends on it.
+
+    A second field rather than something derived from :attr:`tools`, because the
+    tool list cannot answer the question. ``get_points_balance`` is offered on
+    every deployment -- it falls back to the fixture -- so a conversation that
+    inferred *"the account lane is wired"* from seeing that name would infer it
+    on the week-one slice too, and the sentence it chose would be wrong on
+    exactly the deployment the fallback exists for."""
+
     def __post_init__(self) -> None:
         if not self.messages:
             self.messages.append({"role": "system", "content": SYSTEM_PROMPT})
             self.messages.append(
-                {"role": "system", "content": runtime_context(self.tools)}
+                {
+                    "role": "system",
+                    "content": runtime_context(self.tools, lanes=self.lanes),
+                }
             )
 
     def next_turn_index(self) -> int:

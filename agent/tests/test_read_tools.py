@@ -29,6 +29,7 @@ from typing import Any
 
 import pytest
 
+from chip_chat.agent.hardcoded import ACCOUNT
 from chip_chat.agent.lanes import CONDITIONAL_TOOLS, NO_LANES, Lanes
 from chip_chat.agent.loop import RUNTIME_CONTEXT, runtime_context
 from chip_chat.agent.model import ToolInvocation
@@ -224,6 +225,36 @@ def test_the_menu_paragraph_stops_being_true_when_a_corpus_is_wired() -> None:
     assert "hardcoded menu" in RUNTIME_CONTEXT
     assert "hardcoded menu" not in wired
     assert "published pages" in wired
+
+
+def test_the_persona_sentence_stops_being_true_when_the_account_lane_is_wired() -> None:
+    """The other half of ``docs/public-demo.md`` §9, and the more expensive half.
+
+    Until ``cc-lpy4`` this function named
+    :data:`chip_chat.agent.hardcoded.ACCOUNT` unconditionally, so a deployment
+    whose account tools read the visitor's own rows still opened every
+    conversation by telling the model it was serving the Ballard regular. The
+    model then said both -- the store from the system message and the balance
+    from the tool -- which is one sentence containing two visitors.
+    """
+    wired = runtime_context(lanes=_lanes())
+
+    assert ACCOUNT.display_name in RUNTIME_CONTEXT
+    assert ACCOUNT.display_name not in wired
+    assert "already bound to this" in wired
+
+
+def test_the_wired_persona_sentence_names_no_customer_at_all() -> None:
+    """Not a different fixture. The right answer here is *no* identity.
+
+    Naming one would be the same defect with better data: the model does not
+    choose the visitor, has no tool argument to name one with, and every number
+    it may say comes from a tool that answered for whoever the pool bound.
+    """
+    wired = runtime_context(lanes=_lanes())
+
+    for word in ("Ballard", "regular at", "points on the card"):
+        assert word not in wired
 
 
 # ---------------------------------------------------------------------------

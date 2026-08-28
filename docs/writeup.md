@@ -69,6 +69,15 @@ piece of it first.
             "detail": "no ops API configured; drafts are proposed and nothing is written"}]}
 ```
 
+> **Amended 28 August 2026.** Two of the five are wired now. `cc-lpy4` landed the
+> connection factory §11 argues for below, and on revision `0000025` the same
+> request reports `account` and `personalization` **up**, with the marts'
+> `derived_at` beside the second. Everything in the rest of this section is a
+> true account of the deployment on 27 August and of why it was that way; what it
+> is no longer is a description of the live URL.
+> `docs/decisions/snowflake-connection-factory.md` and `docs/public-demo.md` §9
+> are the change.
+
 `healthy: true` beside five `not_wired` lanes is the correct answer and not a
 contradiction. Nothing is broken; nothing is connected. `build_service` is called
 with `NO_LANES` and `connect=None` on every deployment
@@ -1501,12 +1510,28 @@ because the numbers around it were trustworthy.
 
 ### Next, in the order that buys the most readiness per unit of effort
 
-**1. The Snowflake connection factory (`cc-lpy4`).** One credential in Key Vault
-and one factory passed to `build_service`. It wires the account and
-personalization lanes, replaces the shipped roster with `SnowflakeRoster`, closes
-the opening-message contradiction, converts four `partial` PRD requirements into
-measurable ones, and makes gate 1's contended re-run exercise a row access policy
-instead of a model's reticence. Nothing else in the tree is close on leverage.
+**1. The Snowflake connection factory (`cc-lpy4`).** ~~One credential in Key Vault
+and one factory passed to `build_service`.~~ **Done, 28 August 2026** — and left
+in place rather than deleted, because the estimate is worth reading against what
+it cost. It wires the account and personalization lanes, replaces the shipped
+roster with `SnowflakeRoster`, closes the opening-message contradiction, converts
+four `partial` PRD requirements into measurable ones, and makes gate 1's contended
+re-run exercise a row access policy instead of a model's reticence. Nothing else
+in the tree is close on leverage.
+
+It was one credential and one factory, and it was also three things this
+paragraph did not price: the driver rejects the PEM that Key Vault holds and
+wants DER, its default paramstyle makes `SET DEMO_ID = ?` a syntax error rather
+than a bind, and the runtime context named the hardcoded account in a system
+message — so the first wired revision read a real balance out of Snowflake and
+still called the visitor the Ballard regular.
+`docs/decisions/snowflake-connection-factory.md` has all three. What it turned up
+is the more interesting half: with the account lane reading real rows, the
+opening sentence and the ledger can be *compared*, and on the live account they
+disagree for twenty-four of twenty-eight fixtures — `persona_fixtures` and
+`orders`/`loyalty_ledger` were loaded from different generations. §9's remark
+about findings being findable only when the numbers around them are trustworthy
+applies to itself.
 
 **2. Deploy the ops API's functions.** `func-chip-chat-ops-4cy39i` is Running with
 zero functions deployed, so `POST /api/place_order` returns 404, the action lane

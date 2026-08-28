@@ -201,12 +201,38 @@ def test_the_runtime_only_dependencies_are_declared_for_the_host() -> None:
     assert "snowflake-connector-python" in requirements
 
 
-@pytest.mark.parametrize("package", ["azure-functions", "snowflake-connector-python"])
-def test_the_runtime_only_dependencies_stay_out_of_the_workspace(package: str) -> None:
-    """Every developer's virtualenv would otherwise carry them for one file."""
+def test_the_functions_runtime_sdk_stays_out_of_the_workspace() -> None:
+    """Every developer's virtualenv would otherwise carry it for one file.
+
+    This used to be parametrized over ``azure-functions`` *and*
+    ``snowflake-connector-python``, and the second half was retired by
+    ``cc-lpy4`` rather than deleted quietly. The argument was never about the
+    driver being unwelcome; it was that nothing in the workspace imported it, so
+    a workspace dependency would have been every developer paying for a file no
+    test ran. ``chip_chat.api.connect`` imports it now -- it is what
+    ``build_service`` opens the read connection with -- and a dependency the
+    deployed image needs and the manifest does not declare is a dependency that
+    is missing. See ``docs/decisions/snowflake-connection-factory.md``.
+
+    ``azure-functions`` is untouched: it is the Functions runtime's own SDK, it
+    exists to be imported by a worker that installs
+    ``api/functions/requirements.txt``, and no workspace package imports it.
+    """
     root = _FUNCTIONS.parents[1]
     for manifest in root.glob("*/pyproject.toml"):
-        assert package not in manifest.read_text(encoding="utf-8")
+        assert "azure-functions" not in manifest.read_text(encoding="utf-8")
+
+
+def test_the_driver_is_declared_by_the_one_package_that_imports_it() -> None:
+    """`api/` and nowhere else: the ops host and the chat app are the two callers."""
+    root = _FUNCTIONS.parents[1]
+    declaring = {
+        manifest.parent.name
+        for manifest in root.glob("*/pyproject.toml")
+        if "snowflake-connector-python" in manifest.read_text(encoding="utf-8")
+    }
+
+    assert declaring == {"api"}
 
 
 def test_the_host_configuration_is_valid_json() -> None:

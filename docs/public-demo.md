@@ -384,7 +384,7 @@ explicit that a lane may fail and the conversation may not fail with it, so
 Container Apps stays pointed at `/healthz`, which answers for the process and
 nothing else.
 
-Asked of the live deployment on 27 August 2026:
+Asked of the live deployment on 27 August 2026, **before** `cc-lpy4`:
 
 ```json
 {"healthy": true, "down": [], "stale": [],
@@ -396,21 +396,53 @@ Asked of the live deployment on 27 August 2026:
             "detail": "no ops API configured; drafts are proposed and nothing is written"}]}
 ```
 
-`healthy: true` with five `not_wired` lanes is the correct answer and not a
-contradiction: nothing is broken, and nothing is connected. `build_service` is
-called with `NO_LANES` on every deployment, deliberately and at length in its
-own docstring — see §9 below for what that costs a visitor.
+`healthy: true` with five `not_wired` lanes was the correct answer and not a
+contradiction: nothing was broken, and nothing was connected. `build_service` was
+called with `NO_LANES` and `connect=None` on every deployment, deliberately and at
+length in its own docstring, because nothing in the workspace implemented
+`pool.py`'s `SessionConnection`.
 
-## 9. The one thing that is still true and worth saying
+The same request against revision `0000023`, on the same day:
 
-`Lanes()` is empty on the deployed app. `search_menu_knowledge`,
-`get_points_balance` and `get_usual_order` answer from
+```json
+{"healthy": true, "down": [], "stale": [],
+ "lanes": [{"lane": "knowledge",       "state": "not_wired", ...},
+           {"lane": "account",         "state": "up",
+            "tools": ["ask_account_question", "get_points_balance"]},
+           {"lane": "personalization", "state": "up",
+            "tools": ["get_usual_order", "get_recommendations"],
+            "derived_at": "2026-08-27T18:54:51.019911+00:00", "stale": false},
+           {"lane": "photo",           "state": "not_wired", ...},
+           {"lane": "action",          "state": "not_wired", ...}]}
+```
+
+Two lanes moved, and they moved together because they are one connection.
+`up` here is not a claim about configuration — the probe checks a connection out
+of the pool by session id, runs the account lane's fixed points read and the
+habit-mart read, and reports what came back. `derived_at` with `stale: false` is
+the nightly publish's timestamp, read from the mart on that checkout.
+
+`healthy: true` still sits beside three `not_wired` lanes, and it is still the
+right answer: knowledge is `cc-e1sr`, photo is `cc-mpd`, and the action lane is
+`not_wired` because no ops API is configured on this deployment rather than
+because one is down.
+
+## 9. The contradiction a visitor could see, and what closing it turned up
+
+This section used to be a defect report. It is kept as one, because the shape of
+the bug is the interesting part and because what replaced it is narrower rather
+than absent.
+
+### 9.1 What it was
+
+`Lanes()` was empty on the deployed app. `search_menu_knowledge`,
+`get_points_balance` and `get_usual_order` answered from
 `chip_chat.agent.hardcoded` — a three-item menu and one account fixture — and
-each says so in its own result. `ask_account_question`, `get_recommendations`
-and `match_meal_from_photo` are not offered at all, because a hardcoded NL→SQL
+each said so in its own result. `ask_account_question`, `get_recommendations`
+and `match_meal_from_photo` were not offered at all, because a hardcoded NL→SQL
 answer is exactly the plausible number PRD A4 forbids.
 
-**This produces one visible contradiction, and it is the most important known
+**That produced one visible contradiction, and it was the most important known
 defect in the visitor experience.** Observed against the live URL on 27 August
 2026, in one session:
 
@@ -423,22 +455,137 @@ defect in the visitor experience.** Observed against the live URL on 27 August
 > with a side of guac.
 
 Two different stores, two different balances, two different usual orders, one
-conversation. The opening message is reading the assigned persona, which is
-correct; `get_points_balance` is reading `chip_chat.agent.hardcoded.ACCOUNT`,
-which is also correct *for a deployment with no account lane* — the tool says so
-in its own result. They are correct separately and wrong together.
+conversation. The opening message was reading the assigned persona, which is
+correct; `get_points_balance` was reading `chip_chat.agent.hardcoded.ACCOUNT`,
+which was also correct *for a deployment with no account lane* — the tool said so
+in its own result. They were correct separately and wrong together.
 
-**It is not fixed here on purpose.** The three ways to make the contradiction go
-away from this tier are all worse than the contradiction. Assigning nobody
+The three ways to make it go away from that tier were all worse than the
+contradiction, which is why it was recorded rather than patched. Assigning nobody
 brings back the empty account PRD §06 says loses the visitor. Describing
-`ACCOUNT` in the opening message gives every concurrent visitor the same
-customer and fails #66's second criterion. Papering over it with a clause of
-copy about unwired lanes turns the first sentence a stranger reads into an
-apology for a deployment.
+`ACCOUNT` in the opening message gives every concurrent visitor the same customer
+and fails #66's second criterion. Papering over it with a clause of copy about
+unwired lanes turns the first sentence a stranger reads into an apology for a
+deployment.
 
-The actual fix is `cc-lpy4`: a Snowflake connection factory. The moment one
-exists, `SnowflakeRoster` replaces the shipped roster, the account lane is
-wired, and the tool reads the same rows the narrative was measured from — one
-change closes both halves. Until then this is recorded here, reported by
-`GET /healthz/lanes`, and should be the first thing anybody looks at before the
-link is given to a stranger.
+### 9.2 What closed it
+
+`cc-lpy4`, and the diagnosis above was right about the cause and half right about
+the cure. `chip_chat.api.connect` implements `pool.py`'s `SessionConnection` over
+`snowflake.connector`, `build_service` asks it for a factory instead of being
+handed `None`, `SnowflakeRoster` replaces the shipped roster, and the account and
+personalization lanes are built over the pool.
+`docs/decisions/snowflake-connection-factory.md` is the write-up.
+
+**One thing the diagnosis missed, and it only became visible once the tool was
+right.** `runtime_context` — the second system message every conversation opens
+with — named `chip_chat.agent.hardcoded.ACCOUNT` *unconditionally*. So the first
+deployment with a working account lane produced this, on revision `0000022`:
+
+> **"How many points do I have?"** → You're signed in as the Ballard regular
+> (home store: Ballard), you have 3,787 points, and your characteristic order is
+> a Steak Burrito.
+
+`3,787` is real — it is `SUM(delta)` over that visitor's own `loyalty_ledger`
+rows, read on a connection the pool bound and the row access policy scoped.
+*"the Ballard regular"* is the system message. The tool had been fixed and the
+prompt still had not, which is the second half of the same defect wearing the
+first half's clothes. Two changes follow, both in
+`chip_chat.agent.loop.runtime_context` and both conditional on the lane, exactly
+as the menu paragraph beside them already was:
+
+- a wired deployment is told the visitor is bound to the conversation, that it is
+  not told which customer they are, and that every figure it says comes from a
+  tool result on this turn;
+- and it is told not to open by naming the persona at all, because
+  `opening_message` has already written that sentence and the visitor has read it.
+  `prompts/system-v1.md` still says *"Your first message names the persona they
+  were given"*, which was written for a tier where the model was the only thing
+  that could say it. The override lives in the runtime context rather than in the
+  prompt because the prompt is versioned, `PROMPT_VERSION` is on every
+  `chat.turn`, and `eval/` holds baselines against it.
+
+### 9.3 What it looks like now
+
+Against the live URL on revision `0000025`, 28 August 2026. Four sessions were
+opened; two are quoted, and the other two read the same way:
+
+> **Opening message:** Hi Alex. You're the one who puts in the floor's lunch
+> order at IN Town 1 Mall: 47 orders averaging 6.9 entrees, $7,036 in all. Ask me
+> what the floor usually gets, ask about allergens before you order for eleven
+> people, or send me a photo of a spread you want repeated.
+>
+> **"How many points do I have?"** → You have 3,972 points. That balance already
+> covers rewards like Guac (500 pts), Double Protein (700 pts), 50% off an entrée
+> (815 pts), an entrée (1,625 pts) or an entrée + chips (1,775 pts); if you want I
+> can propose an order or suggest items, but I can't actually redeem points here
+> because the redemption action isn't available in this demo.
+
+> **Opening message:** Hi Sam. You're new since February 2026 — 17 orders so far,
+> most often Steak Burrito with guacamole, white rice, black beans and cheese,
+> and still working the usual out.
+>
+> **"How many points do I have?"** → You have 554 points. That's enough to redeem
+> Guac (500 points) or smaller rewards like a Fountain Drink (400), Chips (350)
+> or a Side Tortilla (85) — would you like to redeem one now?
+
+No second store, no second persona, no restatement of the opening. The balance
+came from that visitor's own `loyalty_ledger` rows through a connection the pool
+bound; the rewards beside it are the harvested reward catalogue with
+affordability computed against that balance, which is `get_points_balance`'s own
+result rather than the model's arithmetic. The last clause of the first reply is
+the action lane correctly reporting itself absent — `redeem_points` is not
+registered on this deployment and the model says so instead of pretending.
+
+### 9.4 The narrower thing that is left, and it is not a wiring bug
+
+**`ACCOUNTS.persona_fixtures` is out of step with `ACCOUNTS.orders` and
+`ACCOUNTS.loyalty_ledger` on the live account.** The opening message quotes the
+fixture's narrative; `get_points_balance` sums the ledger, which is the system of
+record. `chip_chat.data_gen` generates all of them from one population and
+asserts they agree — `data-gen/tests/test_fixtures.py` holds
+`sum(entry.delta) == row.points_balance` for every fixture — so a coherent load
+cannot look like the live one does. Measured across all twenty-eight fixtures on
+27 August 2026, each read on a bound connection:
+
+```
+agree: points 4/28   usual item 20/28   order count 4/28
+```
+
+```
+demo-0048  fixture: 80 orders, $1,345.75 lifetime,   397 points
+           tables:  31 orders, $2,430.70 lifetime, 1,363 points
+demo-0016  fixture: 47 orders, $7,035.60 lifetime, 1,558 points
+           tables:  46 orders,   $917.95 lifetime, 3,972 points
+```
+
+`ACCOUNTS.orders` and `loyalty_ledger` carry 500 distinct `demo_id`s;
+`persona_fixtures` carries 28. The account holds fixtures from one generation and
+history from another, and the shipped roster in
+`api/src/chip_chat/api/fixtures/persona_fixtures.json` is an export of the same
+stale table, so the no-credential path inherits it.
+
+Five of the seven archetypes' narratives do not quote a points figure at all, so
+most sessions never show it. The two that do can, and the same visitor from §9.1
+is the clearest example — observed on revision `0000023`, after the account lane
+was wired and before the prompt half was:
+
+> **Opening message:** Hi Sam. You're a regular at AL Town 1 Mall, **397 points**
+> on the card, and 99% of 80 orders the same Steak Burrito with guacamole, white
+> rice, black beans and cheese.
+>
+> **"How many points do I have?"** → … **1,363 points** …
+
+Set that beside §9.1 and the difference is the point. There, the two halves
+disagreed about the store, the balance and the usual order, and the second half
+was a fixture shared by every concurrent visitor. Here they agree about the
+store and the usual order, both halves describe this visitor, and one figure is
+quoted from a table that has drifted from the ledger underneath it. It is a
+**data-load** problem rather than a wiring one: the fix is a reload, not a code
+change in `api/` or `agent/`. Bead `chip-qvg` carries the measurement and the two
+ways out.
+
+It is worth saying that this was invisible before `cc-lpy4`. While the tool read a
+hardcoded fixture it could not disagree with the roster about one number, because
+it disagreed about all of them. Wiring the lane is what made the account
+measurable, and the first thing measuring it produced was a defect.

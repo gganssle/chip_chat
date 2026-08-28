@@ -813,6 +813,94 @@ variable "snowflake_account_url" {
   default     = ""
 }
 
+# ---------------------------------------------------------------------------
+# The chat app's read connection (cc-lpy4). Container App to Snowflake.
+#
+# The same rule as the block above: Snowflake is not managed here, no key
+# material enters Terraform state, and what is declared is the handful of names
+# the app needs in order to find an account it did not create. The private key
+# is a Container Apps secret whose value is a Key Vault *reference* -- the
+# platform resolves it with the app's managed identity, so the value is never in
+# a plan, a state file or a container image.
+# ---------------------------------------------------------------------------
+
+variable "snowflake_account" {
+  description = <<-EOT
+    The account locator the chat app opens read connections against, e.g.
+    hq72718.us-east-2.aws. This is the locator form `snow connection add` wants
+    and `CURRENT_ACCOUNT()` returns, not the organisation form -- .env.example
+    has both and says which is which.
+
+    Empty is a supported deployment and is what shipped before cc-lpy4: the app
+    comes up with no pool, assigns personas from the roster committed in its own
+    image, and answers `get_points_balance` and `get_usual_order` from the
+    hardcoded fixture. `docs/decisions/shipped-persona-roster.md` is that path
+    and it still works; `GET /healthz/lanes` reports it as `not_wired` rather
+    than as an outage.
+
+    Setting it is not enough on its own. The app also needs a private key, which
+    is `snowflake_app_key_secret` below, and it will say which of the two is
+    missing in its first log lines.
+
+    THE DEFAULT IS THE LIVE ACCOUNT, AND THAT IS DELIBERATE. There is no
+    terraform.tfvars in this repository -- the defaults in this file *are* the
+    deployment -- so an empty default would mean one `terraform apply` by
+    somebody who did not pass `-var` silently un-wired the account lane and
+    restored the contradiction docs/public-demo.md §9 records. A locator is not a
+    credential: it is committed in .env.example already, and on its own it grants
+    nothing.
+
+    The cost of this default is a second stack. `terraform apply -var
+    environment=scratch` builds its own Key Vault, and a Container App secret
+    that references a secret which is not in it produces a revision that will not
+    start. That failure is loud and names the secret, and the fix is one flag --
+    `-var snowflake_account=""` for a stack that does not need the read lanes, or
+    put the key in the new vault first for one that does.
+  EOT
+  type        = string
+  default     = "hq72718.us-east-2.aws"
+}
+
+variable "snowflake_app_key_secret" {
+  description = <<-EOT
+    The Key Vault secret holding CHIP_CHAT_APP's private key, as unencrypted
+    PKCS#8 PEM. `snowflake/sql/04_users.sql` creates the user with TYPE =
+    SERVICE, and a SERVICE user cannot authenticate with a password -- key-pair
+    is the only option, which is why this is a key and not a credential pair.
+
+    Terraform never reads the value. The Container App gets a secret whose
+    source is a versionless Key Vault reference resolved by the app's own
+    managed identity, which already holds Key Vault Secrets User on the vault
+    (foundation.tf). An operator puts the key there once:
+
+      az keyvault secret set --vault-name <vault> \
+        --name snowflake-app-private-key \
+        --file ~/.snowflake/keys/chip_chat_app.p8
+
+    `snowflake-ops-private-key` is the other one and belongs to the write tier.
+    They are deliberately two secrets rather than one: the chat app holding a
+    key it has no route to use is a credential nobody can explain the presence
+    of during an incident.
+  EOT
+  type        = string
+  default     = "snowflake-app-private-key"
+}
+
+variable "snowflake_host" {
+  description = <<-EOT
+    The REST host `ask_account_question` posts Cortex Analyst requests to, e.g.
+    llmpcwe-gs74649.snowflakecomputing.com. No scheme.
+
+    Empty is fine and is the shipped default: `chip_chat.api.app._analyst_host`
+    derives `<snowflake_account>.snowflakecomputing.com` from the locator above
+    and logs that it did. Both forms were checked against the live account on 27
+    August 2026 and both answer 200. Set it where the organisation form is
+    preferred, or where an account is reached through a URL neither form builds.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "snowflake_publisher_user" {
   description = <<-EOT
     The Snowflake user the publish authenticates as. `snowflake/sql/04_users.sql`

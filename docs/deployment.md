@@ -67,6 +67,58 @@ deliberate: `compute.tf` has `ignore_changes = [template[0].container[0].image]`
 so that the next `terraform apply` does not drag the app back to the quickstart
 placeholder. Terraform owns the *estate*; a deploy owns the *image*.
 
+**Docker Desktop is not always running, and `make image` needs it.** ACR builds
+the image server-side and takes the same Dockerfile:
+
+```bash
+az acr build --registry acrchipchat4cy39i --image chip-chat-web:$(git rev-parse --short HEAD) \
+    --platform linux/amd64 --file Dockerfile .
+make deploy IMAGE_TAG=$(git rev-parse --short HEAD)
+```
+
+`--platform linux/amd64` for the reason `make image` passes it: Container Apps
+runs amd64 and this repository is developed on Apple silicon, where the default
+would be arm64 and would fail to start with an exec-format error.
+
+### 2.1 The Snowflake connection, and the order the two halves go in
+
+`cc-lpy4` gave the app a real connection, and it arrives in two pieces that are
+applied by two different commands. **The image goes first.**
+
+```bash
+az acr build --registry acrchipchat4cy39i --image chip-chat-web:<sha> ...
+make deploy IMAGE_TAG=<sha>                          # 1. the image
+terraform apply -target=azurerm_container_app.web     # 2. the settings
+```
+
+Backwards is a bad five minutes. The environment variables tell the app it has an
+account, so `snowflake_connect` returns a factory and `SnowflakeRoster` replaces
+the shipped one — and an image without `snowflake-connector-python` in it fails
+that roster read, which leaves the roster **empty** and every visitor served
+unbound. That is the empty account PRD §06 says loses the demo, arrived at from
+the other direction. In the other order the worst case is a revision that runs
+exactly as it did yesterday, on the shipped roster, until the second command
+lands.
+
+Terraform's half is `local.snowflake_env` plus one Container Apps secret whose
+value is a versionless Key Vault reference. `terraform apply` on the whole stack
+still fails without a Databricks login (§3.1), so `-target` is the way in;
+nothing else in `compute.tf` moved.
+
+To check both halves landed:
+
+```bash
+az containerapp show -n ca-chip-chat-web -g rg-chip-chat \
+    --query "properties.template.containers[0].env[?starts_with(name,'SNOWFLAKE')]" -o table
+curl -s https://ca-chip-chat-web.whitesea-eea6e4c0.eastus2.azurecontainerapps.io/healthz/lanes
+```
+
+The second is the one that matters: `account` and `personalization` report `up`
+when the pool can check a connection out, and `not_wired` when the app decided it
+had no credential. `docs/decisions/snowflake-connection-factory.md` is the
+write-up, including the two driver behaviours that had to be measured against the
+live account before any of this worked.
+
 ## 3. What surprised me
 
 ### 3.1 `terraform plan` does not run at all without a Databricks login
