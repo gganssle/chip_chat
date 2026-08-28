@@ -61,6 +61,22 @@ behind the app for that reason, and this host is the shape it moves into when
 the two ledgers move behind a shared store -- the same honest limitation
 :class:`~chip_chat.api.ledger.BudgetLedger` carries, and the same one obvious
 place for a shared implementation to land.
+
+**Why this file configures tracing and the app does not have to.** Issue #63's
+last acceptance criterion is that *every write emits an* ``ops.<action>`` *span
+with its confirmation state*, and a span is only evidence if it left the
+process. :func:`chip_chat.otel.get_tracer` deliberately falls back to
+OpenTelemetry's global -- a no-op tracer -- when nobody has configured one,
+because a library must never require that its importer set telemetry up first.
+That fallback is right for a library and wrong for a deployment: it would leave
+this host emitting the gate's audit trail into nothing, and the criterion would
+be met in the tests and unmet in the thing anybody would actually audit. So the
+provider is installed at import, from the same
+:class:`~chip_chat.otel.config.TelemetryConfig` every other component reads, and
+:func:`_handle` flushes it before answering. The flush is not tidiness: a
+Functions worker is frozen between invocations and scaled to zero between
+conversations, so a batch left in a queue for the exporter's next tick is a
+batch that is never sent.
 """
 
 import hmac
@@ -86,10 +102,40 @@ from chip_chat.api.ops import (
     Receipt,
 )
 from chip_chat.catalog import MenuCatalog
-from chip_chat.otel import SpanName, TurnContextError, continue_turn
+from chip_chat.otel import (
+    APP_COMPONENT,
+    SpanName,
+    TelemetryConfig,
+    TurnContextError,
+    configure_tracing,
+    continue_turn,
+)
 from chip_chat.snowflake.procedures import IDENTITY_VARIABLE, procedure
 
 _LOG: Final = logging.getLogger(__name__)
+
+_TRACING = configure_tracing(TelemetryConfig.from_env(APP_COMPONENT))
+"""The installed provider. See the module docstring for why it is installed here.
+
+:data:`~chip_chat.otel.service.APP_COMPONENT` rather than a component of this
+host's own, and that is deliberate: ``ops.<action>`` is a child of the app's
+``tool.<name>`` and belongs to the same turn, so it carries the same
+``service.name``. :func:`chip_chat.otel.service.turn_service_names` is the list a
+dashboard filters on, and a third name here would be half a turn hidden from
+every query written against it.
+
+Held rather than discarded because :func:`_handle` flushes it, and a
+``force_flush`` needs the provider the exporters were attached to.
+"""
+
+_FLUSH_MILLISECONDS: Final = 5_000
+"""How long a request will wait for its span to be sent before answering anyway.
+
+Five seconds, which is generous for one small batch over HTTPS and short enough
+that a telemetry backend having a bad afternoon slows a write rather than
+failing it. The visitor's answer is never held hostage to the audit trail; the
+warning in :func:`_handle` is how the operator finds out it was not written.
+"""
 
 OPS_KEY_HEADER: Final = "x-cilantro-ops-key"
 """The shared secret the chat app presents. See rule 1 in the module docstring."""
@@ -136,6 +182,50 @@ _service: OpsService | None = None
 # ---------------------------------------------------------------------------
 
 
+_PEM_HEADER: Final = "-----BEGIN"
+"""How PKCS#8 announces itself, and the whole of :func:`_key_material`'s test."""
+
+
+def _key_material(setting: str) -> object:
+    """Turn what Key Vault holds into what the driver accepts.
+
+    Two formats reach this function and only one of them is a format a person
+    can look at. ``snowflake.connector.connect`` takes ``private_key`` either as
+    DER bytes or as a *base64-encoded DER* string, and a PEM string handed to it
+    is not rejected -- ``base64.b64decode`` quietly discards the dashes and the
+    words in the armour, decodes the wreckage that is left, and the failure
+    surfaces as an authentication error naming nothing that would lead anybody
+    to the cause.
+
+    The vault holds PEM, because PEM is what ``openssl`` emits, what Snowflake's
+    own ``RSA_PUBLIC_KEY`` documentation shows, and what somebody rotating this
+    credential at two in the morning can recognise on sight. So the conversion
+    happens here rather than at the vault, and the setting stays a thing a human
+    can verify.
+
+    Args:
+        setting: The environment's value, PEM or base64 DER.
+
+    Returns:
+        DER bytes for PEM input, and the string unchanged otherwise -- the
+        driver's own base64 path is left to handle a vault that ever holds one.
+    """
+    if _PEM_HEADER not in setting:
+        return setting
+    # Imported here rather than at module scope for the same reason the driver
+    # is: this is not a dependency of anything in the workspace. It arrives with
+    # `snowflake-connector-python`, which requires it.
+    from cryptography.hazmat.primitives.serialization import (
+        Encoding,
+        NoEncryption,
+        PrivateFormat,
+        load_pem_private_key,
+    )
+
+    key = load_pem_private_key(setting.strip().encode("utf-8"), password=None)
+    return key.private_bytes(Encoding.DER, PrivateFormat.PKCS8, NoEncryption())
+
+
 class SnowflakeWriteBackend:
     """Sessions on the write role, one per call, with ``DEMO_ID`` bound.
 
@@ -154,11 +244,13 @@ class SnowflakeWriteBackend:
 
     __slots__ = ("_settings",)
 
-    def __init__(self, settings: Mapping[str, str]) -> None:
+    def __init__(self, settings: Mapping[str, object]) -> None:
         """Hold the connection settings the driver takes.
 
         Args:
             settings: Keyword arguments for ``snowflake.connector.connect``.
+                Values are strings but for ``private_key``, which is the DER
+                the driver wants -- see :func:`_key_material`.
         """
         self._settings = dict(settings)
 
@@ -188,7 +280,7 @@ class SnowflakeWriteBackend:
             {
                 "account": os.environ["SNOWFLAKE_ACCOUNT"],
                 "user": os.environ.get("SNOWFLAKE_OPS_USER", OPS_USER),
-                "private_key": os.environ["SNOWFLAKE_PRIVATE_KEY"],
+                "private_key": _key_material(os.environ["SNOWFLAKE_PRIVATE_KEY"]),
                 "role": os.environ.get("SNOWFLAKE_WRITE_ROLE", WRITE_ROLE),
                 "warehouse": os.environ.get("SNOWFLAKE_WAREHOUSE", SERVING_WAREHOUSE),
                 "database": os.environ.get("SNOWFLAKE_DATABASE", "CHIP_CHAT"),
@@ -362,10 +454,19 @@ def _resolved() -> OpsService:
 
 # ---------------------------------------------------------------------------
 # The edge
+#
+# ``trigger_arg_name`` on all four, and it is not decoration. The Python v2
+# programming model binds the HTTP trigger to a parameter *by name*, defaulting
+# to ``req``; a handler whose parameter is called anything else fails to load on
+# the worker with ``FunctionLoadError``, and it fails at load rather than at
+# call, so the app comes up Running with zero functions and every route
+# answering 404. That is exactly the state this deployment was found in. Naming
+# the binding is how the parameter stays readable without the host having to
+# guess, and it is a fact worth having in the file rather than in a runbook.
 # ---------------------------------------------------------------------------
 
 
-@app.route(route="place_order", methods=("POST",))
+@app.route(route="place_order", methods=("POST",), trigger_arg_name="request")
 def place_order(request: func.HttpRequest) -> func.HttpResponse:
     """Place a confirmed draft. Body: ``{"draft_id": ...}``."""
     return _handle(
@@ -373,7 +474,7 @@ def place_order(request: func.HttpRequest) -> func.HttpResponse:
     )
 
 
-@app.route(route="cancel_order", methods=("POST",))
+@app.route(route="cancel_order", methods=("POST",), trigger_arg_name="request")
 def cancel_order(request: func.HttpRequest) -> func.HttpResponse:
     """Cancel a confirmed order. Body: ``{"order_id": ...}``."""
     return _handle(
@@ -381,7 +482,7 @@ def cancel_order(request: func.HttpRequest) -> func.HttpResponse:
     )
 
 
-@app.route(route="redeem_points", methods=("POST",))
+@app.route(route="redeem_points", methods=("POST",), trigger_arg_name="request")
 def redeem_points(request: func.HttpRequest) -> func.HttpResponse:
     """Redeem a confirmed reward. Body: ``{"reward_id": ...}``."""
     return _handle(
@@ -389,7 +490,7 @@ def redeem_points(request: func.HttpRequest) -> func.HttpResponse:
     )
 
 
-@app.route(route="update_preferences", methods=("POST",))
+@app.route(route="update_preferences", methods=("POST",), trigger_arg_name="request")
 def update_preferences(request: func.HttpRequest) -> func.HttpResponse:
     """Store a confirmed preference edit. Body: ``{"prefs": {...}}``.
 
@@ -407,6 +508,48 @@ def update_preferences(request: func.HttpRequest) -> func.HttpResponse:
 
 
 def _handle(
+    request: func.HttpRequest,
+    field: str,
+    write: Callable[[OpsSession, Any], Receipt],
+    *,
+    shape: type = str,
+) -> func.HttpResponse:
+    """Answer the call, then make sure its span left the process.
+
+    The flush is the whole of what this wrapper adds, and it is here rather than
+    inside :func:`_answer` so that it happens on every path out -- the refusals
+    included, because ``ops.<action>`` is opened before the record is claimed and
+    a *rejected* write is exactly the span an audit of gate 2 goes looking for.
+
+    A Functions worker is frozen the moment it answers and the instance is gone a
+    few minutes later. :class:`~opentelemetry.sdk.trace.export.BatchSpanProcessor`
+    is built for a process that keeps running, and in this one its next tick may
+    never arrive; a span sitting in that queue is a span that was emitted and
+    never sent, which is indistinguishable, in the backend, from a write that
+    emitted nothing.
+
+    Args:
+        request: The inbound request.
+        field: Which body field carries what the visitor was shown.
+        write: The write to perform, given a bound session and that field.
+        shape: What ``field`` must be. A string for the three identifiers, a
+            mapping for ``prefs``.
+
+    Returns:
+        The response. See the module docstring for why a rejection is a 200.
+    """
+    try:
+        return _answer(request, field, write, shape=shape)
+    finally:
+        # A failed flush is a lost span and not a failed write: the write has
+        # already happened or already been refused by the time this runs.
+        try:
+            _TRACING.force_flush(_FLUSH_MILLISECONDS)
+        except Exception:
+            _LOG.warning("the ops span could not be flushed", exc_info=True)
+
+
+def _answer(
     request: func.HttpRequest,
     field: str,
     write: Callable[[OpsSession, Any], Receipt],

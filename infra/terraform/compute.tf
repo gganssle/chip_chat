@@ -290,6 +290,51 @@ resource "azurerm_container_app" "web" {
 #
 # Flex Consumption rather than the older Y1 Consumption plan: it scales to zero
 # the same way, and Y1 is on its way out.
+#
+# This app is RFC-001 §03's *only path that writes*, and the settings below are
+# where that sentence is made true of a running system rather than of a design.
+# Nothing else in the estate is given the Snowflake write role: the container app
+# gets `snowflake-app-private-key` and this one gets `snowflake-ops-private-key`,
+# and the two users those keys belong to are granted different roles by
+# `snowflake/sql/00_roles.sql`. Terraform stands the app up; `make ops-deploy`
+# puts code on it, for the same reason `make deploy` and not `terraform apply`
+# owns the container image.
+
+locals {
+  # The account identifier the ops API authenticates against — `hq72718.us-east-2.aws`,
+  # not a URL and not a secret. Derived from the publish job's account URL when
+  # that is configured, because it is the same Snowflake account: two settings
+  # that must agree are one setting that can disagree, and the failure mode is a
+  # write path pointed at nothing that answers 503 while looking configured.
+  snowflake_ops_account = (
+    var.snowflake_ops_account != ""
+    ? var.snowflake_ops_account
+    : trimsuffix(var.snowflake_account_url, ".snowflakecomputing.com")
+  )
+
+  # Two Key Vault secrets this app reads, neither of them created here.
+  #
+  # The same argument `databricks_publish_secret_scope` makes: no key material
+  # enters Terraform state. `snowflake-ops-private-key` is the PKCS#8 private
+  # key of the `CHIP_CHAT_OPS` service user, put there by whoever ran
+  # `ALTER USER ... SET RSA_PUBLIC_KEY`, and `ops-api-key` is the shared secret
+  # the chat app presents on `x-cilantro-ops-key`. `make ops-key` mints the
+  # second if it is absent.
+  #
+  # Both are referenced rather than read, so what lands in the app's environment
+  # is resolved by the platform at start-up and neither value is ever in a plan,
+  # a state file or a `terraform output`. An absent secret leaves the setting
+  # unresolved, which the host reads as no credential — and
+  # `function_app.py::_authentic` refuses every request rather than allowing
+  # them all, which is the direction this has to fail in.
+  ops_private_key_secret = "snowflake-ops-private-key"
+  ops_api_key_secret     = "ops-api-key"
+
+  key_vault_reference = {
+    for name in [local.ops_private_key_secret, local.ops_api_key_secret] :
+    name => "@Microsoft.KeyVault(VaultName=${azurerm_key_vault.main.name};SecretName=${name})"
+  }
+}
 
 resource "azurerm_service_plan" "ops" {
   name                = "plan-${local.base}-ops"
@@ -315,16 +360,31 @@ resource "azurerm_function_app_flex_consumption" "ops" {
   storage_authentication_type       = "UserAssignedIdentity"
   storage_user_assigned_identity_id = azurerm_user_assigned_identity.app.id
 
-  runtime_name    = "python"
-  runtime_version = "3.12"
+  runtime_name = "python"
+  # 3.13, matching `requires-python = ">=3.13"` in every workspace package. The
+  # host installs those packages as wheels built out of this repository
+  # (`api/functions/requirements.txt`), and pip refuses a wheel whose
+  # `Requires-Python` the interpreter does not satisfy — so a 3.12 worker does
+  # not run the ops API slightly differently, it fails to install it at all.
+  runtime_version = "3.13"
 
   instance_memory_in_mb  = 2048
   maximum_instance_count = 40
 
   https_only = true
 
+  # Two identities, and they do different jobs.
+  #
+  # The user-assigned one is the app tier's: it reads the published catalogue out
+  # of the `raw` container and it authenticates this app's deployment storage.
+  # The system-assigned one exists for exactly one reason — App Service resolves
+  # `@Microsoft.KeyVault(...)` references with the *system-assigned* identity
+  # unless `keyVaultReferenceIdentity` names another, and that property is not on
+  # this resource in the AzureRM provider. Adding the system identity is
+  # therefore how the two references above resolve at all; it is granted Key
+  # Vault Secrets User in foundation.tf and nothing else anywhere.
   identity {
-    type         = "UserAssigned"
+    type         = "SystemAssigned, UserAssigned"
     identity_ids = [azurerm_user_assigned_identity.app.id]
   }
 
@@ -341,6 +401,39 @@ resource "azurerm_function_app_flex_consumption" "ops" {
 
     "AZURE_CLIENT_ID"     = azurerm_user_assigned_identity.app.client_id
     "AZURE_KEY_VAULT_URI" = azurerm_key_vault.main.vault_uri
+
+    # The catalogue the draft store prices against. `chip_chat.api.menu` reads
+    # it with the user-assigned identity above, from the container #24's build
+    # publishes to — the same two settings the container app is given, because
+    # the ops API and the app must price a draft identically or the card the
+    # visitor read and the row that gets written are two different orders.
+    "AZURE_STORAGE_ACCOUNT"   = azurerm_storage_account.data.name
+    "AZURE_CATALOG_CONTAINER" = azurerm_storage_container.raw.name
+
+    # The shared secret the chat app presents. Its absence refuses every write,
+    # which is the whole reason it is checked before anything else in the
+    # request — see `function_app.py::_authentic`.
+    "CHIP_CHAT_OPS_KEY" = local.key_vault_reference[local.ops_api_key_secret]
+
+    # The only credentials in the system with the Snowflake write role. The user
+    # and the role are named rather than defaulted so that what this app runs as
+    # is a fact in a file somebody reads, and not a property of an account
+    # somebody may edit; `snowflake/sql/04_users.sql` and `00_roles.sql` create
+    # both. The warehouse is the X-Small serving one — only the nightly publish
+    # may name `CHIP_CHAT_PUBLISH_WH`.
+    "SNOWFLAKE_ACCOUNT"     = local.snowflake_ops_account
+    "SNOWFLAKE_OPS_USER"    = var.snowflake_ops_user
+    "SNOWFLAKE_PRIVATE_KEY" = local.key_vault_reference[local.ops_private_key_secret]
+    "SNOWFLAKE_WRITE_ROLE"  = "CHIP_CHAT_WRITE"
+    "SNOWFLAKE_WAREHOUSE"   = "CHIP_CHAT_SERVING_WH"
+    "SNOWFLAKE_DATABASE"    = "CHIP_CHAT"
+    "SNOWFLAKE_SCHEMA"      = "ACCOUNTS"
+
+    # deployment.environment on every `ops.<action>` span, so a write made from
+    # the deployed app is distinguishable in the backend from one made by a
+    # laptop pointed at the same account. Issue #63's last acceptance criterion
+    # is read off these spans, so where they land is part of the criterion.
+    "CHIP_CHAT_ENVIRONMENT" = var.environment
   }
 
   tags = local.tags

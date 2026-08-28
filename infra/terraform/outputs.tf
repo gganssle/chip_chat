@@ -170,6 +170,15 @@ output "ops_api_hostname" {
   value = azurerm_function_app_flex_consumption.ops.default_hostname
 }
 
+output "ops_api_name" {
+  description = "What `make ops-deploy` publishes to, and what `az functionapp function list` reports the four routes of. Terraform stands the app up; the code on it is a deploy, exactly as with the container image."
+  value       = azurerm_function_app_flex_consumption.ops.name
+}
+
+output "ops_api_url" {
+  value = "https://${azurerm_function_app_flex_consumption.ops.default_hostname}"
+}
+
 output "application_insights_name" {
   value = azurerm_application_insights.main.name
 }

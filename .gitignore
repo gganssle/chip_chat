@@ -53,6 +53,18 @@ landing/
 # zone -- a CI artefact, not a source file.
 change-report.md
 
+# --- The ops API's deployment payload ---------------------------------------
+# `make ops-package` builds the workspace into wheels beside the Functions host,
+# because `api/functions/requirements.txt` installs them from the payload rather
+# than from an index. They are build output of this repository and are rebuilt
+# from the current tree on every deploy, so a committed copy could only ever be
+# a stale one that looked authoritative.
+api/functions/wheels/
+# Where a developer would put a Snowflake key to run the host locally. The
+# deployed app reads its credentials through Key Vault references; this file is
+# the local equivalent and belongs on no machine but the one that wrote it.
+api/functions/local.settings.json
+
 # --- Node (web/) ------------------------------------------------------------
 node_modules/
 .next/

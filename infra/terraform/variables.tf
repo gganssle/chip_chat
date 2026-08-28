@@ -1017,6 +1017,41 @@ variable "snowflake_publisher_user" {
   default     = "CHIP_CHAT_PUBLISHER"
 }
 
+variable "snowflake_ops_account" {
+  description = <<-EOT
+    The Snowflake account identifier the ops API authenticates against, e.g.
+    `hq72718.us-east-2.aws`. An identifier rather than a host: the connector's
+    `account` argument takes the first, and handing it the second is an
+    authentication failure that names nothing useful.
+
+    Empty — the shipped default — falls back to `snowflake_account_url` with
+    `.snowflakecomputing.com` trimmed off, because the publish job and the ops
+    API talk to the same account and two settings that must agree are one
+    setting that can disagree. With both empty the ops API comes up with no
+    write credentials and answers every call with the 503 and the copy RFC-001
+    §10 specifies, which is the honest state for a write path that was never
+    pointed at anything.
+
+    Not a secret. What is secret is the private key, and that is a Key Vault
+    reference resolved at start-up — see compute.tf.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "snowflake_ops_user" {
+  description = <<-EOT
+    The Snowflake user the ops API authenticates as. `snowflake/sql/04_users.sql`
+    creates it with TYPE = SERVICE and it is the only identity in the account
+    that defaults to a role which may write to `CHIP_CHAT.ACCOUNTS`. Named here
+    for the same reason `snowflake_publisher_user` is: a rebuild after the trial
+    expires should need no code change, and what the write path runs as should be
+    a fact somebody can read rather than a property of an account somebody edited.
+  EOT
+  type        = string
+  default     = "CHIP_CHAT_OPS"
+}
+
 variable "databricks_publish_secret_scope" {
   description = <<-EOT
     The Databricks secret scope holding the publisher's private key. Created

@@ -188,7 +188,7 @@ What that file establishes, by driving the edge rather than by reading it:
 | An unconfirmed `draft_id` is rejected | 200, `DRAFT_NOT_CONFIRMED`, and `backend.calls == []` — the database was never asked |
 | A confirmed draft from another session is rejected | same draft id, different `x-cilantro-session`, `DRAFT_NOT_FOUND`, no write |
 | The same key writes once | `commit_then_fail()` → two calls, one write, `replayed` true; and a second POST of the same draft finds it retired |
-| The app being down produces the specified message | 503, `OPS_UNAVAILABLE_MESSAGE`, `ordering_available` false — including with no service installed at all, which is the state the deployed host is in today |
+| The app being down produces the specified message | 503, `OPS_UNAVAILABLE_MESSAGE`, `ordering_available` false — including with no service installed at all, which was the state the deployed host was in until it was published |
 | Every write emits `ops.<action>` with its confirmation state | read off the span, along with the trace id from the inbound `traceparent`, so the rejoin is asserted rather than assumed |
 
 The edge's own three preconditions are driven too, in order: an unauthenticated
@@ -200,19 +200,170 @@ worker's dispatch and its `FUNCTION` auth level are Azure's code, and the
 Snowflake driver is exercised nowhere in this workspace — the same argument
 `chip_chat.snowflake.snow` makes about shelling out to the CLI.
 
+## Deploying it
+
+Terraform owns the app; a deploy owns the code on it. That is the same division
+`make deploy` and `compute.tf` already draw for the container image, and it is
+here for the same reason: an `apply` that also shipped code would drag the
+deployment back to whatever the state file remembered.
+
+```bash
+make ops-key      # once: mint the shared secret into Key Vault
+make infra-apply  # the app, its two identities and its settings
+make ops-deploy   # build the workspace into wheels, publish, and CHECK
+make ops-verify   # put #63's live criteria to the thing on the internet
+```
+
+### `make ops-deploy` does not believe the publish command
+
+`func azure functionapp publish` exits zero on a deployment whose worker will
+never load a function, and this app spent weeks *Running* with **zero functions
+deployed** and a 404 on every route — the Functions-shaped version of the
+`provisioningState: Succeeded` trap `docs/deployment.md` §3.3 describes for
+Container Apps. So `ops-check` asks two questions afterwards, because either
+alone can be answered yes by a broken deployment:
+
+1. Does the platform list **four** functions? A publish whose remote build
+   failed lists none.
+2. Does `POST /api/place_order` answer **401**? That is `_authentic` refusing an
+   unkeyed caller, which is a fact about *this code being loaded*. A 404 is the
+   state the app was in before.
+
+### The payload, and why it is built rather than pushed
+
+`api/functions/requirements.txt` installs the workspace as **wheels out of the
+payload**, not as names off an index. `make ops-package` builds them with
+`uv build --all-packages` into `api/functions/wheels/`, which is gitignored:
+they are build output of the current tree and a committed copy could only ever
+be a stale one that looked authoritative.
+
+Two consequences worth stating rather than discovering.
+
+**Nine wheels, not four.** `chip_chat/api/__init__.py` imports
+`chip_chat.api.app`, so importing `chip_chat.api.ops` imports the whole request
+path — and the Functions host therefore installs `agent`, `search`, `vision` and
+`web` as well, along with their FastAPI, OpenAI and Pillow dependencies. That is
+the honest cost of the package layout rather than something the requirements
+file can trim; pruned to what the four routes actually touch, the host would not
+start.
+
+**The build happens on Azure.** That closure includes native wheels — `pillow-heif`,
+`uvloop` — which a macOS laptop cannot cross-build and could only fetch for the
+wrong platform and hope about. `--build remote` builds on the worker's own
+Linux, which is the version of this that is either right or loudly wrong.
+
+### Settings, and the two that are references
+
+Everything the host needs is on the Functions app rather than the container,
+because that is where the write role is. `compute.tf` has them all; two are
+Key Vault references and neither value is in Terraform state, plan output or a
+`terraform output`:
+
+| Setting | Value |
+| --- | --- |
+| `CHIP_CHAT_OPS_KEY` | → `ops-api-key`, the shared secret the chat app presents |
+| `SNOWFLAKE_PRIVATE_KEY` | → `snowflake-ops-private-key`, the write role's PKCS#8 key |
+| `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_OPS_USER`, `SNOWFLAKE_WRITE_ROLE`, `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA` | names, not secrets |
+| `AZURE_STORAGE_ACCOUNT`, `AZURE_CATALOG_CONTAINER` | where `chip_chat.api.menu` reads the published catalogue |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING`, `CHIP_CHAT_ENVIRONMENT` | where the `ops.<action>` spans land |
+
+Three things about that list cost an afternoon each and are therefore written
+down rather than left to be rediscovered.
+
+**The app carries two identities.** App Service resolves a Key Vault reference
+with the app's *system-assigned* identity unless `keyVaultReferenceIdentity`
+names another, and the AzureRM provider does not expose that property on
+`azurerm_function_app_flex_consumption`. So the ops API has a system-assigned
+identity whose only grant anywhere is Key Vault Secrets User
+(`foundation.tf`), beside the user-assigned one that reads the catalogue. An
+unresolved reference is not an error: the setting arrives holding the literal
+`@Microsoft.KeyVault(...)` string, `hmac.compare_digest` fails against it, and
+**every** call is refused with `OPS_KEY_INVALID` — which is the right direction
+to fail in and a genuinely confusing hour if you do not know it.
+
+**The key is PEM in the vault and DER on the wire.**
+`snowflake.connector.connect` takes `private_key` as DER bytes or as
+base64-encoded DER, and handed a PEM string it does not complain — `b64decode`
+discards the dashes and the words in the armour, decodes the wreckage, and the
+failure surfaces as an authentication error naming nothing. `_key_material` in
+`function_app.py` converts, so the vault can hold the format a person rotating
+the credential at two in the morning recognises on sight.
+
+**Two connection strings have to be deleted.** Azure leaves
+`AzureWebJobsStorage` and `DEPLOYMENT_STORAGE_CONNECTION_STRING` on the app as
+platform-managed settings the AzureRM provider will not touch. They are
+connection strings with an **empty account key**, because shared keys are
+disabled on the deployment storage account on purpose — and the host prefers
+them over the `AzureWebJobsStorage__accountName` / `__credential` / `__clientId`
+triple beside them. The result is an app that starts, reports healthy-ish,
+fails every read of its own secret repository with `AuthenticationFailed`,
+synchronises no triggers and serves 404 on all four routes. `ops-deploy` deletes
+them first, every time.
+
+### The Python parameter name is load-bearing
+
+The v2 programming model binds the HTTP trigger to a handler parameter **by
+name**, defaulting to `req`. A handler whose parameter is called anything else
+fails to load on the worker with `FunctionLoadError` — at load, not at call — so
+the app comes up Running with zero functions and 404 everywhere, with nothing in
+the HTTP response to suggest why. All four routes therefore state
+`trigger_arg_name="request"` rather than relying on the default.
+
+## What `make ops-verify` establishes, and what it cannot
+
+`infra/scripts/verify-ops-api.sh` puts #63's acceptance criteria to the
+deployment over HTTPS, with the real references resolved and no UI anywhere in
+the picture — which is the ticket's own phrasing: *tested directly against the
+API, bypassing the UI*.
+
+| Probe | What it establishes |
+| --- | --- |
+| `no-ops-key` | an unauthenticated caller may not write — 401 `OPS_KEY_INVALID` |
+| `no-visitor` | 401 `SESSION_REQUIRED`; a write with nobody bound is refused |
+| `no-trace-context` | 400 `TRACE_CONTEXT_REQUIRED`; a write nobody could find in a trace is refused |
+| `unconfirmed-draft` | **criterion 1** — 200 `DRAFT_NOT_FOUND`, and no procedure was called |
+| `another-session` | **criterion 2** — the same id under a different `x-cilantro-session`, refused |
+| `no-oracle` | the stranger and the owner get *byte-identical* answers, so the API is not an oracle for other visitors' draft ids |
+| `cancel-/redeem-/prefs-unconfirmed` | the other three routes claim from `ConfirmationLedger` and are gated too |
+| `nothing-was-written` | `action_receipts` and `orders` are unchanged in Snowflake afterwards |
+| `ops-span-emitted` | **criterion 5** — read back out of Application Insights, carrying `chip_chat.ops.confirmation_state` and `chip_chat.ops.reference_id` |
+
+The one it reports **UNSCORED**, and why that is honest rather than a gap in the
+script: **retrying with the same idempotency key produces one write.** Nothing
+outside the host's own process can mint a draft or set its confirmed flag —
+which is the design, not an oversight, and is the topology limitation below. So
+this script cannot cause the one successful write it would then have to count.
+`api/tests/test_ops.py`'s `commit_then_fail()` remains the only place that
+criterion is met, and a script that printed *one write* having caused zero
+writes would be the most expensive kind of green.
+
+Every probe is refused before a Snowflake session is acquired, so the run costs
+nothing but two `COUNT(*)`s. The write credential is exercised separately: the
+vault's key authenticates as `CHIP_CHAT_OPS` on `CHIP_CHAT_WRITE`, checked on
+2026-08-28.
+
 ## What is not wired yet, and why that is the honest state
 
-**The catalogue.** The draft store prices against a built catalogue and the
-production loader is #66's, exactly as `chip_chat.api.app.build_service` records
-for its photo lane. Until it exists the host answers 503 with the message §10
-specifies, which is the behaviour for an ops API that is not there.
+**The topology, and it is now the only one.** A draft minted in the chat app's
+process lives in that process's memory (#62), so an ops service in a *different*
+process cannot see it — and the deployed ops API is a different process. The
+consequence is precise: the write path is deployed, credentialled and refusing
+correctly, and **the chat app does not yet call it**. `chip_chat.agent.orders`
+still holds the week-one order desk, and moving the agent's write tools onto
+this service is its own change, waiting on a draft store both processes can
+read. That is the same limitation `BudgetLedger` carries, with the same one
+obvious place for a shared implementation to land.
 
-**The topology.** A draft minted in the chat app's process lives in that
-process's memory (#62), so an ops service in a *different* process cannot see it.
-V0 therefore runs the ops service behind the app, and `api/functions/` is the
-deployment shape it moves into when both ledgers move behind a shared store —
-the same honest limitation `BudgetLedger` carries, with the same one obvious
-place for a shared implementation to land.
+Until that lands, `make adversarial-writegate` measures the *app's* order desk
+rather than this service, because it attacks through `POST /api/chat` — which is
+the only door a visitor has. Both gates are the same rule; only one of them is
+currently on the path a request takes.
+
+**The catalogue** used to be here and is not any more: `chip_chat.api.menu` is
+#66's production loader, the Functions app is pointed at the `raw` container the
+catalogue build publishes to, and the host reads it on first use. A deployment
+whose storage account is unconfigured still answers 503 with the message §10
+specifies.
 
 **The agent.** `chip_chat.agent.orders` still holds the week-one order desk
 against three hardcoded items, and says in its own docstring that it goes away

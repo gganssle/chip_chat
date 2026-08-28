@@ -219,7 +219,7 @@ Every ceiling is an environment variable, all optional, all defaulted small:
 The ops API's own settings live on the Functions app rather than on the
 container, because that is where the write role is: `CHIP_CHAT_OPS_KEY` (the
 shared secret the chat app presents, and whose absence refuses every write),
-`SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER` and `SNOWFLAKE_PRIVATE_KEY` as a Key Vault
+`SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_OPS_USER` and `SNOWFLAKE_PRIVATE_KEY` as a Key Vault
 reference, and optional `SNOWFLAKE_WRITE_ROLE`, `SNOWFLAKE_WAREHOUSE`,
 `SNOWFLAKE_DATABASE` and `SNOWFLAKE_SCHEMA`.
 
