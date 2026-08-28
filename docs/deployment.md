@@ -405,6 +405,15 @@ failure with a 200 and a sentence the visitor reads, rather than with a status
 code. A route that signalled failure by status could not take this fix as
 written.
 
+`POST /api/chat` is the only route this was done to, and the honest statement of
+the remaining exposure is `POST /api/photo`, which is also a model call behind a
+`JSONResponse` with no heartbeat under it. It is left alone because it is one
+single-shot perception call against a non-reasoning deployment rather than an
+agent loop, so it is nowhere near the line — and because the photo lane reads
+`not_wired` on this deployment, so today the route cannot reach a model at all.
+If the lane is ever wired and its p95 goes anywhere near sixty seconds, the fix
+is `_object` and it is already written.
+
 **What this does not fix, and the floor it leaves.** The other half of the losses
 is `openai.RateLimitError` from the shared `gpt-5-mini` deployment, which is
 provisioned at capacity 10 — ten thousand tokens a minute — against a
