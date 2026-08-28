@@ -59,3 +59,21 @@ resource "azurerm_role_assignment" "app_key_vault_secrets_user" {
   principal_id         = azurerm_user_assigned_identity.app.principal_id
   principal_type       = "ServicePrincipal"
 }
+
+# The ops API's system-assigned identity, and the one thing it is for.
+#
+# App Service resolves `@Microsoft.KeyVault(...)` application settings with the
+# app's *system-assigned* identity unless `keyVaultReferenceIdentity` names
+# another, and the AzureRM provider does not expose that property on
+# `azurerm_function_app_flex_consumption`. So the ops API carries a second
+# identity purely so that its two references — the write role's private key and
+# the shared ops key — resolve, and this is the only grant that identity holds.
+#
+# It reads secrets and cannot write them: Key Vault Secrets User, the same role
+# the app identity has, rather than the administrator role the developer has.
+resource "azurerm_role_assignment" "ops_key_vault_secrets_user" {
+  scope                = azurerm_key_vault.main.id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = azurerm_function_app_flex_consumption.ops.identity[0].principal_id
+  principal_type       = "ServicePrincipal"
+}

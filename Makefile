@@ -1053,3 +1053,151 @@ takedown: ## Throw the kill switch and stop serving. See docs/deployment.md sect
 	az containerapp update -n $(APP) -g $(RG) \
 		--set-env-vars CHIP_CHAT_KILL_SWITCH=on --min-replicas 0 --max-replicas 0 -o none
 	@echo "kill switch thrown and replicas capped at zero: $(APP_URL) serves nothing"
+
+# --- Deploying the ops API --------------------------------------------------
+#
+# Issue #63, and the same division of labour as the container app above:
+# Terraform owns the app, its identity and its settings; this owns the code on
+# it. The Functions app existed and was Running for weeks with ZERO functions
+# deployed, which is the failure `deploy-check` exists for, one resource across:
+# `provisioningState: Succeeded` on an app answering 404 to every route it is
+# supposed to hold.
+#
+# So `ops-deploy` does not stop at "the publish command exited zero". It waits
+# for the platform to report four routes and then asks the deployment itself to
+# prove it, by making a real call and requiring the answer the code gives rather
+# than the answer a missing function gives.
+#
+# The payload is built rather than pushed as source. `api/functions/requirements.txt`
+# installs the workspace as wheels out of `wheels/`, because none of these
+# packages is on any index and this is the one process holding the Snowflake
+# write role -- that file has the argument. The wheels are rebuilt from the
+# current tree on every deploy and are gitignored.
+
+OPS_APP        = $(shell $(TF_RUN) output -raw ops_api_name)
+OPS_URL        = $(shell $(TF_RUN) output -raw ops_api_url)
+OPS_VAULT      = $(shell $(TF_RUN) output -raw key_vault_name)
+OPS_DIR        = api/functions
+OPS_KEY_SECRET = ops-api-key
+
+.PHONY: ops-key ops-package ops-deploy ops-check ops-settings ops-verify ops-logs \
+        ops-unset-connection-strings
+
+# The shared secret the chat app presents on `x-cilantro-ops-key`. Minted here
+# rather than in Terraform for the reason `databricks_publish_secret_scope`
+# gives: no credential enters Terraform state. Deliberately idempotent -- it will
+# not rotate a secret that already exists, because rotating this one without
+# also rolling the caller is how the write path goes dark on a Friday.
+ops-key: ## Mint the ops API's shared secret in Key Vault if it is not there
+	@if az keyvault secret show --vault-name $(OPS_VAULT) \
+		--name $(OPS_KEY_SECRET) -o none 2>/dev/null; then \
+		echo "$(OPS_KEY_SECRET) already exists in $(OPS_VAULT); not rotating it"; \
+	else \
+		az keyvault secret set --vault-name $(OPS_VAULT) --name $(OPS_KEY_SECRET) \
+			--description "The shared secret the chat app presents to the ops API on x-cilantro-ops-key." \
+			--value "$$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" -o none && \
+		echo "minted $(OPS_KEY_SECRET) in $(OPS_VAULT)"; \
+	fi
+
+ops-package: ## Build the workspace into the wheels the Functions host installs
+	rm -rf $(OPS_DIR)/wheels
+	$(UV) build --all-packages --wheel --out-dir $(OPS_DIR)/wheels
+	@for wheel in $$(grep -o '^wheels/[^ ]*\.whl' $(OPS_DIR)/requirements.txt); do \
+		test -f $(OPS_DIR)/$$wheel || { \
+			echo "requirements.txt names $$wheel and the build did not produce it"; \
+			exit 1; }; \
+	done
+	@echo "packaged $$(ls $(OPS_DIR)/wheels | wc -l | tr -d ' ') wheels into $(OPS_DIR)/wheels"
+
+# Remote build rather than a locally vendored site-packages, and the reason is
+# not preference. `chip_chat.api.__init__` imports the whole request path, so the
+# host's dependency closure includes pillow-heif and uvloop -- native wheels a
+# macOS laptop cannot cross-build and would have to fetch for the wrong platform
+# and hope about. Building on the worker's own Linux is the version of this that
+# is either right or loudly wrong.
+#
+# FUNCTIONS_WORKER_RUNTIME is set here because `func` reads the project's
+# language out of `local.settings.json`, and this project deliberately has no
+# such file: it is where a developer's Snowflake key would go, it is gitignored
+# for that reason, and a publish that uploaded it would put a credential on the
+# app as a plain setting beside the Key Vault references that exist so it is not.
+# So the one fact `func` actually needs from it is stated here instead.
+ops-deploy: ops-package ## Publish the ops API and prove all four routes answer
+	@command -v func >/dev/null || { \
+		echo "Azure Functions Core Tools is not on PATH. On macOS:"; \
+		echo "  brew tap azure/functions && brew trust azure/functions"; \
+		echo "  brew install azure-functions-core-tools@4"; \
+		echo "The trust step is required: Homebrew refuses formulae from an"; \
+		echo "untrusted tap, and the first install fails with nothing else wrong."; \
+		exit 2; }
+	@$(MAKE) ops-unset-connection-strings
+	cd $(OPS_DIR) && FUNCTIONS_WORKER_RUNTIME=python \
+		func azure functionapp publish $(OPS_APP) --build remote
+	@$(MAKE) ops-check
+
+# Two settings Terraform cannot delete, and why they have to go.
+#
+# The AzureRM provider treats `AzureWebJobsStorage` and
+# `DEPLOYMENT_STORAGE_CONNECTION_STRING` as platform-managed and leaves them
+# alone, so they survive an apply that does not mention them. They are
+# connection strings, the deployment storage account has SHARED KEYS DISABLED
+# (storage.tf, deliberately), and a connection string with no account key in it
+# is what the host prefers over the `AzureWebJobsStorage__accountName` /
+# `__credential` / `__clientId` triple beside it. The result is an app that
+# starts, reports Running, fails every read of its own secret repository with
+# `AuthenticationFailed`, and therefore synchronises no triggers and serves 404
+# on all four routes -- which is exactly the state this app was found in.
+#
+# `|| true` because deleting a setting that is not there is the state we want.
+ops-unset-connection-strings: ## Delete the keyless connection strings that break identity auth
+	@az functionapp config appsettings delete -g $(RG) -n $(OPS_APP) \
+		--setting-names AzureWebJobsStorage DEPLOYMENT_STORAGE_CONNECTION_STRING \
+		-o none 2>/dev/null || true
+
+# The check `deploy-check` is for this resource. Two questions, because either
+# one alone can be answered yes by a broken deployment: the platform lists four
+# functions (a publish whose remote build failed lists none), and the edge
+# answers a real call the way `function_app.py` answers it rather than the way a
+# missing route does.
+ops-check: ## Wait until all four routes are registered and answering
+	@echo "Waiting for $(OPS_URL)"
+	@echo "  a publish that exits zero and a route that exists are different facts."
+	@for i in $$(seq 1 30); do \
+		count=$$(az functionapp function list -g $(RG) -n $(OPS_APP) \
+			--query "length(@)" -o tsv 2>/dev/null || echo 0); \
+		if [ "$$count" = "4" ]; then \
+			key=$$(az functionapp keys list -g $(RG) -n $(OPS_APP) \
+				--query functionKeys.default -o tsv); \
+			code=$$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+				-H "x-functions-key: $$key" -H 'Content-Type: application/json' \
+				-d '{}' $(OPS_URL)/api/place_order); \
+			if [ "$$code" = "401" ]; then \
+				echo "  four routes registered; place_order answered 401"; \
+				echo "  (401 is _authentic refusing an unkeyed caller -- the route is live)"; \
+				exit 0; \
+			fi; \
+			echo "  four routes, but place_order answered $$code; waiting"; \
+		fi; \
+		sleep 10; \
+	done; \
+	echo "  not serving after 300s -- 'make ops-logs' has the worker's own account"; exit 1
+
+ops-settings: ## Print the ops API's application settings, secret values redacted
+	@az functionapp config appsettings list -g $(RG) -n $(OPS_APP) \
+		--query "sort_by([].{name:name,value:value}, &name)" -o tsv \
+		| sed 's|@Microsoft.KeyVault(.*)|<key vault reference>|'
+
+ops-logs: ## Read what the ops API's worker has been saying, newest first
+	az monitor app-insights query \
+		--app $(shell $(TF_RUN) output -raw application_insights_name) -g $(RG) \
+		--analytics-query "union traces, exceptions | where cloud_RoleName contains 'ops' | project timestamp, message, outerMessage | order by timestamp desc | take 50" \
+		-o table
+
+# The live half of #63's acceptance criteria -- the ones that cannot be
+# established by a test, because they are claims about a deployment rather than
+# about this repository's code. `infra/scripts/verify-ops-api.sh` carries the
+# prose on what each probe proves and, more usefully, on what a green probe does
+# NOT prove. Costs a warehouse resume and nothing else.
+ops-verify: ## Put #63's live acceptance criteria to the DEPLOYED ops API
+	infra/scripts/verify-ops-api.sh \
+		--app "$(OPS_APP)" --group "$(RG)" --url "$(OPS_URL)" --vault "$(OPS_VAULT)"

@@ -1,4 +1,20 @@
+# What `func azure functionapp publish` must not put in the payload.
+#
+# The deployment package is built from this directory in place -- `wheels/` is
+# written here by `make ops-package` and is the one generated thing that has to
+# stay -- so this file's job is to keep the incidental out: a local settings
+# file that would shadow the app's real configuration, and the caches a test run
+# leaves behind.
+#
+# `local.settings.json` is the important line. It is where a developer would put
+# a Snowflake key to run the host locally, it is in `.gitignore` for that reason,
+# and a publish that uploaded it would put credentials on the app as plain
+# application settings alongside the Key Vault references that exist so that
+# they are not.
+local.settings.json
 .git*
+tests
 .venv
 __pycache__
-tests
+*.pyc
+.python_packages

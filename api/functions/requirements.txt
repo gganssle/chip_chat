@@ -9,10 +9,29 @@
 azure-functions>=1.21
 snowflake-connector-python>=3.12
 
-# The packages this host serves. Built from the workspace at deploy time; the
-# deployment guide records the command. Named here so that what the host needs
-# is readable without reading the build.
-chip-chat-api
-chip-chat-otel
-chip-chat-snowflake
-chip-chat-catalog
+# The packages this host serves, as wheels rather than as names.
+#
+# `make ops-package` builds them out of the workspace into `wheels/` beside this
+# file, and the deployment's remote build installs them from there. They are
+# spelled as paths for two reasons. None of them is on any index, so a name
+# would resolve to whatever a stranger uploads under it -- and this is the one
+# process in the estate holding the Snowflake write role, which makes it the
+# worst possible place to leave that open. And a path is a fact about the
+# payload: an absent wheel fails the build loudly instead of resolving to
+# something else.
+#
+# Nine rather than the four `function_app.py` imports, because `chip_chat.api`'s
+# own `__init__` imports `chip_chat.api.app` -- so importing `chip_chat.api.ops`
+# imports the whole request path, and the whole of its dependency tree has to be
+# installed for the four routes to load at all. That is the honest cost of the
+# package layout rather than something this file can trim: pruned to the import
+# closure of the four routes, the host would not start.
+wheels/chip_chat_api-0.0.0-py3-none-any.whl
+wheels/chip_chat_agent-0.0.0-py3-none-any.whl
+wheels/chip_chat_catalog-0.0.0-py3-none-any.whl
+wheels/chip_chat_harvest-0.0.0-py3-none-any.whl
+wheels/chip_chat_otel-0.0.0-py3-none-any.whl
+wheels/chip_chat_search-0.0.0-py3-none-any.whl
+wheels/chip_chat_snowflake-0.0.0-py3-none-any.whl
+wheels/chip_chat_vision-0.0.0-py3-none-any.whl
+wheels/chip_chat_web-0.0.0-py3-none-any.whl

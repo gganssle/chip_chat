@@ -1017,6 +1017,19 @@ variable "snowflake_publisher_user" {
   default     = "CHIP_CHAT_PUBLISHER"
 }
 
+variable "snowflake_ops_user" {
+  description = <<-EOT
+    The Snowflake user the ops API authenticates as. `snowflake/sql/04_users.sql`
+    creates it with TYPE = SERVICE and it is the only identity in the account
+    that defaults to a role which may write to `CHIP_CHAT.ACCOUNTS`. Named here
+    for the same reason `snowflake_publisher_user` is: a rebuild after the trial
+    expires should need no code change, and what the write path runs as should be
+    a fact somebody can read rather than a property of an account somebody edited.
+  EOT
+  type        = string
+  default     = "CHIP_CHAT_OPS"
+}
+
 variable "databricks_publish_secret_scope" {
   description = <<-EOT
     The Databricks secret scope holding the publisher's private key. Created
