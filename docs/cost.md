@@ -643,6 +643,31 @@ that alert, and the two things pushing it over are the account lane and a NAT
 gateway** — neither of which was in the original arithmetic. The budget alert is
 correctly calibrated to be surprising, and it would be surprised.
 
+### 13.1 The row that arrived on 28 August: the observability backend
+
+The `Arize AX Free | $0.00` line above is no longer what is deployed. AX was
+never bought — AX Free is free of charge but not of a signup, and the owner's
+instruction is free tier only with no third-party account — so the
+agent-observability backend is a **self-hosted Phoenix container in
+`cae-chip-chat`**, and it is the first thing in this estate that has to run at
+`min_replicas = 1`. A span exporter's POST is not a request anybody is waiting
+on: a backend scaled to zero drops the spans it exists to collect, quietly.
+
+| | per month |
+| --- | ---: |
+| Phoenix replica, 0.5 vCPU + 1 GiB, always on — **idle rates** | $11.66 |
+| the same replica if the platform never counts it idle — **active rates** | $38.88 |
+| Scheduled monitor job, 2,880 executions ≈ 86,000 vCPU-seconds | ≈$0.00, inside the free grant |
+| Trace storage | $0.00 — there is none; see the decision record |
+| **New total** | **≈$104 – $132** |
+
+**This moves the 80% alert at $120 into range as well**, and at the top of the
+range the $150 budget has about $18 of headroom. Estimated, not measured — these
+resources are hours old and the honest reading of the range is that nobody should
+quote the bottom of it. The arithmetic, what it buys, and what is lost by not
+buying AX are in
+[`decisions/hosted-phoenix.md`](decisions/hosted-phoenix.md).
+
 Month to date on 2026-08-27, three days in, actual Azure spend is **$6.02** and
 `az consumption budget list` reports the budget's own `currentSpend` as **$3.24**
 — the same lag from section 9, showing up in a second place.

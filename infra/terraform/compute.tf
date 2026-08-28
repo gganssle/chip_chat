@@ -63,7 +63,19 @@ locals {
       # The circuit breaker, in the run position. One portal edit throws it.
       CHIP_CHAT_KILL_SWITCH = var.kill_switch
     },
-    var.otlp_endpoint == "" ? {} : { OTEL_EXPORTER_OTLP_ENDPOINT = var.otlp_endpoint },
+    # The agent-observability backend. `local.otlp_endpoint` is defined in
+    # observability.tf and resolves to the Phoenix container app in this
+    # environment unless `var.otlp_endpoint` overrides it. This is the entire
+    # app-tier diff of the backend switch — one env entry, no instrumentation.
+    #
+    # OTEL_EXPORTER_OTLP_HEADERS is deliberately absent: a self-hosted backend
+    # on an internal address needs no API key, and this map still carries no
+    # secrets. OTEL_EXPORTER_OTLP_PROTOCOL is absent for a different reason —
+    # chip_chat.otel.config does not read it (only the agent tier's runtime
+    # does), and a setting the application does not read is worse than an
+    # absent one, because it looks like configuration. Both are in
+    # docs/decisions/hosted-phoenix.md.
+    local.otlp_endpoint == "" ? {} : { OTEL_EXPORTER_OTLP_ENDPOINT = local.otlp_endpoint },
     local.snowflake_env,
   )
 

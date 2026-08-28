@@ -151,3 +151,42 @@ def test_the_loop_runs_the_deterministic_monitors_with_no_judge_at_all() -> None
 def test_the_default_rate_is_the_one_the_module_argues_for() -> None:
     assert DEFAULT_RATE == 0.20
     assert "20%" in SamplingPolicy().describe()
+
+
+def test_a_slow_turn_alone_does_not_buy_a_judge() -> None:
+    """The rule that production found, and the one that keeps the rate a rate.
+
+    The deployed app breaches the six-second latency target on every turn it
+    serves, so ``escalate on anything that fired`` is ``escalate on
+    everything``: the sampling rate is switched off and the judges cost five
+    times what the budget line reports. A latency breach is a real finding and
+    still fires — it is simply not a reason to buy an opinion from a judge who
+    is only ever asked whether a claim was supported and whether the reply
+    declined, neither of which is a thing you learn about a slow turn.
+    """
+    slow = LiveTurn(
+        trace_id="deterministically-not-in-the-sampled-fifth",
+        message="how much is a bowl",
+        reply="A bowl is on the menu.",
+        duration_ms=52_641.0,
+    )
+    assert not SamplingPolicy(rate=0.0).decide(slow, flagged=False).judged
+
+    run = run_online([slow], policy=SamplingPolicy(rate=0.0))
+
+    assert any(alert.monitor == "latency_or_cost_breach" for alert in run.alerts)
+    assert run.judged == 0
+    assert run.scored[0].decision.reason is Reason.NOT_SAMPLED
+
+
+def test_an_escalating_monitor_still_buys_a_judge() -> None:
+    """The narrowing is per monitor, not a retreat from the rule."""
+    disclosing = next(
+        drill.turn
+        for drill in drills()
+        if drill.monitor.name == "cross_visitor_disclosure"
+    )
+
+    run = run_online([disclosing], policy=SamplingPolicy(rate=0.0))
+
+    assert run.scored[0].decision.reason is Reason.FLAGGED

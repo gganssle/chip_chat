@@ -127,12 +127,17 @@ class Monitor:
         fear: The sentence from #76 this monitor is the implementation of.
         judged: Whether it needs a judge, and therefore whether it runs on the
             sampled fraction or on everything.
+        escalates: Whether this monitor firing is a reason to spend a judge on
+            the turn. True for every monitor except the budget breach, and the
+            exception was found in production rather than reasoned out in
+            advance — see :data:`BUDGET_BREACH`.
     """
 
     name: str
     severity: Severity
     fear: str
     judged: bool = False
+    escalates: bool = True
 
 
 UNGROUNDED_CLAIM = Monitor(
@@ -168,6 +173,28 @@ BUDGET_BREACH = Monitor(
     name="latency_or_cost_breach",
     severity=Severity.DASHBOARD,
     fear="Latency and cost per conversation breaching their targets.",
+    # The one monitor that does not escalate a turn to a judge, and the reason
+    # is a measurement rather than an opinion.
+    #
+    # `escalates` exists because of what the first run against real production
+    # traces showed. Three turns went through the deployed app; all three
+    # breached the six-second latency target -- by 11, 23 and 52 seconds -- and
+    # since a turn any deterministic monitor fired on is always judged, all
+    # three were judged. The sampling rate was 20% and the realised rate was
+    # 100%, which is not a rate that drifted: it is a rate that had been
+    # switched off by a monitor that fires on every turn. The budget line then
+    # reports the judges at 5% of the daily ceiling while the loop is actually
+    # spending five times that.
+    #
+    # The narrowing is principled rather than a fudge, which is why it is a
+    # field on the monitor and not a threshold somebody raised until the noise
+    # stopped. The judge answers exactly two questions -- is this claim
+    # supported by what the turn retrieved, and did the reply decline -- and
+    # neither of them is a thing you learn about a slow turn. A latency breach
+    # is a real finding, it still fires, it still routes to the dashboard where
+    # it means something as a rate; it is simply not a reason to buy an opinion
+    # that cannot be about it.
+    escalates=False,
 )
 
 MONITORS: Final[tuple[Monitor, ...]] = (

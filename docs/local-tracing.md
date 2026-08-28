@@ -206,16 +206,35 @@ product name ever appears in that file.
 That is decision [D6](rfc-001.md#openinference-over-otel-dual-export-phoenix-then-arize-ax),
 and it has to be *true* rather than intended, because
 [#78](https://github.com/gganssle/chip_chat/issues/78) has to be able to show
-later that repointing at Arize AX was a configuration change and nothing else:
+later that repointing at another backend was a configuration change and nothing
+else:
 
-| Variable | Local (what `make dev` sets) | Arize AX |
-| --- | --- | --- |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:6006` | the AX endpoint |
-| `OTEL_EXPORTER_OTLP_HEADERS` | unset | `api_key=…,space_id=…` |
+| Variable | Local (what `make dev` sets) | Deployed | Arize AX |
+| --- | --- | --- | --- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:6006` | the internal Phoenix address, from Terraform | the AX endpoint |
+| `OTEL_EXPORTER_OTLP_HEADERS` | unset | unset — an internal backend needs no key | `api_key=…,space_id=…` |
 
 Running `make trace` against the new endpoint and seeing the same tree is how
 that claim gets checked. Nothing else changes — not a line of the exporter, not a
 span name, not a call site.
+
+**The middle column is no longer hypothetical.** As of 28 August 2026 the
+deployed app exports to a Phoenix running in the same Container Apps environment,
+on this same pinned image, and the repoint changed one environment variable and
+no instrumentation. [`decisions/hosted-phoenix.md`](decisions/hosted-phoenix.md)
+is the record — what was planned, what the owner decided instead, and what is
+lost by it. Two things there are worth knowing before you read a production trace
+alongside a local one:
+
+- **The versions are held equal by a test.**
+  `infra/tests/test_local_stack.py::test_the_deployed_backend_is_the_same_version_as_the_dev_loops`
+  fails if `compose.yaml` and `infra/terraform/variables.tf` disagree. Bump both
+  in one commit. The whole value of the local tree as evidence about the
+  production one rests on this.
+- **The deployed backend is internal-only**, because a production trace carries
+  what a stranger typed. There is no URL to open from a laptop; the decision
+  record's *Reading the traces* section has the two commands that get you the
+  data without opening a port.
 
 That is the app tier's half and it is the easy half. The **agent's** exporter
 variables are immutable per agent version, so repointing the agent is a new
@@ -243,10 +262,19 @@ it yourself — see [`.env.example`](../.env.example), which says so.
 
 Deliberately. There is no volume in `compose.yaml`, so Phoenix's database lives
 inside the container and `make dev-down` takes it with it. This is a dev loop, not
-a store: the traces worth keeping are the ones from the deployed app, and those go
-to Arize AX and Application Insights.
+a store.
 
 If you want a clean slate mid-session, `make dev-down && make dev` is it.
+
+**The deployed backend is the same, and there it was not the original intention.**
+An Azure Files share was built for it and abandoned on a measurement: SQLite's WAL
+mode needs shared memory the CIFS client cannot provide, so it survived exactly
+one container lifetime and then could not be restarted at all. The traces worth
+keeping from production are in **Application Insights**, which has every one of
+the same spans under the same trace ids for thirty days. The full sequence, and
+the \$16/month PostgreSQL server that is the alternative, are in
+[`decisions/hosted-phoenix.md`](decisions/hosted-phoenix.md) under *Persistence*
+— read it before mounting a volume at `PHOENIX_WORKING_DIR` anywhere.
 
 ## When it does not work
 

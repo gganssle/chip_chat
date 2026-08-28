@@ -13,6 +13,7 @@ import pytest
 
 from chip_chat.eval.online.__main__ import main
 from chip_chat.eval.online.budget import CEILING_VARIABLE
+from chip_chat.eval.online.phoenix import PhoenixError
 
 
 def test_check_fails_while_the_judges_spend_is_unaccounted(
@@ -129,3 +130,65 @@ def test_an_unreadable_capture_fails_with_the_reason(
 
     assert status == 1
     assert "error: cannot read" in capsys.readouterr().err
+
+
+def test_a_backend_that_cannot_be_read_fails_rather_than_reporting_quiet_traffic(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The failure mode this exists to refuse.
+
+    A scheduled monitor that cannot reach its trace source and prints ``0
+    turns, 0 alerts`` is indistinguishable from a quiet afternoon, which is the
+    one state these monitors exist to tell trouble apart from.
+    """
+    from chip_chat.eval.online import __main__ as entry
+
+    def unreachable(*args: object, **kwargs: object) -> tuple[()]:
+        raise PhoenixError("http://nowhere could not be reached")
+
+    monkeypatch.setattr(entry, "read_live_turns", unreachable)
+
+    status = main(["--phoenix", "http://nowhere"])
+
+    assert status == 1
+    assert "could not be reached" in capsys.readouterr().err
+
+
+def test_fail_on_turns_a_severe_alert_into_an_exit_status(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The caller routes; the package still delivers nothing itself.
+
+    Two rather than one, so that a run which failed *because it found
+    something* is distinguishable in a job's exit status from a run that could
+    not read its input.
+    """
+    from chip_chat.eval.online import __main__ as entry
+    from chip_chat.eval.online.testing import drills
+
+    disclosure = next(
+        drill.turn
+        for drill in drills()
+        if drill.monitor.name == "cross_visitor_disclosure"
+    )
+    monkeypatch.setattr(entry, "read_live_turns", lambda *a, **k: (disclosure,))
+
+    assert main(["--phoenix", "http://backend", "--fail-on", "page"]) == 2
+    assert "[page] cross_visitor_disclosure" in capsys.readouterr().out
+
+
+def test_without_fail_on_a_run_that_found_something_still_exits_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reporting is the default; interrupting somebody is opt-in."""
+    from chip_chat.eval.online import __main__ as entry
+    from chip_chat.eval.online.testing import drills
+
+    disclosure = next(
+        drill.turn
+        for drill in drills()
+        if drill.monitor.name == "cross_visitor_disclosure"
+    )
+    monkeypatch.setattr(entry, "read_live_turns", lambda *a, **k: (disclosure,))
+
+    assert main(["--phoenix", "http://backend"]) == 0
