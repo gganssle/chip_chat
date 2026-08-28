@@ -25,6 +25,61 @@
 -- fails if one ever does -- a single OR clause is all it would take to exempt
 -- the ops API, and it would read like a convenience.
 --
+-- AND IT HAS BEEN WRITTEN ONCE, BY SOMEBODY WHO WAS RIGHT ABOUT THE SYMPTOM.
+-- The first nightly publish (#39) ran on 2026-08-27. It staged 18,898 orders,
+-- swapped them into ACCOUNTS.orders, counted the target to check its own work,
+-- read 0 and stopped: CHIP_CHAT_PUBLISH sets no DEMO_ID, this policy guards six
+-- of the tables that job replaces, and a policy with no owner exemption has
+-- none for a batch role either. The repair applied to the live account -- with
+-- ALTER ... SET BODY, because a CREATE OR REPLACE is refused while a policy is
+-- attached to anything -- was a third clause here:
+--
+--     OR CURRENT_ROLE() = 'CHIP_CHAT_PUBLISH'
+--
+-- The argument for it was true. CHIP_CHAT_PUBLISH is held by one Databricks
+-- service user, it is reachable from no session the app or the model can open,
+-- and it is the thing that wrote those rows -- it cannot learn anything by
+-- reading back what it supplied itself. The clause was still wrong, it was
+-- removed the same day, and the two reasons outlive this particular role.
+--
+-- The first is that a policy body is per-policy and not per-table. #43's
+-- criterion is "a session with no demo_id reads zero rows from every
+-- visitor-scoped table", for every role rather than for every role but one, and
+-- that clause would have opened all nine tables visitor_isolation guards to the
+-- publisher -- including the six it has no business in. What keeps the
+-- publisher out of demo_visitors is 03_grants.sql, which hands it three tables
+-- by name; a containment with two independent halves is not improved by
+-- retiring one of them.
+--
+-- The second is the direction it fails in. A role-only exemption is invisible
+-- from inside the job: a publisher that can read every visitor and a publisher
+-- that can read none look exactly alike in a run that succeeded, and looking
+-- different is the entire purpose of default deny.
+--
+-- WHAT THE PUBLISHER DOES INSTEAD, WHICH NEEDED NO CHANGE HERE. It asks a
+-- question that is not a read:
+--
+--     SELECT MAX(row_count) FROM CHIP_CHAT.INFORMATION_SCHEMA.TABLES
+--      WHERE table_schema = 'ACCOUNTS' AND table_name = 'ORDERS'
+--
+-- ROW_COUNT is metadata ABOUT the table rather than a read of its rows, so no
+-- row access policy filters it. Measured on the live account the same day, with
+-- nothing bound: CHIP_CHAT_READ and CHIP_CHAT_PUBLISH both count 0 rows of
+-- ACCOUNTS.orders through SELECT, and both read 18,898 off INFORMATION_SCHEMA.
+-- `chip_chat.databricks.publish.row_count` builds that query,
+-- `databricks/tests/test_publish.py` holds the job to using it, and
+-- docs/nightly-publish.md section 7 is the whole finding -- including the half
+-- of the old warning that turned out to be false: INSERT OVERWRITE truncates
+-- the table rather than deleting the rows it can see, so the swap removed all
+-- 2,277 rows that were there while the role could not select one of them.
+--
+-- The clause is gone from the account and it was never in this file, so the two
+-- agree. `chip_chat.snowflake.verify` is what keeps them agreeing: it DESCRIBEs
+-- both policies on the live account and fails if a body names a lane role,
+-- because the test that asks this FILE the same question cannot see an ALTER
+-- somebody typed into Snowsight at four in the morning -- which is exactly what
+-- the paragraph above is about.
+--
 -- THE TWO POLICIES
 --
 --   visitor_isolation   demo_id must equal the bound visitor. DEFAULT DENY: an

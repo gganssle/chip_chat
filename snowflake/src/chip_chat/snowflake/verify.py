@@ -56,8 +56,8 @@ CHIP_CHAT_WRITE without ``APPLY ROW ACCESS POLICY`` and without ownership of
 anything, and that is where the absence gets demonstrated rather than asserted.
 
 #43 is the launch gate and gets its own fixture, guarded by the **real**
-``visitor_isolation`` policy. Three things are asked of the account and the
-third is the one that keeps the other two honest:
+``visitor_isolation`` policy. Four things are asked of the account, and the last
+is the one that keeps the others honest:
 
 **Coverage.** Every table on `09_audit.sql`'s ``visitor_scoped_tables`` carries
 a policy, and the tables that carry one are exactly the tables
@@ -66,9 +66,19 @@ than Python's, because a table somebody created by hand is invisible to
 `make ci` and is exactly the table this is looking for.
 
 **Behaviour.** Two bound sessions see different rows; an unbound session sees
-none; ``SELECT *`` returns only the bound visitor's rows; the write role is
-bound by the same policy; and the maintenance escape is unreachable from a lane
-role even with the variable set.
+none; ``SELECT *`` returns only the bound visitor's rows; the write role and the
+publish role are bound by the same policy the read lane is; and the maintenance
+escape is unreachable from a lane role even with the variable set. The publish
+role is asked twice, and the second question is what it can still do: count its
+own swap off ``INFORMATION_SCHEMA``, which is metadata rather than a read and is
+why the nightly job needs no exemption from the policy that stopped it once.
+
+**The bodies.** Both policies are DESCRIBEd and neither may name a lane role.
+`tests/test_row_access_policies.py` asks `sql/10_policies.sql` that question for
+free on every branch, and cannot ask it of the account: a body is changed by
+``ALTER ROW ACCESS POLICY ... SET BODY``, which is the only form that works on
+an attached policy and which leaves every file in this tree untouched. One was
+set that way on 2026-08-27 and removed the same day.
 
 **That the coverage check still bites.** A table with a ``demo_id`` and no
 policy is created and the check has to name it. A coverage check that has
@@ -161,7 +171,11 @@ PROBE_MART = account.table("MARTS", "_VERIFY_PROBE_MART")
 
 # #43's own fixture. Two rows and the REAL policy, so what is under test is the
 # expression `sql/10_policies.sql` actually attached rather than a copy of it.
-ISOLATION_PROBE = account.table("ACCOUNTS", "_VERIFY_ISOLATION_PROBE")
+# The bare name as well as the qualified one, because the publisher's half of
+# those checks asks INFORMATION_SCHEMA about the table, and that view has a
+# schema column and a table column rather than a qualified name.
+ISOLATION_PROBE_NAME = "_VERIFY_ISOLATION_PROBE"
+ISOLATION_PROBE = account.table("ACCOUNTS", ISOLATION_PROBE_NAME)
 
 # A table with a demo_id and no policy. `09_audit.sql`'s view calls it
 # visitor-scoped, because that view defaults to deny, so the coverage check has
@@ -190,6 +204,16 @@ _SCHEMA_LIST = ", ".join(f"'{name}'" for name in account.SCHEMAS)
 # cannot see the other, and cannot change the other's row by naming it.
 MINE = "verify-visitor-mine"
 THEIRS = "verify-visitor-theirs"
+
+# What the isolation fixture holds, written as data rather than as a line of
+# SQL. The publisher's check compares a metadata row count against how many
+# rows are actually in there, and a third row added to an INSERT and not to
+# that comparison would fail a check about isolation for a reason that has
+# nothing to do with isolation.
+ISOLATION_PROBE_ROWS = (
+    (MINE, "belongs to one visitor"),
+    (THEIRS, "belongs to another"),
+)
 
 # A third, for #46. This one is a real row in demo_visitors rather than a row in
 # a probe table, because the write procedures write to the real tables and there
@@ -1626,21 +1650,34 @@ def _check_semantic_view() -> list[Check]:
 # ---------------------------------------------------------------------------
 
 
-def _session(role: str, variables: dict[str, str] | None = None) -> str:
+def _session(
+    role: str,
+    variables: dict[str, str] | None = None,
+    warehouse: str = account.SERVING_WAREHOUSE,
+) -> str:
     """Return a preamble pinned to ``role`` with ``variables`` set.
 
     Absence is the interesting case throughout this section, so a caller that
     passes nothing gets a session that has bound no visitor -- which is what a
     connection the pool forgot to bind looks like, and what every table must
     answer with nothing.
+
+    The warehouse is a parameter for one role. ``CHIP_CHAT_PUBLISH`` holds USAGE
+    on the publish warehouse and on nothing else -- which is #41's answer to "a
+    batch job cannot make a conversation slow", checked two sections down -- so
+    asking it anything on the serving warehouse fails at ``USE WAREHOUSE`` and
+    the check above it would report a privilege refusal as an isolation result.
     """
-    lines = [_preamble(role, account.SERVING_WAREHOUSE)]
+    lines = [_preamble(role, warehouse)]
     lines += [f"SET {name} = '{value}';" for name, value in (variables or {}).items()]
     return "\n".join(lines)
 
 
 def _visitors_seen(
-    role: str, variables: dict[str, str] | None, table: str
+    role: str,
+    variables: dict[str, str] | None,
+    table: str,
+    warehouse: str = account.SERVING_WAREHOUSE,
 ) -> tuple[bool, str]:
     """Return whether ``table`` could be read, and which visitors came back.
 
@@ -1652,7 +1689,7 @@ def _visitors_seen(
     """
     try:
         statements = snow.query(
-            f"{_session(role, variables)}\n"
+            f"{_session(role, variables, warehouse)}\n"
             f"SELECT LISTAGG(demo_id, ',') AS seen FROM {table};"
         )
     except snow.SnowError as error:
@@ -1661,6 +1698,59 @@ def _visitors_seen(
     if not rows:
         return True, ""
     return True, str(rows[0].get("SEEN") or "")
+
+
+def _metadata_row_count(role: str, name: str, warehouse: str) -> int | None:
+    """Return what INFORMATION_SCHEMA says ``ACCOUNTS.name`` holds, as ``role``.
+
+    The other half of the publisher's story, and the reason #39's job needs no
+    exemption from a row access policy: ``ROW_COUNT`` is metadata about the
+    table rather than a read of its rows, so no policy filters it and a batch
+    role can check its own swap landed without being able to see one row of what
+    it swapped. `chip_chat.databricks.publish.row_count` builds the production
+    form of this query against the real tables.
+
+    INFORMATION_SCHEMA shows a role only the objects it holds a privilege on, so
+    None here means either that the query failed or that the role cannot see the
+    table at all -- and the caller reports either as the check not having proved
+    what it set out to.
+
+    NOT MEASURED: ``ROW_COUNT`` is maintained metadata rather than a count, and
+    how promptly it settles after an INSERT has not been measured here. The
+    2026-08-27 run read 18,898 off it for a table swapped minutes earlier, which
+    is one observation on a table of that size and not a latency. If the caller
+    ever reports a number lower than the fixture holds on an account that is
+    otherwise green, this is the first thing to suspect and the check is wrong
+    rather than the account.
+    """
+    try:
+        rows = snow.query(
+            f"{_session(role, None, warehouse)}\n"
+            "SELECT MAX(row_count) AS n\n"
+            f"  FROM {account.DATABASE}.INFORMATION_SCHEMA.TABLES\n"
+            f" WHERE table_schema = 'ACCOUNTS' AND table_name = '{name.upper()}';"
+        )[-1]
+    except snow.SnowError:
+        return None
+    if not rows or rows[0].get("N") is None:
+        return None
+    return int(rows[0]["N"])
+
+
+def _described(rows: list[dict[str, Any]], column: str) -> str:
+    """Return ``column`` from a DESCRIBE, in whatever case Snowflake reported it.
+
+    Every other query in this file names its own output columns and gets them
+    back upper-cased. A DESCRIBE returns Snowflake's own metadata column names
+    instead, which arrive lower-cased, and a lookup that assumed either one
+    would read a missing key as an empty body -- which is to say, would read
+    every policy in the account as exempting nobody.
+    """
+    for row in rows:
+        for key, value in row.items():
+            if key.lower() == column.lower():
+                return str(value or "")
+    return ""
 
 
 def _live_attachments() -> dict[tuple[str, str], str]:
@@ -1811,6 +1901,69 @@ def _check_policy_coverage() -> list[Check]:
         )
     finally:
         snow.run_statements(f"{preamble}\nDROP TABLE IF EXISTS {UNPROTECTED_PROBE};")
+    return checks
+
+
+def _check_no_body_exempts_a_lane_role() -> list[Check]:
+    """The bodies the ACCOUNT evaluates, asked what `make ci` asks the file.
+
+    `tests/test_row_access_policies.py` refuses any lane role named in any
+    policy body in `sql/10_policies.sql`, free, on every branch. It is also
+    blind to the account, and unavoidably so: a body is changed by ``ALTER ROW
+    ACCESS POLICY ... SET BODY``, which is the only statement that can change
+    one while it is attached to a table, and typing that into Snowsight leaves
+    every file in this repository exactly as it was.
+
+    That is not a hypothetical. On 2026-08-27 the first nightly publish read
+    zero rows of the table it had just written, and ``OR CURRENT_ROLE() =
+    'CHIP_CHAT_PUBLISH'`` was set on the live body to unblock it -- right about
+    the symptom, wrong as a repair, removed the same day, and argued out at
+    length in `sql/10_policies.sql`. For the hours it was there the checked-in
+    SQL said one thing, the account did another, and nothing in this tree could
+    have told the difference. This is the check that can.
+
+    ``DESCRIBE`` rather than ``GET_DDL``: the description is the expression
+    Snowflake evaluates, where the DDL is the statement somebody wrote, and only
+    the first of those is the policy.
+    """
+    checks: list[Check] = []
+    for policy in schema.POLICIES:
+        name = f"{policy.name} exempts no lane role on the live account"
+        qualified = account.table("ACCOUNTS", policy.name)
+        try:
+            rows = snow.query(
+                f"{_preamble(account.ADMIN_ROLE, account.SERVING_WAREHOUSE)}\n"
+                f"DESCRIBE ROW ACCESS POLICY {qualified};"
+            )[-1]
+        except snow.SnowError as error:
+            checks.append(
+                Check(
+                    "#43",
+                    name,
+                    passed=False,
+                    detail=f"DESCRIBE did not run: {_refusal_line(str(error))}",
+                )
+            )
+            continue
+        body = " ".join(_described(rows, "body").split())
+        named = [role for role in account.LANE_ROLES if role in body.upper()]
+        checks.append(
+            Check(
+                "#43",
+                name,
+                passed=bool(body) and not named,
+                detail=(
+                    "the body the account evaluates names none of the three "
+                    "lane roles, which is what the checked-in file says too"
+                    if body and not named
+                    else f"EXEMPT: the live body names {', '.join(named)}, and "
+                    f"sql/10_policies.sql does not. `make ci` is green and the "
+                    f"account is not -- the body in force is: {body[:200]}"
+                    if named
+                    else "DESCRIBE returned no body, so this proved nothing"
+                ),
+            )
+        )
     return checks
 
 
@@ -2062,6 +2215,56 @@ def _check_isolation() -> list[Check]:
             ),
         )
     )
+
+    # The publish role, which is the one that has actually been exempted once.
+    # #39's job replaces six of the nine tables this policy guards and then
+    # counts what it wrote, and on 2026-08-27 that count came back zero and a
+    # clause naming this role was set on the live body to make it come back
+    # 18,898. Both halves are asked here, because either one alone is half an
+    # answer: the first is the guarantee, and the second is the reason the
+    # guarantee does not have to be traded for a working nightly publish.
+    ran, seen = _visitors_seen(
+        "CHIP_CHAT_PUBLISH", None, ISOLATION_PROBE, account.PUBLISH_WAREHOUSE
+    )
+    checks.append(
+        Check(
+            "#43",
+            "the publish role is bound by the real policy exactly as the read lane is",
+            passed=ran and not seen,
+            detail=(
+                "the batch role with nothing bound read nothing, which is what "
+                "'an unbound session sees zero rows' means when it says every role"
+                if ran and not seen
+                else f"LEAK: a batch session that bound no visitor read {seen}. "
+                "A clause naming this role was applied to this policy by hand "
+                "once and removed again; sql/10_policies.sql is the argument"
+                if ran
+                else f"the query did not run: {seen}"
+            ),
+        )
+    )
+
+    counted = _metadata_row_count(
+        "CHIP_CHAT_PUBLISH", ISOLATION_PROBE_NAME, account.PUBLISH_WAREHOUSE
+    )
+    expected = len(ISOLATION_PROBE_ROWS)
+    checks.append(
+        Check(
+            "#43",
+            "the publish role can still count what it wrote, off the metadata",
+            passed=counted == expected,
+            detail=(
+                f"INFORMATION_SCHEMA reported {expected} rows to a role that "
+                "could select none of them, which is how #39 verifies a swap "
+                "without an exemption from this policy"
+                if counted == expected
+                else f"reported {counted if counted is not None else 'nothing'}, "
+                f"expected {expected}. The check above is now the publisher "
+                "unable to see its own work rather than the policy applying to "
+                "it, and the pressure to write the exemption back is real"
+            ),
+        )
+    )
     return checks
 
 
@@ -2078,8 +2281,14 @@ def _build_isolation_fixture() -> None:
         f"CREATE OR REPLACE TABLE {ISOLATION_PROBE} "
         "(demo_id VARCHAR, note VARCHAR);\n"
         f"INSERT INTO {ISOLATION_PROBE} VALUES "
-        f"('{MINE}', 'belongs to one visitor'), "
-        f"('{THEIRS}', 'belongs to another');\n"
+        + ", ".join(f"('{visitor}', '{note}')" for visitor, note in ISOLATION_PROBE_ROWS)
+        + ";\n"
+        # The publisher holds SELECT on three tables in ACCOUNTS by name and on
+        # nothing else, so without this it would be refused at the privilege
+        # rather than filtered by the policy -- and "the publish role saw no
+        # rows" would be true for a reason that says nothing about isolation.
+        # The grant goes with the table when the fixture is dropped.
+        f"GRANT SELECT ON TABLE {ISOLATION_PROBE} TO ROLE CHIP_CHAT_PUBLISH;\n"
         f"ALTER TABLE {ISOLATION_PROBE} ADD ROW ACCESS POLICY {ISOLATION_POLICY} "
         "ON (demo_id);"
     )
@@ -2658,6 +2867,7 @@ def run(*, watch_suspend: bool = True) -> list[Check]:
     checks += _check_demo_id_audit()
     checks += _check_reset_baseline()
     checks += _check_policy_coverage()
+    checks += _check_no_body_exempts_a_lane_role()
     checks += _check_default_deny_on_the_real_tables()
     checks += _check_the_roster_inversion()
     checks += _check_the_serving_joins_answer()

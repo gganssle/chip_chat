@@ -558,6 +558,43 @@ and the policy in `snowflake/sql/10_policies.sql` is untouched — the checked-i
 SQL and the live account agree again, so the next `make snowflake-apply` is a
 no-op here rather than an outage.
 
+**What nothing was checking, and now does.** For the hours the third clause was
+in force, `make ci` was green: `snowflake/tests/test_row_access_policies.py`
+refuses a lane role in a policy body, but it reads `sql/10_policies.sql`, and
+the clause was never there. It could not have been reached any other way —
+`ALTER ROW ACCESS POLICY … SET BODY` is the only statement Snowflake will accept
+against a policy that is attached to a table, so the repair for this outage is
+*by construction* one that leaves the repository unchanged. Three checks were
+added to `make snowflake-verify`, all under #43:
+
+| Check | What it asks the account |
+| --- | --- |
+| `visitor_isolation`/`entry_roster` exempt no lane role | `DESCRIBE ROW ACCESS POLICY`, and no body may name one of `account.LANE_ROLES` — the same question `make ci` asks the file, asked of the thing that is running |
+| the publish role is bound by the real policy | `CHIP_CHAT_PUBLISH`, nothing bound, reads zero rows of the two-row probe that carries the real `visitor_isolation` |
+| the publish role can still count what it wrote | the same role reads 2 off `INFORMATION_SCHEMA` for the same table, so the check above is the policy applying rather than the publisher blinded |
+
+The last one is there because a guarantee that costs somebody their job is a
+guarantee that gets edited at three in the morning. The pair is the finding:
+the publisher sees none of the rows and all of the count.
+
+**Not yet measured: these three have not been run against the live account.**
+They were written from the 2026-08-27 evidence above rather than from a green
+run, and `make snowflake-verify` needs a credential, so nothing in `make ci`
+exercises them. Two things in them are assumptions until a run says otherwise:
+that `DESCRIBE ROW ACCESS POLICY` reports the body in the `body` column as this
+account's Snowflake version spells it, and that `INFORMATION_SCHEMA.ROW_COUNT`
+has settled on a two-row probe table by the time the check reads it — the one
+observation there is of a table of 18,898 rows swapped minutes earlier, which is
+not a latency.
+
+The probe is granted `SELECT` to `CHIP_CHAT_PUBLISH` while it exists — the role
+holds `SELECT` on three ACCOUNTS tables by name and on nothing else, so without
+the grant it would be refused at the privilege and "the publish role saw no
+rows" would be true for a reason that says nothing about isolation. The grant
+goes when the fixture is dropped. The publish warehouse is used rather than the
+serving one for the same reason in the other direction: this role cannot use
+`CHIP_CHAT_SERVING_WH`, and #41 has a check that proves it.
+
 **#47 and this job both write the account tables.** #47 restores the synthetic
 sandbox to its generated state on a schedule; this job puts the generated state
 there in the first place, and a publish *is* a restore. The two were not in
