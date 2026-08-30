@@ -65,7 +65,20 @@ from chip_chat.snowflake.testing import (
 )
 
 SESSION = "sess-reads"
-NOW = datetime(2026, 8, 27, 12, 0, tzinfo=UTC)
+NOW = datetime.now(UTC)
+"""Actually now. A mart's freshness is measured against the real clock.
+
+The same pin that rotted in ``api/tests/test_failure_isolation.py``, in the file
+next door and for the same reason. ``derived_at`` is compared to the wall clock
+against :data:`~chip_chat.snowflake.reads.DEFAULT_STALE_AFTER_HOURS`, so a fixed
+timestamp here describes a mart that quietly becomes stale on the second day and
+stays that way -- and
+``test_the_usual_order_carries_the_marts_confidence_and_derived_at`` then asserts
+the opposite of what it was written to assert, without a line of source changing.
+
+Pin a threshold, because it is configuration. Never pin the clock when the
+property under test is relative.
+"""
 
 READ_TOOLS: tuple[ToolName, ...] = (
     ToolName.SEARCH_MENU_KNOWLEDGE,

@@ -102,7 +102,29 @@ from chip_chat.vision.store import PHOTO_REF_ARGUMENT
 from chip_chat.vision.testing import STUB_PHOTO_REF, StubVisionModel, photo_lane
 
 SESSION = "sess-isolation"
-NOW = datetime(2026, 8, 27, 12, 0, tzinfo=UTC)
+NOW = datetime.now(UTC)
+"""Actually now, and it has to be.
+
+This was pinned to ``datetime(2026, 8, 27, 12, 0)`` and rotted, which is worth
+recording because the failure was silent for two days and then arrived looking
+like somebody's bug. Staleness is a comparison against the real clock -- it is
+:data:`~chip_chat.snowflake.reads.DEFAULT_STALE_AFTER_HOURS`, 36 hours, measured
+from the mart's ``derived_at`` to whenever the test runs. A fixed timestamp
+therefore describes a mart that is fresh on the day it is written, thirty-six
+hours old on the second day, and permanently stale after that, so
+``test_a_fresh_mart_is_not_reported_stale`` began asserting the opposite of its
+own name on 29 August 2026 without a line of source changing.
+
+The file already had half of this right. ``_pin_the_staleness_threshold`` clears
+the environment variable so that "a developer's shell must not decide whether a
+mart is stale" -- and the clock is the other half of that same sentence. Pin the
+threshold, because it is configuration; never pin the clock, because the property
+under test is *relative* and a relative property tested against a frozen instant
+is not being tested at all.
+
+Every use of this constant is an offset from it -- ``NOW - timedelta(days=9)`` is
+the failed nightly job -- so the offsets stay meaningful as the real date moves.
+"""
 
 BURRITO = "CMG-2"
 WHITE_RICE = "CMG-5001"
