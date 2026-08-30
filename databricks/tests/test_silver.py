@@ -624,6 +624,183 @@ def test_the_same_sentence_under_two_headings_is_two_facts() -> None:
     )
 
 
+# --- What document frequency is evidence of ---------------------------------
+#
+# The corpus these numbers describe is the one on `dbw-chip-chat` on 28 August
+# 2026: thirty-five documents, thirty of them `locations.chipotle.com` store
+# pages. It is written out here rather than fetched because the arithmetic is
+# the whole finding — a share of 0.86 against a threshold of 0.5 — and it can
+# be redone on a laptop, which is where the bug had to be argued out. The live
+# table is `silver_verify.py`'s to check, and it has not been re-materialised.
+
+_CORPUS_DOCUMENTS = 35
+"""Documents in the harvested corpus. See `docs/menu-data.md` §2."""
+
+_STORE_PAGES = tuple(
+    f"https://locations.chipotle.com/ca/lakewood/{index}-store-blvd"
+    for index in range(30)
+)
+"""The thirty store pages: one site section, thirty documents, 86% of the corpus."""
+
+_OTHER_PAGES = (
+    "https://www.chipotle.com/menu",
+    "https://www.chipotle.com/allergens",
+    "https://www.chipotle.com/nutrition-calculator",
+    "https://www.chipotle.com/rewards",
+    "https://chipotle.com/order",
+)
+"""The other five. `www.` and no `www.` are the same section, deliberately."""
+
+
+def _block_expectation(name: str) -> silver.Expectation:
+    declared = {e.name: e for e in silver.corpus("document_blocks").expectations}
+    assert name in declared, f"document_blocks declares no {name!r}"
+    return declared[name]
+
+
+def test_a_site_section_is_the_host_the_publisher_chose_less_the_www() -> None:
+    """`locations.chipotle.com` is a different site from `chipotle.com` — a
+    different application, sitemap, robots policy and page template, as
+    `harvest.sources.chipotle.locator` opens by saying. `www.` is a convention
+    and not a section, so a footer on both spellings of the ordering front end
+    has not crossed a boundary and must not look like it has."""
+    assert silver.site_section(_STORE_PAGES[0]) == "locations.chipotle.com"
+    assert silver.site_section("https://www.chipotle.com/menu?a=1#b") == "chipotle.com"
+    assert silver.site_section("https://chipotle.com/menu") == "chipotle.com"
+    assert silver.site_section("HTTPS://WWW.Chipotle.com/") == "chipotle.com"
+    assert silver.site_section("not a url") == ""
+
+
+def test_the_promotional_module_on_every_store_page_is_not_furniture() -> None:
+    """The bug, as arithmetic.
+
+    Chipotle syndicates "Try our Featured Meals" onto all thirty
+    `locations.chipotle.com` store pages, and seven blocks of it survive
+    extraction because the markup is Tailwind utilities with no id, no role and
+    no semantic class. Thirty of thirty-five documents is a share of 0.857,
+    which the rule as it stood on 26 August rejected — and it rejected it every
+    night, so `document_blocks` has held zero rows ever since.
+
+    It is not furniture. It is a fact one site section publishes on all of its
+    pages, which is precisely what this table exists to collapse into one row
+    with thirty citations.
+    """
+    frequency = len(_STORE_PAGES)
+    assert frequency / _CORPUS_DOCUMENTS == pytest.approx(0.857, abs=0.001)
+
+    # The rule as it stood: a bare ratio against the whole corpus.
+    old = frequency <= _CORPUS_DOCUMENTS * silver.MAXIMUM_DOCUMENT_SHARE
+    assert not old
+
+    # The rule as it stands: the same ratio, asked only of a block whose
+    # documents do not all belong to one site section.
+    assert silver.furniture_verdict(frequency, _CORPUS_DOCUMENTS, _STORE_PAGES) is None
+
+
+def test_the_threshold_was_not_raised_until_the_corpus_passed() -> None:
+    """The fix is a denominator, not a bigger number.
+
+    0.86 is still over the limit and always will be; what changed is which
+    blocks the limit is asked about. Raising the share to 0.9 would have let
+    this corpus through and failed the next one that was ninety-five per cent
+    store pages, for the same wrong reason.
+    """
+    assert silver.MAXIMUM_DOCUMENT_SHARE == 0.5
+    assert len(_STORE_PAGES) / _CORPUS_DOCUMENTS > silver.MAXIMUM_DOCUMENT_SHARE
+
+
+def test_a_footer_the_stripper_missed_still_fails_loudly() -> None:
+    """The thing the expectation was written to catch, unchanged.
+
+    A footer is on the store pages *and* on the menu page *and* on the FAQ. It
+    crosses site sections, which is the part of "on nearly every page" that a
+    lopsided corpus cannot fake, so the share is asked about it and it fails —
+    at twenty documents out of thirty-five, well short of appearing on all of
+    them.
+    """
+    across_sections = _STORE_PAGES[:18] + _OTHER_PAGES[:2]
+    assert (
+        silver.furniture_verdict(len(across_sections), _CORPUS_DOCUMENTS, across_sections)
+        == silver.FURNITURE_EXPECTATION
+    )
+
+    everywhere = _STORE_PAGES + _OTHER_PAGES
+    assert len(everywhere) == _CORPUS_DOCUMENTS
+    assert (
+        silver.furniture_verdict(len(everywhere), _CORPUS_DOCUMENTS, everywhere)
+        == silver.FURNITURE_EXPECTATION
+    )
+
+
+def test_a_block_on_every_document_fails_however_the_corpus_is_composed() -> None:
+    """The floor under the check above.
+
+    A corpus that is one site section can say nothing about sections, so the
+    share cannot speak there at all. This is what still can: furniture does not
+    appear on half a site, it appears on all of it, and a block on every
+    document there is would dominate every chunk embedding built on top of
+    this whatever the corpus is made of.
+    """
+    assert (
+        silver.furniture_verdict(30, 30, _STORE_PAGES)
+        == silver.EVERY_DOCUMENT_EXPECTATION
+    )
+
+
+def test_a_one_document_corpus_is_not_a_corpus_of_furniture() -> None:
+    """With one document, "on every document" says only that the document has
+    text in it, and failing an update for that would be a check that fires on
+    the smallest possible success."""
+    assert silver.furniture_verdict(1, 1, _OTHER_PAGES[:1]) is None
+
+
+def test_the_residual_this_rule_accepts_is_the_one_written_down() -> None:
+    """The cost of the decision, asserted so it cannot be forgotten.
+
+    A template footer confined to the largest site section — on all thirty
+    store pages and nowhere else — now passes both expectations. Catching it
+    needs a per-section document count, which is a new scalar in
+    `silver_conform.py`'s `_document_blocks` and therefore a pipeline change
+    rather than a declaration change. The argument is in
+    `docs/decisions/corpus-document-frequency.md`; the day this test fails is
+    the day that count arrived, and the assertion should be deleted rather than
+    repaired.
+    """
+    assert silver.furniture_verdict(30, _CORPUS_DOCUMENTS, _STORE_PAGES) is None
+
+
+def test_both_frequency_expectations_are_declared_on_the_table() -> None:
+    """`furniture_verdict` returns the name the event log will print, so a
+    verdict naming an expectation the table does not declare would be a
+    failure nobody could look up."""
+    _block_expectation(silver.FURNITURE_EXPECTATION)
+    _block_expectation(silver.EVERY_DOCUMENT_EXPECTATION)
+
+
+def test_the_sql_and_the_python_state_one_rule_rather_than_two() -> None:
+    """The constraint is assembled from the same constants and the same
+    expression builder the Python rule uses, so the two cannot drift apart
+    unless somebody edits one of them to say something else."""
+    furniture = _block_expectation(silver.FURNITURE_EXPECTATION).constraint
+    assert silver.DOCUMENT_FREQUENCY in furniture
+    assert f"corpus_documents * {silver.MAXIMUM_DOCUMENT_SHARE}" in furniture
+    assert f"{silver.site_span_expression()} = 1" in furniture
+
+    every = _block_expectation(silver.EVERY_DOCUMENT_EXPECTATION).constraint
+    assert every == (
+        f"corpus_documents < 2 OR {silver.DOCUMENT_FREQUENCY} < corpus_documents"
+    )
+
+
+def test_the_section_pattern_is_written_once_and_escaped_for_sql() -> None:
+    """A SQL string literal consumes one level of escaping before the regular
+    expression engine sees it, so the pattern is doubled rather than retyped."""
+    doubled = silver.SITE_SECTION_PATTERN.replace("\\", "\\\\")
+    assert doubled in silver.site_section_expression("citation.source_url")
+    assert silver.site_section_expression("x").startswith("regexp_extract(lower(x)")
+    assert "parse_url" not in silver.site_span_expression()
+
+
 # --- The PDFs ---------------------------------------------------------------
 
 _ANALYSIS = """
@@ -762,6 +939,22 @@ def test_every_expectation_in_the_pipeline_is_fatal(notebook: str) -> None:
 
 def test_a_quarantined_bronze_row_never_enters_silver(notebook: str) -> None:
     assert "NOT {silver.QUARANTINED}" in notebook
+
+
+def test_the_frequency_expectations_read_columns_the_pipeline_writes(
+    notebook: str,
+) -> None:
+    """A constraint over a column the view does not select is not a lenient
+    check, it is an analysis error at update time — and the furniture rule
+    reads inside the citation array, which is a shape and not only a name."""
+    body = notebook.split("def _document_blocks(")[1].split("# COMMAND")[0]
+    for token in (
+        '"corpus_documents"',
+        "silver.DOCUMENT_FREQUENCY",
+        "silver.CITATION",
+        '"source_url"',
+    ):
+        assert token in body, token
 
 
 def test_the_referential_join_is_a_left_join(notebook: str) -> None:

@@ -344,10 +344,15 @@ above is the evidence, and it is the strongest available until a month passes.
 
 ---
 
-## 8. Verifying the things that are supposed to expire
+## 8. Verifying the two things nothing else watches
 
-Read-only, safe against production, and the one check in this repository designed
-to be run twice a day apart:
+Both are read-only and safe against production. Neither is in `make ci` and
+neither ever can be: one needs an Azure login and the other needs a Databricks
+credential, and a gate that needs a logged-in human is not a gate.
+
+### The uploads that are supposed to expire
+
+The one check in this repository designed to be run twice a day apart:
 
 ```bash
 make infra-check-uploads      # ./infra/scripts/check-uploads-retention.sh
@@ -363,6 +368,67 @@ verified in the deployed policy on 2026-08-27. **An expiry has not yet been
 observed**, which is the only part of #88's blob line still open — and querying
 `daysAfterModificationGreaterThan` will return `null` and look like drift. It is
 not. Query the whole policy.
+
+### The Databricks workspace, against this repository
+
+Eight library modules under `/Shared/chip-chat/lib` and sixteen notebooks beside
+them are Terraform-managed. On 2026-08-28 two of them were not what this
+repository says they are, the nightly publish failed, and its error message
+blamed the row access policy — see §10 and `docs/workspace-drift.md`. This is the
+check that would have said so.
+
+The raw form. It needs a Databricks credential and **nothing else** — no
+Terraform state, no Azure login, no initialised working directory — so unlike
+everything else in this runbook it really does run from a phone if the Databricks
+CLI is on it:
+
+```bash
+databricks auth login --host https://adb-7405614862446074.14.azuredatabricks.net
+
+# One path, which is what you want mid-incident. Exit 0 means identical.
+databricks workspace export /Shared/chip-chat/lib/publish.py > /tmp/deployed.py
+diff /tmp/deployed.py databricks/src/chip_chat/databricks/publish.py
+
+# The other path that was stale on 2026-08-28.
+databricks workspace export /Shared/chip-chat/snowflake_publish > /tmp/deployed.py
+diff /tmp/deployed.py databricks/notebooks/snowflake_publish.py
+```
+
+All twenty-four, with the diffs, from a laptop:
+
+```bash
+make infra-check-databricks   # uv run python -m chip_chat.infra.workspace_drift
+make infra-list-databricks    # just the paths — free, no credential
+```
+
+**Elapsed: 10.9 s**, twenty-four paths, measured 2026-08-28 against `main`
+(`87a78fb`), which was clean. Quiet and exit 0 when the workspace matches; a
+unified diff per drifted path and exit 1 when it does not; exit **2** when the
+check could not be run at all, which is a different thing and is meant to be.
+Those are the module's codes — `make` reports its own exit 2 for any failed
+recipe, so call the module directly if you want to tell the two apart.
+
+It compares against **your checkout**, not against `HEAD`, because your checkout
+is what an apply would upload. So an uncommitted edit to a deployed file reports
+as drift, correctly: you have a change that is not in the workspace.
+
+The repair is an apply, which is what put those files there in the first place.
+From a phone, or when Terraform state is not to hand, overwrite the one path:
+
+```bash
+databricks workspace import --overwrite --format SOURCE --language PYTHON \
+  --file databricks/src/chip_chat/databricks/publish.py \
+  /Shared/chip-chat/lib/publish.py
+```
+
+```bash
+make infra-apply              # terraform -chdir=infra/terraform apply
+```
+
+That import is exactly what repaired the 2026-08-28 outage, and it is what
+Terraform would have written. **Follow it with an apply when you are back at a
+laptop** — an import leaves Terraform's state believing it wrote something else,
+and the next unrelated apply will show the file as changed.
 
 ---
 
@@ -528,6 +594,31 @@ warehouse's own statement timeout 60 s on serving; the ops API two attempts then
 the path is called down; ingress closes any response that has sent nothing for
 **60.19 seconds** — measured ten times out of ten, to two decimals.
 
+### When a nightly job fails and the message names a cause
+
+Check that the job is running the code you think it is **before** you act on what
+its error message says:
+
+```bash
+make infra-check-databricks   # 10.9 s, read-only, needs only a Databricks credential
+```
+
+This is here because of a specific incident and the specific shape of it is worth
+carrying. On 2026-08-28 `chip-chat-publish` failed with *"holds 0 rows after the
+swap"* and a message telling the reader to check whether a row access policy
+filters `CHIP_CHAT_PUBLISH`. The message was well written, it named a real
+failure mode, and that failure mode had genuinely caused this exact error once
+before (`docs/nightly-publish.md` §7). It was still the wrong answer. The
+deployed `/Shared/chip-chat/lib/publish.py` was 37 lines behind `main` and did
+not contain the fix, so the job was running code whose error messages describe a
+version of itself that had been replaced.
+
+The general form: **a good diagnostic describes the code that emitted it, and
+that is only useful if the deployed code is the code you are reading.** Acting on
+that message without this check meant editing `VISITOR_ISOLATION` — the row
+access policy the entire isolation guarantee rests on — to fix a problem that was
+not there. `docs/workspace-drift.md` is the write-up.
+
 ### When a write is the question
 
 Every write emits an `ops.<action>` span carrying `chip_chat.ops.reference_id`
@@ -571,6 +662,8 @@ every procedure has been executed and three of these have not.
 | Teardown → zero bill → rebuild | ⚠️ destroy measured at **9m20s / 32 resources** on the scratch stack; the *round trip* has not been done on the current estate |
 | `snowflake-rebuild` | ❌ **not run, deliberately** — §9. Tested once on an empty account (`2:32.41`); running it now destroys the population |
 | Blob expiry actually observed | ❌ configured, never watched — §8 |
+| `infra-check-databricks` | ✅ **10.9 s**, run 2026-08-28; clean against `main`, and it caught an unapplied working-tree edit on the same run |
+| `infra-check-databricks` against a genuinely stale workspace | ⚠️ **not exercised** — the `chip-rxs` drift was repaired before the check existed; only the uncommitted-edit case has been seen live. `docs/workspace-drift.md` §6 |
 | Budget alert actually firing | ❌ nothing has crossed 50% of $150 |
 
 **The rebuild is the one that matters.** The trial expires 2026-09-24, the plan
@@ -587,8 +680,10 @@ the highest-value operational task outstanding.
 turn latency, and where the kill-switch and rollback timings come from.
 `docs/demo-reset.md` — the reset, in full. `docs/snowflake-account.md` §3.4, §10
 — the rebuild, the trial clock, and the landing zone. `docs/failure-isolation.md`
-— the blast-radius table and the timeouts. `docs/cost.md` — what any of this
-costs, and §14 there is the guardrail audit. `infra/README.md` — the estate, the
+— the blast-radius table and the timeouts. `docs/workspace-drift.md` — why §8's
+second check exists, how its list of twenty-four paths is derived from the
+Terraform, and what it deliberately does not check. `docs/cost.md` — what any of
+this costs, and §14 there is the guardrail audit. `infra/README.md` — the estate, the
 identifiers, and what teardown does and does not remove. RFC-001 §11 — the
 circuit breaker this is the operational half of.
 

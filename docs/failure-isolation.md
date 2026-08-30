@@ -19,6 +19,7 @@ tells you *which* one went away lives.
 | Vision model unavailable | ask the visitor to describe the meal in words | vision only | `test_vision_down_*` |
 | Ops API unavailable | the card renders and reports ordering is unavailable; nothing half-written | writes only | `test_the_confirmation_card_still_renders_*`, `test_nothing_is_half_written_*` |
 | Databricks job failed | serve stale marts **with their `derived_at`**; alert | personalization freshness | `test_a_stale_habit_is_served_with_its_derived_at`, `test_stale_marts_are_a_nightly_job_down_and_not_a_lane_down` |
+| A serving mart was never published | withdraw that tool; the lane stays up and its other tools answer | one tool | `agent/tests/test_withheld_tools.py` |
 | Daily budget exhausted | friendly stop state on entry and mid-conversation; **no model calls** | everything, gracefully | `test_an_exhausted_budget_*` |
 
 All of them live in `api/tests/test_failure_isolation.py`, and each one breaks
@@ -102,12 +103,27 @@ both wrong and useless.
 ```
 --    knowledge        not wired on this deployment; its tools are not offered to the model
 DOWN  account          ACCOUNT_LANE_UNAVAILABLE: the pool did not produce a bound connection: RuntimeError: the warehouse did not answer
-ok    personalization  marts fresh, derived_at 2026-08-27T04:11:00+00:00
+ok    personalization  marts fresh, derived_at 2026-08-27T04:11:00+00:00; get_recommendations withheld, nothing to restart
 --    photo            not wired on this deployment; its tools are not offered to the model
 ok    action
 
 Down: account. Every other lane answers.
 ```
+
+Note the personalization line, because it is a third state and not a shade of
+the first two. `get_recommendations` reads `CHIP_CHAT.MARTS.recommendations`,
+which RFC-001 §04 does not fix — the RFC names four serving marts and this would
+be a fifth — so the table has never existed on the account. The lane itself is
+up: `get_usual_order` reads a mart that does exist and answers normally. Only the
+one tool is withdrawn, and it is withdrawn rather than offered, because a tool
+definition the model can see and nothing can answer is worse than an absent one.
+
+That distinction is what "nothing to restart" is there to say. `DOWN` is a
+dependency that should be answering and is not, and it is the line that should
+send somebody to the runbook. A withheld tool is a mart that was never published;
+no restart, no failover and no amount of waiting will change it, and reporting it
+as an outage would spend an operator's attention on a schema decision.
+`docs/decisions/withheld-tools.md` is that argument in full.
 
 Four properties worth stating, because each is a decision:
 

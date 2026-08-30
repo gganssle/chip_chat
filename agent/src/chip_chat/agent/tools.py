@@ -67,6 +67,7 @@ from contextlib import contextmanager
 from typing import Any, Final
 
 from chip_chat.agent.desk import ActionOutcome, Desk, OrderableMenu
+from chip_chat.agent.envelope import Citation, citations_from
 from chip_chat.agent.hardcoded import ACCOUNT, MENU, SIMULATION_NOTICE, search_menu
 from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.model import ToolInvocation, UnknownToolError
@@ -84,6 +85,7 @@ from chip_chat.otel import (
 )
 from chip_chat.otel.spans import OpsRecorder, ToolRecorder
 from chip_chat.search.lane import KnowledgeLane
+from chip_chat.search.retrieve import Retrieval
 from chip_chat.snowflake.lane import AccountLane, PersonalizationLane
 from chip_chat.vision.describe import DescribeError
 from chip_chat.vision.lane import PhotoLane, PhotoMatch
@@ -249,7 +251,8 @@ def offered_tools(
     Returns:
         :data:`TOOLS`, plus :data:`DESK_WRITES` where the desk can answer them,
         plus whichever of :data:`chip_chat.agent.lanes.CONDITIONAL_TOOLS` have a
-        lane behind them.
+        lane behind them -- and minus anything
+        :attr:`chip_chat.agent.lanes.Lanes.withheld` names.
 
     The order is fixed and it matters: ``chip_chat.agent.loop.run_turn`` raises
     :class:`~chip_chat.agent.threads.ToolRegistrationError` when the list a
@@ -257,9 +260,19 @@ def offered_tools(
     compares tuples. Every call site therefore has to pass both arguments or
     neither -- and the failure is loud rather than a model politely declining a
     lane it can in fact reach.
+
+    The withheld filter is applied to the whole list rather than only to the
+    conditional tail, because *"the model can see a name nothing can answer"* is
+    the same defect wherever the name came from. It is the last thing that
+    happens here so that the order of what survives is unchanged: withdrawing a
+    tool shortens the list and never reshuffles it.
     """
     writes = DESK_WRITES if desk is not None and desk.offers_every_write() else ()
-    return (*TOOLS, *writes, *lanes.conditional_tools())
+    return tuple(
+        tool
+        for tool in (*TOOLS, *writes, *lanes.conditional_tools())
+        if lanes.offers(tool)
+    )
 
 
 def offered_schemas(
@@ -282,6 +295,7 @@ def dispatch(
     desk: Desk,
     lanes: Lanes = NO_LANES,
     record_spend: Callable[[TokenUsage], None] | None = None,
+    record_citations: Callable[[Mapping[str, Citation]], None] | None = None,
 ) -> Mapping[str, Any]:
     """Run one tool call and return what the model should see.
 
@@ -302,6 +316,13 @@ def dispatch(
             there: the turn's rollup would undercount, and the spend ceiling
             would count a photo turn as cheaper than it was, which is the one
             direction a ceiling must never be wrong in.
+        record_citations: Called with the citations ``retriever.search``
+            returned, keyed by passage id, where a call retrieved anything.
+            D9's mechanism needs both halves of the turn in one place: the ids
+            the model names come back on the completion, and what those ids may
+            resolve to comes from here. A turn that collected the second cannot
+            have a source minted into it -- an id that is not in this mapping is
+            dropped by :func:`chip_chat.agent.envelope.render` and counted.
 
     Returns:
         A JSON-serialisable result, which is both the tool message sent back to
@@ -326,6 +347,7 @@ def dispatch(
             lanes=lanes,
             recorder=recorder,
             record_spend=record_spend,
+            record_citations=record_citations,
         )
         recorder.record_result(result)
         return result
@@ -340,6 +362,7 @@ def _dispatch_inside_span(
     lanes: Lanes,
     recorder: ToolRecorder,
     record_spend: Callable[[TokenUsage], None] | None = None,
+    record_citations: Callable[[Mapping[str, Citation]], None] | None = None,
 ) -> Mapping[str, Any]:
     """Validate the arguments, then run the tool. Refusals are results.
 
@@ -389,6 +412,15 @@ def _dispatch_inside_span(
                 # the spend ceiling from stopping at the tool boundary.
                 record_spend(result.usage)
         return _photo_result(result)
+    if isinstance(result, Retrieval):
+        # Flattened here and not in the tool body, because this is the last
+        # point at which anything holds the `source_url` D9 keeps away from the
+        # model. Onward to the turn, where the ids the completion names are
+        # resolved against it; `as_tool_result` is what the model gets, and it
+        # does not carry the URL.
+        if record_citations is not None:
+            record_citations(citations_from(result.citations()))
+        result = result.as_tool_result()
     _mark_a_declining_lane(recorder, result)
     return result
 
@@ -422,13 +454,16 @@ def _run(
     session_id: str,
     desk: Desk,
     lanes: Lanes,
-) -> Mapping[str, Any] | PhotoMatch:
+) -> Mapping[str, Any] | PhotoMatch | Retrieval:
     """Body of one tool, inside its span.
 
-    Returns a :class:`~chip_chat.vision.lane.PhotoMatch` for the photo tool and
-    a plain mapping for the rest; :func:`_dispatch_inside_span` reads the tokens
-    off the former before flattening it, because the span rollup has to happen
-    where the span is and the model must never see a token count.
+    Returns a :class:`~chip_chat.vision.lane.PhotoMatch` for the photo tool, a
+    :class:`~chip_chat.search.retrieve.Retrieval` for the knowledge tool where a
+    lane is wired, and a plain mapping for the rest;
+    :func:`_dispatch_inside_span` reads the tokens off the first and the
+    citations off the second before flattening either, because both are things
+    the turn needs and the model must not be shown -- a token count it would
+    reason about, and a ``source_url`` it could paste.
 
     Raises:
         OrderRejectedError: From the two order tools, caught by the caller.
@@ -507,7 +542,9 @@ def _not_implemented(
 # ---------------------------------------------------------------------------
 
 
-def _search_menu_knowledge(query: str, lane: KnowledgeLane | None) -> Mapping[str, Any]:
+def _search_menu_knowledge(
+    query: str, lane: KnowledgeLane | None
+) -> Mapping[str, Any] | Retrieval:
     """Menu knowledge. Nests ``retriever.search``, as the schema requires.
 
     The lane owns its own span, its own scores and its own decline (#49), so
@@ -515,9 +552,19 @@ def _search_menu_knowledge(query: str, lane: KnowledgeLane | None) -> Mapping[st
     below opens the same child span, so a trace has the same shape either way
     and ``retriever.search``'s ``index`` attribute is what says which corpus was
     actually searched.
+
+    **The wired branch returns the retrieval rather than the tool result**, and
+    the reason is D9. ``as_tool_result`` deliberately withholds ``source_url``
+    from the model -- that is the field a model could paste into prose, and the
+    whole mechanism is that it never reaches one -- so the citations cannot be
+    reconstructed from what this hands back. They have to survive as far as
+    :func:`_dispatch_inside_span`, which flattens the retrieval and passes the
+    citations to the turn. Exactly the shape :class:`~chip_chat.vision.lane.PhotoMatch`
+    already has for token counts, and for the same reason: something the span
+    layer needs and the model must not see.
     """
     if lane is not None:
-        return lane.search(query).as_tool_result()
+        return lane.search(query)
     hits = search_menu(query)
     documents = [
         Document(

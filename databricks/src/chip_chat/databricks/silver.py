@@ -61,6 +61,13 @@ frequency is the size of the corpus, and
 :data:`MAXIMUM_DOCUMENT_SHARE` turns that into an assertion the verify job runs
 rather than a sample somebody eyeballs.
 
+The share is taken *across site sections* rather than across the corpus, which
+is a correction rather than a decoration: this corpus is thirty-five documents
+and thirty of them are store pages, so a bare ratio against the whole of it
+answers a question about the corpus's composition and reports it as a verdict
+on the stripper. :func:`furniture_verdict` is the rule, and
+``docs/decisions/corpus-document-frequency.md`` is the argument.
+
 **It conforms.** Money arrives from bronze as the string the writer wrote —
 deliberately, because casting is a transformation and bronze does not transform
 — and :data:`Cast` turns it into ``DECIMAL(10,2)`` here, where the pipeline can
@@ -91,7 +98,7 @@ import hashlib
 import json
 import re
 import unicodedata
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any, Final
@@ -110,7 +117,9 @@ __all__ = [
     "DROPPED",
     "EARN_REASON",
     "ENTREE_DERIVATIONS",
+    "EVERY_DOCUMENT_EXPECTATION",
     "EXPIRY_REASON",
+    "FURNITURE_EXPECTATION",
     "HTML_CONTENT_TYPE",
     "INGESTED_AT",
     "LAYER",
@@ -122,6 +131,7 @@ __all__ = [
     "REASONS",
     "REDEEM_REASON",
     "SEED_REASON",
+    "SITE_SECTION_PATTERN",
     "SOURCE_PATH",
     "STREAMS",
     "TABLES",
@@ -139,10 +149,14 @@ __all__ = [
     "dedup_expression",
     "expectations",
     "extract_blocks",
+    "furniture_verdict",
     "latest_row",
     "normalise",
     "schema_name",
     "select_expressions",
+    "site_section",
+    "site_section_expression",
+    "site_span_expression",
     "table",
     "tables_for",
     "text_digest",
@@ -1419,7 +1433,7 @@ a chunk embedding with words no visitor ever saw.
 """
 
 MAXIMUM_DOCUMENT_SHARE: Final = 0.5
-"""How much of the corpus one block of prose may appear in.
+"""How much of the corpus one block of prose may appear in, across site sections.
 
 This is not part of the stripper; it is the check on it. Boilerplate is, by
 definition, the text that is on nearly every page, so a block that survived
@@ -1433,6 +1447,60 @@ same nutrition figure on three pages — is exactly what deduplication is
 *supposed* to collapse into one row with several citations, and the threshold
 must not turn that success into a failure. Furniture does not appear on half a
 site; it appears on all of it.
+
+**The number has not moved since it was written, and the corpus is why the
+sentence above now has "across site sections" in it.** The harvested corpus is
+thirty-five documents, of which thirty are ``locations.chipotle.com`` store
+pages — eighty-six per cent of it is one section of one site. Chipotle
+syndicates a "Try our Featured Meals" promotional module onto every one of
+those store pages, so seven perfectly real blocks of published prose arrive
+with a document frequency of thirty and a share of 0.86, and from 26 August
+2026 they failed this check and left ``document_blocks`` empty. They are not
+furniture: they carry no id, no role and no semantic class, only Tailwind
+utilities, and no structural rule this module could honestly write reaches
+them.
+
+What the share was measuring in that case was the *composition of the corpus*
+rather than the quality of the stripper. A ratio against ``corpus_documents``
+answers "is this on most of the corpus", and that is only the same question as
+"is this furniture" when the corpus is many site sections in comparable
+proportion. It is not. So the denominator was the bug, and raising the
+numerator would only have moved the same bug further out: at 0.9 a corpus that
+was ninety-five per cent store pages would fail again, for the same wrong
+reason.
+
+The rule the share is applied to is therefore narrower and it is stated in
+:func:`furniture_verdict`: a block may exceed this share only if every document
+that published it belongs to **one** site section (:func:`site_section`).
+Furniture is the text that is on pages which have nothing else in common — the
+footer is on the store pages *and* on the menu pages *and* on the FAQ — and
+crossing that boundary is the part of "on nearly every page" that a lopsided
+corpus cannot fake. What a single section can no longer catch,
+:data:`EVERY_DOCUMENT_EXPECTATION` still does, and the residual is written up
+in ``docs/decisions/corpus-document-frequency.md``.
+"""
+
+SITE_SECTION_PATTERN: Final = r"^[a-z][a-z0-9+.-]*://(?:www\.)?([^/?#]+)"
+"""What counts as one site section: the host, less a leading ``www.``.
+
+A publisher's own boundary rather than one this repository invented, which is
+the same standard :data:`BOILERPLATE_TAGS` is held to. ``locations.chipotle.com``
+is a different site from ``chipotle.com`` in every sense that matters here —
+``harvest.sources.chipotle.locator`` opens by saying so, it is a different
+application with its own sitemap, its own robots policy and its own page
+template — and a module syndicated onto it is a fact published there, not
+furniture the corpus at large repeats.
+
+``www.`` is stripped because it is a convention and not a section: a footer
+that appeared on ``www.chipotle.com`` and on ``chipotle.com`` would otherwise
+look like it had crossed a boundary when it had not, and the check would fail
+for a reason nobody could act on.
+
+The pattern is written once, in Python's dialect, and doubled for SQL by
+:func:`site_section_expression`. It is deliberately ``regexp_extract`` rather
+than ``parse_url``: a regular expression cannot raise on a malformed URL, and a
+constraint that throws instead of returning false is a pipeline failure whose
+message is about parsing rather than about the corpus.
 """
 
 MAXIMUM_PROSELESS_SHARE: Final = 0.25
@@ -1949,6 +2017,113 @@ DOCUMENT_FREQUENCY: Final = "document_frequency"
 :data:`MAXIMUM_DOCUMENT_SHARE`: this column is the evidence that boilerplate
 removal worked, and it is checked rather than admired."""
 
+FURNITURE_EXPECTATION: Final = "is_not_furniture_the_stripper_missed"
+"""The name of the expectation that catches what the tag list did not reach."""
+
+EVERY_DOCUMENT_EXPECTATION: Final = "is_not_on_every_document_in_the_corpus"
+"""The name of the expectation no corpus composition can excuse.
+
+:data:`FURNITURE_EXPECTATION` asks a question about site sections and therefore
+cannot ask anything at all of a corpus that is one section, or of a block that
+sits inside one. This one asks nothing about sections: a block on *every*
+document there is, is furniture, and it fails whatever the corpus is made of.
+It is the floor under the other check rather than a second opinion on it, which
+is why the two are separate expectations with separate names — the event log
+says which sentence was violated, and the two sentences call for different
+work. "It is on every page" means the tag list needs an entry. "It is on most
+of several sections" means the extraction is leaking a template.
+"""
+
+
+def site_section(url: str) -> str:
+    """Return the site section a URL belongs to: its host, less a leading ``www.``.
+
+    Args:
+        url: An absolute URL, as ``source_url`` always is — it is the URL that
+            served the bytes, captured at fetch time.
+
+    Returns:
+        The lowercased host with any leading ``www.`` removed, or the empty
+        string if the argument is not an absolute URL. An unparseable value
+        becomes one nameless section rather than an exception, for the reason
+        :data:`SITE_SECTION_PATTERN` gives: this function is the Python
+        statement of a SQL constraint, and a constraint that raises reports the
+        wrong problem.
+    """
+    match = re.match(SITE_SECTION_PATTERN, url.strip().lower())
+    return match.group(1) if match else ""
+
+
+def site_section_expression(url: str) -> str:
+    """Return :func:`site_section` as Spark SQL over a URL expression.
+
+    The pattern is the Python one with every backslash doubled, because a SQL
+    string literal consumes one level of escaping before the regular-expression
+    engine sees it. Doubling it here rather than writing the pattern out twice
+    is the whole point: the two dialects cannot drift apart if only one of them
+    is edited.
+
+    Args:
+        url: A SQL expression that evaluates to a URL string.
+
+    Returns:
+        A SQL expression that evaluates to the section name.
+    """
+    pattern = SITE_SECTION_PATTERN.replace("\\", "\\\\")
+    return f"regexp_extract(lower({url}), '{pattern}', 1)"
+
+
+def site_span_expression(citations: str = CITATION) -> str:
+    """Return the number of distinct site sections a block was published in.
+
+    Spark SQL over the ``citations`` array the deduplication already conserves,
+    so this needs no column the pipeline does not already write. That matters
+    more than it looks: the alternative shape of this rule — the share taken
+    against the largest single section rather than against the corpus — needs a
+    per-section document count, which is a new scalar in
+    ``silver_conform.py``'s ``_document_blocks``. See
+    ``docs/decisions/corpus-document-frequency.md``.
+
+    Args:
+        citations: The name of the citation array column.
+
+    Returns:
+        A SQL expression that evaluates to a section count.
+    """
+    section = site_section_expression("citation.source_url")
+    return f"size(array_distinct(transform({citations}, citation -> {section})))"
+
+
+def furniture_verdict(
+    document_frequency: int, corpus_documents: int, sources: Iterable[str]
+) -> str | None:
+    """Return the name of the corpus-frequency expectation a block violates.
+
+    The same two rules the ``document_blocks`` constraints state in SQL, stated
+    once more in Python so they can be run — over a known corpus in
+    ``databricks/tests/test_silver.py``, and over the live table by
+    ``silver_verify.py``, which today restates the old ratio by hand and is the
+    one caller that still has to be moved onto this function.
+
+    Args:
+        document_frequency: How many distinct documents published the block.
+        corpus_documents: How many documents the corpus holds.
+        sources: The ``source_url`` of every citation on the block.
+
+    Returns:
+        :data:`FURNITURE_EXPECTATION`, :data:`EVERY_DOCUMENT_EXPECTATION`, or
+        ``None`` if the block is a fact rather than furniture.
+    """
+    sections = {site_section(url) for url in sources}
+    if (
+        len(sections) > 1
+        and document_frequency > corpus_documents * MAXIMUM_DOCUMENT_SHARE
+    ):
+        return FURNITURE_EXPECTATION
+    if corpus_documents > 1 and document_frequency >= corpus_documents:
+        return EVERY_DOCUMENT_EXPECTATION
+    return None
+
 
 @dataclass(frozen=True, slots=True)
 class Corpus:
@@ -2028,8 +2203,12 @@ CORPUS: Final[tuple[Corpus, ...]] = (
             "at the headings the documents themselves published, never at a "
             "fixed window — RFC-001 §08. `document_frequency` is how many "
             "documents carry the block, and is the evidence that boilerplate "
-            "removal worked: furniture is the text that is on every page. "
-            "Built by gh-34."
+            "removal worked: furniture is the text that is on every page, and "
+            "on pages that have nothing else in common. A block confined to "
+            "one site section is a fact that section publishes on all of its "
+            "pages, however many of the corpus those are — see "
+            "chip_chat.databricks.silver.furniture_verdict and "
+            "docs/decisions/corpus-document-frequency.md. Built by gh-34."
         ),
         expectations=(
             _CORPUS_CITATION,
@@ -2039,16 +2218,41 @@ CORPUS: Final[tuple[Corpus, ...]] = (
                 why="an empty block is not a fact",
             ),
             Expectation(
-                name="is_not_furniture_the_stripper_missed",
+                name=FURNITURE_EXPECTATION,
                 constraint=(
-                    f"{DOCUMENT_FREQUENCY} <= corpus_documents * {MAXIMUM_DOCUMENT_SHARE}"
+                    f"{DOCUMENT_FREQUENCY} <= corpus_documents * "
+                    f"{MAXIMUM_DOCUMENT_SHARE} "
+                    f"OR {site_span_expression()} = 1"
                 ),
                 why=(
-                    "boilerplate is by definition the text on nearly every "
-                    "page, so a block that survived extraction and still "
+                    "boilerplate is by definition the text on pages that have "
+                    "nothing else in common — the footer is on the store "
+                    "pages and the menu pages and the FAQ — so a block that "
+                    "survived extraction, crosses site sections and still "
                     "appears in more than half the corpus is furniture the tag "
-                    "list did not know about — and it would dominate every "
-                    "chunk embedding built on top of this"
+                    "list did not know about. Within one section the share "
+                    "measures how lopsided the corpus is rather than how well "
+                    "the stripper worked: thirty of these thirty-five "
+                    "documents are locations.chipotle.com store pages, and a "
+                    "promotional module syndicated onto all of them is a fact "
+                    "published thirty times, which is exactly what this table "
+                    "collapses into one row with thirty citations"
+                ),
+            ),
+            Expectation(
+                name=EVERY_DOCUMENT_EXPECTATION,
+                constraint=(
+                    f"corpus_documents < 2 OR {DOCUMENT_FREQUENCY} < corpus_documents"
+                ),
+                why=(
+                    "the floor under the check above, which asks about site "
+                    "sections and so cannot speak about a corpus that is one. "
+                    "Furniture does not appear on half a site; it appears on "
+                    "all of it — and a block on every document there is would "
+                    "dominate every chunk embedding built on top of this, "
+                    "whatever the corpus is made of. A one-document corpus is "
+                    "exempt because there the rule says only that the document "
+                    "has no text in it"
                 ),
             ),
         ),

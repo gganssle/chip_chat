@@ -189,6 +189,12 @@ def test_a_turn_answers_and_calls_the_model(
         "card": None,
         "receipt": False,
         "stopped": False,
+        # D9's envelope, on a turn that retrieved nothing and claimed nothing.
+        # Present and empty rather than absent: the field is the mechanism, so a
+        # reply that cites nothing has to say so in the same shape as one that
+        # cites something.
+        "citations": [],
+        "claim_class": "none",
     }
     assert model.call_count == 1
 

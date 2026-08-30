@@ -95,6 +95,7 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any, Final
 
 from fastapi import FastAPI, Request, Response
@@ -108,6 +109,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from chip_chat.agent import ACCOUNT, AzureChatModel, FoundryConfig
+from chip_chat.agent.envelope import ClaimClass, ResponseEnvelope
 from chip_chat.agent.health import probe
 from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.loop import PROMPT_VERSION, Conversation
@@ -341,6 +343,33 @@ class ChatReply(BaseModel):
     stopped: bool = False
     """True when the spend cap refused the turn. Still HTTP 200: the stop state
     is a designed state and never an error."""
+
+    citations: list[dict[str, str]] = Field(default_factory=list)
+    """The sources the app draws under :attr:`reply`, per decision D9.
+
+    A field on the response rather than a sentence inside ``reply``, and that is
+    the whole of the decision rather than a formatting preference: a source the
+    model wrote as prose is a source the model could have invented, so what
+    crosses from the model is a set of ids and every field here comes off a
+    passage ``retriever.search`` actually returned --
+    :func:`chip_chat.agent.envelope.render` is where an id that was not
+    retrieved is dropped instead of resolved.
+
+    Four keys per citation: ``id``, ``label``, ``source_url`` and
+    ``harvested_at``. Empty on every turn that made no food or policy claim, and
+    on every turn the model wrote no envelope for.
+    """
+
+    claim_class: str = ClaimClass.NONE.value
+    """What kind of claim :attr:`reply` makes: ``food``, ``policy``,
+    ``allergen``, ``account`` or ``none``.
+
+    The widget needs it because D9 draws allergen answers differently -- source
+    adjacent to the claim, harvest date visible without interaction, never
+    deduplicated -- and PRD K2's uncited-claim metric needs it because *"a food
+    claim with no citation"* is a rule over these two fields rather than a
+    judgement about a sentence.
+    """
 
 
 class EntryRequest(BaseModel):
@@ -695,6 +724,41 @@ def build_visitors(
     return VisitorDesk(roster, store=store), pool
 
 
+WITHHELD_TOOLS: Final[frozenset[ToolName]] = frozenset({ToolName.GET_RECOMMENDATIONS})
+"""Tools this deployment does not offer the model even where their lane is wired.
+
+One name, and it is here rather than in :mod:`chip_chat.agent.lanes` because it
+is a fact about *this deployment's data* rather than about how a lane works.
+``get_recommendations`` reads ``CHIP_CHAT.MARTS.recommendations``, and that
+table does not exist on the account:
+:data:`chip_chat.snowflake.reads.RECOMMENDATIONS_MART` spells the name once and,
+in the same docstring, the reason nothing publishes it -- RFC-001 §04 fixes four
+serving marts and this would be a fifth, so creating it is a schema decision
+(bead ``cc-afo5``) and not something a tool ticket may take on the side.
+
+Measured on the deployed app on 27 August 2026, every call came back::
+
+    {'declined': 'PERSONALIZATION_LANE_UNAVAILABLE',
+     'reason': "ProgrammingError: 002003 (42S02): SQL compilation error:
+                Object 'CHIP_CHAT.MARTS.RECOMMENDATIONS' does not exist"}
+
+which is the failure :mod:`chip_chat.agent.lanes` argues against in its own
+words -- *a tool definition the model can see and nothing can answer is worse
+than an absent one* -- and the trace made it look like a personalization outage
+when the lane was up and answering ``get_usual_order`` beside it.
+
+**Withholding the tool is not withholding the lane, and the difference is the
+whole point.** ``cc-lpy4`` wiring personalization is what moved
+``get_usual_order`` off the hardcoded fixture, which was half of
+``docs/public-demo.md`` §9; that stays. What goes is one name on the tool list.
+
+The day ``cc-afo5`` lands and the mart is published, this frozenset goes back to
+empty and nothing else changes. Until then the withdrawal is reported by
+:meth:`chip_chat.agent.lanes.Lanes.withdrawn` on the start-up log and by
+``GET /healthz/lanes``, so it is a state somebody can read rather than a silence.
+"""
+
+
 def build_lanes(pool: VisitorPool | None) -> Lanes:
     """Assemble every lane this deployment can build, and withhold the rest.
 
@@ -735,6 +799,13 @@ def build_lanes(pool: VisitorPool | None) -> Lanes:
         pool: The connection pool, or ``None`` on a deployment with no
             Snowflake credential.
 
+    **And one tool is withheld from a lane that is wired.** Every other absence
+    here is a lane that could not be built; ``get_recommendations`` is a lane
+    that was built and a table that was never published, so it is withdrawn by
+    name through :attr:`chip_chat.agent.lanes.Lanes.withheld` rather than by
+    taking the personalization lane away from ``get_usual_order`` beside it.
+    :data:`WITHHELD_TOOLS` carries the argument and the measurement.
+
     Returns:
         The lanes this deployment can actually answer with. Every field is
         independently ``None``, and a ``None`` is an honest state rather than a
@@ -745,7 +816,7 @@ def build_lanes(pool: VisitorPool | None) -> Lanes:
     photo = build_photo_lane()
     settings = None if pool is None else SnowflakeSettings.from_env()
     if pool is None or settings is None:
-        return Lanes(knowledge=knowledge, photo=photo)
+        return Lanes(knowledge=knowledge, photo=photo, withheld=WITHHELD_TOOLS)
     key = PrivateKey()
     # Built once per process and held for its life, for the reason
     # `chip_chat.search.client.pooled_client` measures: a client per turn is a
@@ -758,6 +829,7 @@ def build_lanes(pool: VisitorPool | None) -> Lanes:
         account=AccountLane(pool.for_session, transport),
         personalization=PersonalizationLane(pool.for_session),
         photo=photo,
+        withheld=WITHHELD_TOOLS,
     )
 
 
@@ -1121,6 +1193,15 @@ def build_service(
     visitors, pool = build_visitors(resolved_connect)
     resolved_lanes = build_lanes(pool) if lanes is None else lanes
     _log.info("lanes wired on this deployment: %s", resolved_lanes.describe())
+    if withdrawn := resolved_lanes.withdrawn():
+        # Beside the wiring line rather than folded into it, because they answer
+        # two different questions and the second one is the one nobody thinks to
+        # ask. "personalization: true" is the lane; this is the name the model
+        # will never be shown despite it. See `WITHHELD_TOOLS`.
+        _log.info(
+            "tools withheld from the model on this deployment: %s",
+            [tool.value for tool in withdrawn],
+        )
     # Built here rather than on first use, unlike the photo intake, and it is
     # worth being precise about the difference because `Service.photos` records
     # a genuinely expensive lesson: building Azure SDK clients on the start-up
@@ -1278,11 +1359,22 @@ def create_app(service: Service | None = None) -> FastAPI:
         # store knows, and an operator curling this endpoint arrives with no
         # cookie at all -- which would otherwise report the account and
         # personalization lanes as down on a deployment where they are fine.
-        resolved.visitors.admit(session_id)
-        report = probe(
-            resolved.gate.lanes,
-            session_id=session_id,
-            ordering_available=_ordering_available(resolved),
+        #
+        # Both of these go through the threadpool for the reason the chat route
+        # does. `admit` can fall through to a roster read and `probe` is a read
+        # per wired lane, so this handler is several seconds of blocking
+        # Snowflake work on a deployment running one uvicorn worker -- and the
+        # route it would block is `/healthz`, which is the one the platform uses
+        # to decide whether the process is alive. An operator's diagnostic must
+        # not be able to look like a dead container.
+        await run_in_threadpool(resolved.visitors.admit, session_id)
+        report = await run_in_threadpool(
+            partial(
+                probe,
+                resolved.gate.lanes,
+                session_id=session_id,
+                ordering_available=_ordering_available(resolved),
+            )
         )
         response = JSONResponse(report.as_dict())
         _set_session_cookie(response, session_id, secure=_is_https(request))
@@ -1322,8 +1414,16 @@ def create_app(service: Service | None = None) -> FastAPI:
         if (stop := resolved.gate.entry_state()) is not None:
             payload = EntryReply(stopped=True, message=stop.message)
         else:
+            # Through the threadpool: assignment is a pool checkout and, on an
+            # expired roster TTL, a Snowflake read taken inside a lock.
             payload = _entry_reply(
-                resolved.visitors.admit(session_id, display_name=body.name),
+                await run_in_threadpool(
+                    partial(
+                        resolved.visitors.admit,
+                        session_id,
+                        display_name=body.name,
+                    )
+                ),
                 restarted=False,
             )
         response = JSONResponse(payload.model_dump())
@@ -1428,7 +1528,15 @@ def create_app(service: Service | None = None) -> FastAPI:
         # cold start is the product risk and an unbound conversation is the
         # empty-account failure wearing a different hat, so the assignment is
         # here as well as on the entry route rather than only on the polite path.
-        admitted = resolved.visitors.admit(session_id)
+        # The rest of this handler is scrupulous about staying off the event
+        # loop and this call was the one exception, which is the whole of
+        # chip-sv6. `admit` looks like a dictionary lookup and mostly is; on an
+        # expired `DEFAULT_ROSTER_TTL_SECONDS` it is a Snowflake read inside a
+        # `threading.Lock`, bounded by the driver's 15s login and 30s network
+        # timeouts. Thirty seconds is not enough to trip the liveness probe on
+        # its own, which is why this was a quiet defect rather than a restart
+        # loop -- but it is thirty seconds in which `/healthz` cannot answer.
+        admitted = await run_in_threadpool(resolved.visitors.admit, session_id)
         conversation = resolved.sessions.get(
             session_id,
             tools=offered_tools(resolved.gate.lanes, resolved.gate.desk),
@@ -1883,9 +1991,23 @@ def _held_open(
 
 
 def _frames(payload: ChatReply) -> Iterator[bytes]:
-    """Take one reply apart into the frames the widget renders."""
+    """Take one reply apart into the frames the widget renders.
+
+    The sources frame comes after the prose and before the card, which is the
+    order they are read in: D9's trailing source line belongs under the answer
+    it supports, and a confirmation card belongs under everything. It is sent
+    even when the list is empty, so the widget can clear a source line rather
+    than having to remember whether one is showing.
+    """
     for chunk in _chunks(payload.reply):
         yield _frame({"type": "text", "text": chunk})
+    yield _frame(
+        {
+            "type": "sources",
+            "citations": payload.citations,
+            "claim_class": payload.claim_class,
+        }
+    )
     if payload.card is not None:
         yield _frame({"type": "card", "card": payload.card, "receipt": payload.receipt})
     yield _frame({"type": "end", "stopped": payload.stopped})
@@ -2002,23 +2124,51 @@ def _run_turn(
                 completion_tokens=result.completion_tokens,
             )
         )
-        _render(turn, result.reply)
+        _render(turn, result.reply, envelope=result.envelope)
         return ChatReply(
             reply=result.reply,
             card=dict(result.card) if result.card is not None else None,
             receipt=result.receipt,
+            citations=[citation.as_dict() for citation in result.citations],
+            claim_class=result.claim_class.value,
         )
 
 
-def _render(turn: Any, message: str) -> None:
+def _render(turn: Any, message: str, *, envelope: ResponseEnvelope | None = None) -> None:
     """Close the turn the same way however it ended.
 
     ``render.response`` is emitted for a stop state and for a failure as well as
     for an answer, because "what did the visitor actually see" is the question
     the span exists to answer and those are all things a visitor saw.
+
+    **What is recorded about the citations goes under ``metadata``, and that is
+    deliberate.** RFC-001's span vocabulary has no citation attribute and this
+    is not the change that should invent one: ``otel/schema.py`` is executable
+    and the twenty-five span names and their attribute namespaces are what every
+    dashboard and eval is built on, so a new key here would be a schema decision
+    taken in a bug fix. :meth:`chip_chat.otel.spans._Recorder.set_metadata` is
+    the sanctioned escape hatch for exactly this, and what it buys is the
+    question a trace could not answer before: *which sources was this answer
+    drawn from, and did the model name one that was never retrieved*. The second
+    is :attr:`~chip_chat.agent.envelope.ResponseEnvelope.dropped_citation_ids`,
+    which issue #75 counts and which is a violation rather than a nuisance.
+
+    Args:
+        turn: The ``chat.turn`` recorder.
+        message: What the visitor was shown.
+        envelope: D9's envelope, where a model wrote one. ``None`` for a stop
+            state and for a failure, which are the app speaking and cite
+            nothing.
     """
     with render_response() as recorder:
         recorder.record_output(message)
+        if envelope is not None:
+            recorder.set_metadata(
+                claim_class=envelope.claim_class.value,
+                citation_ids=[citation.id for citation in envelope.citations],
+                dropped_citation_ids=list(envelope.dropped_citation_ids),
+                uncited_claim=envelope.uncited_claim,
+            )
     turn.record_output(message)
 
 

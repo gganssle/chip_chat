@@ -130,8 +130,9 @@ nothing to say about SQL and these names already exist.
 
 **3. `chip_chat.*`**, for the handful of facts neither standard covers — turn
 index, guard outcomes, budget scope, matcher slot confidences, ops confirmation
-state, and the system prompt version. All namespaced, so a backend can tell at a
-glance which attributes are portable and which are ours.
+state, the system prompt version, and whether the retrieval that produced
+`retrieval.documents.*` had both of its rankers. All namespaced, so a backend can
+tell at a glance which attributes are portable and which are ours.
 
 Every span in a turn carries `session.id`, `chip_chat.turn.index` and (when
 bound) `chip_chat.persona.id` and `chip_chat.demo.id` — not only the root.
@@ -178,6 +179,60 @@ what the provider said. `api/tests/test_turn_trace.py` runs it over a real turn.
 The rollups exist because Application Insights does not walk trace trees. "What
 did this conversation cost" and "what does the photo lane cost per call" are one
 attribute lookup with them and a tree walk without.
+
+### The hybrid query that was not hybrid
+
+`retriever.search` carries five `chip_chat.retrieval.*` attributes, and they
+exist because a hybrid search can lose half of itself and still answer 200 with a
+well-formed result set. `docs/retrieval.md` §9 is the investigation; the short
+form is that Free-tier vector search returns `{"value": []}` with no error, so
+the fusion silently becomes the keyword ranker under the hybrid ranker's name and
+nothing in the response says so.
+
+There is one tell and it is arithmetic rather than reported. Reciprocal rank
+fusion gives a document `1/(k + rank)` from each ranker that placed it and sums
+the terms, so a document exactly one ranker placed can score at most `1/k` and a
+document both placed scores strictly more. `chip_chat.search.fusion` reads that
+and hands the result to `record_fusion`:
+
+| Attribute | When | What it says |
+|---|---|---|
+| `chip_chat.retrieval.vector_arm` | always | `contributed`, `dropped`, `not_sent` or `undetermined` |
+| `chip_chat.retrieval.document_count` | always, `0` included | how many passages came back |
+| `chip_chat.retrieval.single_ranker_fusion` | hybrid, non-empty | the tell: no returned document was placed by both rankers |
+| `chip_chat.retrieval.top_fused_score` | hybrid, non-empty | the largest fused score — the evidence |
+| `chip_chat.retrieval.single_ranker_ceiling` | hybrid, non-empty | `1/k`, the threshold that verdict was reached against |
+
+Three things about that table are load-bearing.
+
+**Absent is not false.** The inequality only speaks about a hybrid query that
+returned at least one document. A lexical-only query's `@search.score` is BM25
+and a vector-only query's is a cosine similarity; the ceiling means nothing
+against either, and an empty result set has no score to read at all. In every one
+of those cases the last three attributes are simply not set, so a query counting
+`single_ranker_fusion` is counting evaluated readings and never a query the tell
+cannot speak about.
+
+**An empty result set is not a defect report.** A filter matching no published
+item, a freshly built index, and the defect itself all produce the same response,
+and nothing inside one response separates them. That is `undetermined` with a
+count of `0` — a fact about the corpus or the filter — and never `dropped`, which
+is claimed from the arithmetic or not at all.
+
+**The threshold rides with the verdict.** This package is a leaf and holds no
+opinion about anybody's ranker: `k` belongs to the search service, the retriever
+derives `1/k` from it, and the number arrives here as an argument. Recording it
+means a trace read months later says which constant produced its verdict rather
+than leaving that to be reconstructed from whichever version of the source tree
+somebody guesses was deployed.
+
+Flat attributes rather than `metadata`, for the reason the token rollups exist:
+Application Insights searches attributes, does not walk trace trees, and does not
+parse JSON blobs. The metadata blob carries the same reading for somebody reading
+one trace; this is the copy a weekly count and an alert rule can reach. The rate
+this makes countable **has not been measured through these attributes** — that
+needs the live service, and `docs/retrieval.md` §9 records what was measured by
+hand instead.
 
 ### The photograph on `vision.describe`
 

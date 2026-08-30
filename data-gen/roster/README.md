@@ -2,9 +2,10 @@
 
 Three of the six tables `chip_chat.data_gen` writes, plus the manifest that
 names the generation all six came from. `make snowflake-load-roster` loads this
-directory into `CHIP_CHAT.ACCOUNTS`; nothing else in this repository reads it
-except `data-gen/tests/test_roster.py`, which holds it to what the shipped
-`population.toml` generates.
+directory into `CHIP_CHAT.ACCOUNTS`; `data-gen/tests/test_roster.py` holds it to
+what the shipped `population.toml` generates; and
+`data-gen/tests/export_shipped_roster.py` projects `persona_fixtures.jsonl` into
+the copy the API image carries. Nothing else in this repository reads it.
 
 | File | Table | Rows |
 | --- | --- | --- |
@@ -78,8 +79,28 @@ cp landing/accounts/synthetic/{personas,persona_fixtures,demo_visitors}.jsonl \
 cp landing/catalog/chipotle/* data-gen/roster/inputs/catalog/chipotle/
 cp landing/parsed/chipotle/policy/{rewards,policy_sections,faq_entries}.jsonl \
    data-gen/roster/inputs/parsed/chipotle/policy/
-uv run pytest data-gen/tests/test_roster.py
+uv run python data-gen/tests/export_shipped_roster.py
+uv run pytest data-gen/tests/test_roster.py api/tests/test_shipped_roster.py
 ```
+
+## The third copy
+
+There is one more copy of `persona_fixtures`, and it is downstream of this one:
+`api/src/chip_chat/api/fixtures/persona_fixtures.json`, which the API image
+carries and `chip_chat.api.visitors.shipped_roster` reads when `build_service` is
+called without a Snowflake connection factory — a local run with no credentials.
+`docs/decisions/shipped-persona-roster.md` is why it exists.
+
+It is the reason `export_shipped_roster.py` is in the sequence above rather than
+a step somebody remembers. On 2026-08-28 that file was still holding the
+sixty-customer generation this directory was committed to replace, and two of its
+twenty-eight `demo_id`s existed in both generations naming *different* customers
+— a stale roster that was not visibly stale, because every row in it was
+well-formed and carried a plausible sentence. The exporter reads
+`persona_fixtures.jsonl` and projects it onto the eleven columns the entry flow
+reads, in the order the roster query returns them; it computes nothing, so the
+two files are one generation or the export is wrong.
+`api/tests/test_shipped_roster.py` is what says which.
 
 [#106]: https://github.com/gganssle/chip_chat/issues/106
 

@@ -33,6 +33,7 @@ from chip_chat.search.build import build
 from chip_chat.search.client import ServiceError
 from chip_chat.search.corpus import from_path
 from chip_chat.search.embedding import EmbeddingDeployment
+from chip_chat.search.fusion import SINGLE_RANKER_CEILING
 from chip_chat.search.lane import DECLINED, LEXICAL_ONLY_TAG, KnowledgeLane
 from chip_chat.search.retrieve import Confidence, Retriever
 
@@ -73,6 +74,21 @@ def corpus_service() -> FakeSearchService:
         settle=0.0,
     )
     return fake
+
+
+class EmptyService(FakeSearchService):
+    """A service that answers 200 with nothing in it.
+
+    Three different situations produce exactly this response and only one of
+    them is a fault: a filter that matches no published item, an index that has
+    just been rebuilt and holds nothing yet, and the Free-tier defect of
+    ``docs/retrieval.md`` §9 arriving beside a lexical half that also matched
+    nothing. Nothing inside one response separates them, which is why the span
+    records the count and withholds the tell.
+    """
+
+    def search(self, target: str, query: Mapping[str, Any]) -> dict[str, Any]:
+        return {"value": []}
 
 
 class DeadService(FakeSearchService):
@@ -224,6 +240,83 @@ def test_a_healthy_hybrid_retrieval_carries_no_lexical_only_tag(
 ) -> None:
     lane(corpus_service()).search(QUESTION)
     assert "tag.tags" not in spans.attributes_of("retriever.search")
+
+
+# --- The tell, in attributes a dashboard can filter on -----------------------
+#
+# The metadata above is one JSON string. It is the right shape for somebody
+# reading a single trace and the wrong shape for counting a defect over a week,
+# because Application Insights filters attributes and does not parse blobs --
+# the same reason `chip_chat.tokens.*` exists beside `llm.token_count.*`. So the
+# reading rides twice, and these are the flat copies.
+
+
+def test_the_tell_is_flagged_in_its_own_attribute_with_the_threshold_beside_it(
+    spans: SpanRecorder,
+) -> None:
+    fake = corpus_service()
+    fake.drop_vector = True
+    lane(fake).search(QUESTION)
+    attributes = spans.attributes_of("retriever.search")
+    assert attributes["chip_chat.retrieval.single_ranker_fusion"] is True
+    assert attributes["chip_chat.retrieval.vector_arm"] == "dropped"
+    # The threshold travels with the verdict rather than being reconstructed
+    # later from whichever version of the source tree somebody guesses was
+    # deployed. `1/60`, and the top score sits at or below it.
+    ceiling = attributes["chip_chat.retrieval.single_ranker_ceiling"]
+    assert ceiling == pytest.approx(SINGLE_RANKER_CEILING)
+    top = attributes["chip_chat.retrieval.top_fused_score"]
+    assert isinstance(top, float)
+    assert top <= SINGLE_RANKER_CEILING * (1.0 + 1e-6)
+
+
+def test_a_healthy_hybrid_retrieval_is_not_flagged(spans: SpanRecorder) -> None:
+    lane(corpus_service()).search(QUESTION)
+    attributes = spans.attributes_of("retriever.search")
+    assert attributes["chip_chat.retrieval.single_ranker_fusion"] is False
+    assert attributes["chip_chat.retrieval.vector_arm"] == "contributed"
+    top = attributes["chip_chat.retrieval.top_fused_score"]
+    assert isinstance(top, float)
+    assert top > SINGLE_RANKER_CEILING
+
+
+def test_nothing_matched_at_all_is_a_count_rather_than_a_defect_report(
+    spans: SpanRecorder,
+) -> None:
+    # An empty result set and a dropped vector half are different claims and
+    # only one of them is a fault. The count is present and zero -- an absent
+    # attribute could not distinguish "returned nothing" from "was never asked"
+    # -- and the tell says nothing, because there is no score to prove anything
+    # with.
+    lane(EmptyService()).search(QUESTION)
+    attributes = spans.attributes_of("retriever.search")
+    assert attributes["chip_chat.retrieval.document_count"] == 0
+    assert attributes["chip_chat.retrieval.vector_arm"] == "undetermined"
+    assert "chip_chat.retrieval.single_ranker_fusion" not in attributes
+    assert "chip_chat.retrieval.top_fused_score" not in attributes
+    assert "chip_chat.retrieval.single_ranker_ceiling" not in attributes
+
+
+def test_the_document_count_matches_what_the_retrieval_returned(
+    spans: SpanRecorder,
+) -> None:
+    result = lane(corpus_service()).search(QUESTION)
+    attributes = spans.attributes_of("retriever.search")
+    assert attributes["chip_chat.retrieval.document_count"] == len(result.passages)
+
+
+def test_a_declining_lane_records_a_reading_it_cannot_take(
+    spans: SpanRecorder,
+) -> None:
+    # The service never answered, so there is nothing to read and the arm is
+    # undetermined -- but the attribute is present, because a dashboard slicing
+    # retrievals by arm should find the outage rows rather than silently omit
+    # them and flatter the healthy rate.
+    lane(DeadService()).search(QUESTION)
+    attributes = spans.attributes_of("retriever.search")
+    assert attributes["chip_chat.retrieval.vector_arm"] == "undetermined"
+    assert attributes["chip_chat.retrieval.document_count"] == 0
+    assert "chip_chat.retrieval.single_ranker_fusion" not in attributes
 
 
 # --- The outage --------------------------------------------------------------

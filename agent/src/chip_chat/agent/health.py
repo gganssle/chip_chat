@@ -61,7 +61,7 @@ Issue #65's table is verified in ``api/tests/test_failure_isolation.py``, one
 row at a time, by breaking the dependency and watching this module name it.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Final
 
@@ -131,7 +131,10 @@ class LaneHealth:
         detail: The lane's own decline reason, or a sentence about the state.
             Never invented here: a health surface that paraphrases an error is
             a health surface that loses the one string worth reading.
-        tools: Which tools this lane answers, from :data:`LANE_TOOLS`.
+        tools: Which tools this lane answers, from :data:`LANE_TOOLS`, minus
+            anything :attr:`withheld` holds.
+        withheld: Tools this lane would have answered and that the deployment
+            does not offer the model. See :attr:`withheld`.
         derived_at: The gold mart's own timestamp, where the lane has one.
         stale: Whether that timestamp is older than the configured threshold.
     """
@@ -142,6 +145,22 @@ class LaneHealth:
     tools: tuple[ToolName, ...] = ()
     derived_at: str | None = None
     stale: bool = False
+    withheld: tuple[ToolName, ...] = ()
+    """The tools of this lane that the deployment withdrew from the model.
+
+    A lane can be up and still not answer everything it names, which is the
+    state ``chip-znk`` found: personalization was wired and answering, and
+    ``get_recommendations`` read a mart that had never been published. The
+    withdrawal is the fix, and reporting it here is what stops the fix from
+    replacing one invisible failure with another -- an operator who wonders why
+    Cilantro never recommends anything reads it beside the lane rather than
+    inferring it from a tool list with no gap in it.
+
+    Never an outage. A withheld tool leaves this lane ``UP`` if the lane is
+    answering, for the same reason :attr:`LaneState.NOT_WIRED` is not red: this
+    is the deployment working as configured, and a health surface that reported
+    configuration as breakage would train whoever reads it to ignore red.
+    """
 
     @property
     def ok(self) -> bool:
@@ -161,6 +180,8 @@ class LaneHealth:
             "state": self.state.value,
             "tools": [tool.value for tool in self.tools],
         }
+        if self.withheld:
+            body["withheld"] = [tool.value for tool in self.withheld]
         if self.detail:
             body["detail"] = self.detail
         if self.derived_at is not None or self.stale:
@@ -203,6 +224,18 @@ class HealthReport:
         """
         return tuple(lane.lane for lane in self.lanes if lane.stale)
 
+    @property
+    def withheld(self) -> tuple[ToolName, ...]:
+        """Every tool a wired lane would answer and the deployment does not offer.
+
+        A third list beside :attr:`down` and :attr:`stale` and a third kind of
+        thing: not an outage, not a stale publish, but a deliberate withdrawal
+        this deployment made. It is here so that *"why does it never recommend
+        anything"* has an answer on the same surface as *"why is the account
+        lane dead"*, which is the whole argument for this module existing.
+        """
+        return tuple(tool for lane in self.lanes for tool in lane.withheld)
+
     def lane(self, name: str) -> LaneHealth:
         """Return one lane by name.
 
@@ -223,6 +256,7 @@ class HealthReport:
             "healthy": self.healthy,
             "down": list(self.down),
             "stale": list(self.stale),
+            "withheld": [tool.value for tool in self.withheld],
             "lanes": [lane.as_dict() for lane in self.lanes],
         }
 
@@ -246,6 +280,9 @@ class HealthReport:
             if lane.derived_at is not None:
                 aged = "stale" if lane.stale else "fresh"
                 note = f"marts {aged}, derived_at {lane.derived_at}"
+            if lane.withheld:
+                withdrawn = ", ".join(tool.value for tool in lane.withheld)
+                note = f"{note}; withheld: {withdrawn}".lstrip("; ")
             lines.append(f"{mark}  {lane.lane.ljust(width)}  {note}".rstrip())
         if self.down:
             lines.append(f"\nDown: {', '.join(self.down)}. Every other lane answers.")
@@ -256,6 +293,12 @@ class HealthReport:
                 f"Serving stale marts on: {', '.join(self.stale)}. The nightly "
                 "publish has not landed; the derived_at above is what the "
                 "visitor is told."
+            )
+        if self.withheld:
+            withdrawn = ", ".join(tool.value for tool in self.withheld)
+            lines.append(
+                f"Withheld from the model: {withdrawn}. The lane is up and the "
+                "tool is not offered, deliberately -- nothing to restart."
             )
         return "\n".join(lines)
 
@@ -287,13 +330,44 @@ def probe(
         survive one.
     """
     return HealthReport(
-        (
-            _knowledge(lanes, session_id),
-            _account(lanes, session_id),
-            _personalization(lanes, session_id),
-            _photo(lanes),
-            _action(ordering_available),
+        tuple(
+            _withdrawals(found, lanes)
+            for found in (
+                _knowledge(lanes, session_id),
+                _account(lanes, session_id),
+                _personalization(lanes, session_id),
+                _photo(lanes),
+                _action(ordering_available),
+            )
         )
+    )
+
+
+def _withdrawals(found: LaneHealth, lanes: Lanes) -> LaneHealth:
+    """Move a lane's withheld tools out of its tool list and into its own field.
+
+    Applied once here rather than inside each of the five probes above, because
+    every one of them builds its tool list out of :data:`LANE_TOOLS` and the
+    question *"is this name offered to the model"* has one answer for all of
+    them -- :meth:`chip_chat.agent.lanes.Lanes.offers`. A probe that filtered
+    its own list would be a fifth place to remember a withdrawal, which is the
+    shape of mistake this whole module exists to make visible.
+
+    A lane that was never wired keeps its full :data:`LANE_TOOLS` row and
+    reports nothing withheld. Nothing was taken away from a lane that never had
+    anything: ``NOT_WIRED`` already says its tools are not offered, and
+    reporting the same absence twice under two names would be two answers to
+    one question.
+    """
+    if not lanes.withheld or found.state is LaneState.NOT_WIRED:
+        return found
+    withheld = tuple(tool for tool in found.tools if not lanes.offers(tool))
+    if not withheld:
+        return found
+    return replace(
+        found,
+        tools=tuple(tool for tool in found.tools if lanes.offers(tool)),
+        withheld=withheld,
     )
 
 
