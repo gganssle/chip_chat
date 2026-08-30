@@ -6,7 +6,7 @@ in the middle of this would be a second deployment story answering a question
 nobody asked, and the page is small enough that the whole surface a visitor
 touches can be read in one sitting.
 
-Six things on this page are requirements rather than decoration.
+Eight things on this page are requirements rather than decoration.
 
 **The unaffiliated-demo disclosure.** :data:`~chip_chat.web.copy.BANNER` is
 issue #70's launch criterion, and the criterion has two halves: on the entry
@@ -39,6 +39,25 @@ header beside the persona's label, and pressing it clears the transcript in
 front of the visitor before the new opening message arrives -- the restart is
 visible first and explained second, which is the right order for something that
 just threw away what was on screen.
+
+**The source line under a food or policy answer.** Decision D9: citations show
+inline, by default, on every response that makes a food or policy claim, and
+they are a *field* the app draws rather than a sentence the model wrote.
+``renderSources`` draws them from the turn's ``citations`` array and this file
+contains nothing that reads a source out of the answer text -- which is the
+point, because a source a model wrote is a source a model could invent.
+Allergen answers get D9's stricter rule: adjacent, dated without interaction,
+never deduplicated. Until bead ``chip-2ky`` there was no array to draw, and the
+visitor read ``{"claim_class":"food","citations":[...]}`` at the end of every
+food answer instead.
+
+**One greeting, however many times the door is knocked on.** ``POST /api/entry``
+is idempotent by design, so every extra submission of the name gate answers with
+the same opening sentence; the gate closes itself before the request goes out,
+``enter`` refuses to re-enter, and ``sayOpening`` replaces rather than appends.
+GitHub #105 was three copies of that sentence stacked above the visitor's first
+message, and ``web/tests/test_entry_gate.py`` drives the handler to prove it is
+one.
 
 The stop state has its own page (:func:`stop_page`) because the spend cap can
 refuse a visitor on entry, before there is any conversation to put a message in.
@@ -96,6 +115,16 @@ label { display:block; font-size:.85rem; color:var(--muted); margin:0 0 .35rem; 
 .msg img { display:block; max-width:100%; height:auto; border-radius:.6rem;
   margin:.15rem 0 .45rem; }
 .msg .cap { color:var(--muted); font-size:.78rem; }
+/* D9's trailing source line. Dimmed and small, above the answer's own weight
+   but never competing with it: inline presence, on-demand detail. */
+.sources { white-space:normal; margin:.55rem 0 0; padding-top:.4rem;
+  border-top:1px solid var(--line); }
+.source-line { display:block; text-align:left; width:100%; font-size:.8rem;
+  color:var(--muted); padding:.12rem 0; min-height:auto; border:0;
+  background:transparent; cursor:pointer; }
+.source-line:hover { text-decoration:underline; }
+.source-detail { font-size:.76rem; color:var(--muted); padding:.1rem 0 .35rem; }
+.source-detail a { color:var(--muted); overflow-wrap:anywhere; }
 .card { border:1px solid var(--accent); border-radius:.9rem; padding:.85rem .9rem;
   margin:.55rem 0; background:var(--card); }
 .card .title { font-weight:600; letter-spacing:.02em; text-transform:uppercase;
@@ -153,6 +182,8 @@ const SWITCH_CONFIRM = %(switch_confirm)s;
 
 let persona = null;
 let busy = false;
+let entering = false;
+let greeting = null;
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -166,6 +197,27 @@ function bottom(node) { node.scrollIntoView({block: 'end'}); }
 function bubble(text, who) {
   const node = el('div', 'msg ' + who, text);
   log.appendChild(node);
+  bottom(node);
+  return node;
+}
+
+// The opening message is written once per persona, and this is what makes that
+// a property of the code rather than of how patiently somebody typed.
+// `/api/entry` is idempotent by design -- issue #9 decided a returning browser
+// resumes its account rather than collecting a second one -- so every extra
+// submission of the name gate answers with the SAME opening sentence, and a
+// renderer that appends drew it again. GitHub #105 is three of them, identical,
+// stacked above the visitor's first message.
+//
+// Replacing rather than appending is the half that cannot be got wrong later:
+// `enter` below refuses to re-enter and the gate disables itself before the
+// request goes out, which stops the second call being made at all, but a
+// greeting that can only ever occupy one node is not relying on that.
+function sayOpening(text, who) {
+  const node = el('div', 'msg ' + who, text);
+  if (greeting && greeting.isConnected) greeting.replaceWith(node);
+  else log.appendChild(node);
+  greeting = node;
   bottom(node);
   return node;
 }
@@ -383,6 +435,61 @@ async function revise(node, card, draft) {
   }
 }
 
+// --- the source line, decision D9 ------------------------------------------
+
+// "Inline presence, on-demand detail." The citation is drawn from the
+// `citations` field on the turn and never parsed out of the answer text: what
+// crossed from the model was a set of passage ids, and every word below came
+// off a passage the retriever actually returned. That is the half of D9 that
+// makes a minted source impossible rather than unlikely, and it is why this
+// function is handed an array instead of a string to scan.
+//
+// Two placements, and the stricter one is not a nicety. An allergen answer
+// renders its sources with the harvest date visible without interaction and
+// never deduplicated, because "the published chart does not mark the steak with
+// dairy, as published on 24 August" is a materially different claim from the
+// same sentence without the date, and in an answer covering three items it has
+// to stay unambiguous which source backs which. Everything else gets one quiet
+// trailing line, deduplicated by source, expanding on a tap.
+function shortDate(stamp) {
+  const at = String(stamp || '');
+  const day = at.slice(0, 10);
+  return day.length === 10 ? day : at;
+}
+
+function renderSources(node, citations, claimClass) {
+  if (!citations || !citations.length) return null;
+  const adjacent = claimClass === 'allergen';
+  const seen = new Set();
+  const box = el('div', 'sources');
+  for (const citation of citations) {
+    if (!adjacent) {
+      if (seen.has(citation.source_url)) continue;
+      seen.add(citation.source_url);
+    }
+    const row = el('div', 'source');
+    const dated = adjacent ? ', as published ' + shortDate(citation.harvested_at) : '';
+    const line = el('button', 'link source-line',
+      '\\u2014 ' + (citation.label || 'Source') + dated);
+    const detail = el('div', 'source-detail');
+    detail.hidden = true;
+    detail.appendChild(el('div', null, 'Published ' + shortDate(citation.harvested_at)));
+    const link = el('a', null, citation.source_url);
+    link.href = citation.source_url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    detail.appendChild(link);
+    line.onclick = () => { detail.hidden = !detail.hidden; };
+    row.appendChild(line);
+    row.appendChild(detail);
+    box.appendChild(row);
+  }
+  if (!box.children.length) return null;
+  node.appendChild(box);
+  bottom(box);
+  return box;
+}
+
 // --- one turn, streamed ---------------------------------------------------
 
 async function send(text, extra) {
@@ -416,6 +523,10 @@ async function send(text, extra) {
           streamed += frame.text;
           answer.textContent = streamed;
           bottom(answer);
+        } else if (frame.type === 'sources') {
+          // Inside the answer's own bubble, so a source line cannot drift away
+          // from the sentence it supports when a card lands after it.
+          renderSources(answer, frame.citations, frame.claim_class);
         } else if (frame.type === 'card') {
           renderCard(frame.card, frame.receipt);
         } else if (frame.type === 'waiting' && !streamed) {
@@ -426,7 +537,11 @@ async function send(text, extra) {
         }
       }
     }
-    if (!streamed) answer.textContent = 'I did not have anything to say to that.';
+    // Only when nothing at all landed. Assigning textContent would wipe a
+    // source line that had already been drawn into this bubble.
+    if (!streamed && !answer.children.length) {
+      answer.textContent = 'I did not have anything to say to that.';
+    }
   } catch (error) {
     answer.textContent = 'I could not reach the server just then. Try again.';
   } finally {
@@ -444,20 +559,45 @@ function showPersona(body, restarted) {
   composer.hidden = false;
   $('who').textContent = (persona && persona.display_name) || 'You';
   $('role').textContent = persona ? persona.label : 'no synthetic account loaded';
-  if (restarted) log.replaceChildren();
-  bubble(body.opening, restarted ? 'system' : 'them');
+  if (restarted) { log.replaceChildren(); greeting = null; }
+  sayOpening(body.opening, restarted ? 'system' : 'them');
   setChips(body.chips);
   input.focus();
 }
 
+function gateBusy(on) {
+  $('name').disabled = on;
+  $('gate-submit').disabled = on;
+}
+
+// Guarded and disabled the way `switchPersona` already is, and for a sharper
+// reason. `POST /api/entry` assigns a persona, which on a wired deployment
+// means a Snowflake checkout and a roster read: it is seconds, not
+// milliseconds. Nothing here used to close the gate until the response came
+// back, so the whole of that window accepted more submissions -- a held Enter
+// key repeats, a tapped button on a phone double-fires -- and each one drew
+// another copy of the same greeting. GitHub #105.
 async function enter(name) {
-  const res = await fetch('/api/entry', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({name: name || null}),
-  });
-  const body = await res.json();
-  if (body.stopped) { document.location.reload(); return; }
-  showPersona(body, false);
+  if (entering) return;
+  entering = true;
+  gateBusy(true);
+  try {
+    const res = await fetch('/api/entry', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name || null}),
+    });
+    const body = await res.json();
+    if (body.stopped) { document.location.reload(); return; }
+    showPersona(body, false);
+  } catch (error) {
+    // The gate is still the only thing on screen, so the hint under the
+    // heading is where a visitor is already looking. Re-enabled below, because
+    // a door that will not open is worse than one that opens slowly.
+    $('gate-hint').textContent = 'I could not reach the server just then. Try again.';
+  } finally {
+    entering = false;
+    gateBusy(false);
+  }
 }
 
 async function switchPersona() {
@@ -560,12 +700,13 @@ def chat_page() -> str:
         + "<main>"
         + '<section id="gate" class="gate">'
         + "<h1>Cilantro</h1>"
-        + f'<p class="sub">{NAME_GATE_HINT}</p>'
+        + f'<p class="sub" id="gate-hint">{NAME_GATE_HINT}</p>'
         + f'<label for="name">{NAME_GATE_TITLE}</label>'
         + '<form id="gate-form">'
         + '<input type="text" id="name" autocomplete="off" autofocus maxlength="64"'
         + f' placeholder="{NAME_GATE_PLACEHOLDER}">'
-        + f'<button class="primary" type="submit">{NAME_GATE_SUBMIT}</button>'
+        + '<button class="primary" id="gate-submit" type="submit">'
+        + f"{NAME_GATE_SUBMIT}</button>"
         + "</form></section>"
         + '<section id="chat" hidden>'
         + '<div class="head"><div>'

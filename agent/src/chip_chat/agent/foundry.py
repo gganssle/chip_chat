@@ -67,6 +67,43 @@ COGNITIVE_SERVICES_SCOPE = "https://cognitiveservices.azure.com/.default"
 """Entra scope for the Foundry data plane. Not the management-plane scope."""
 
 _DEFAULT_API_VERSION = "2024-10-21"
+
+_DEFAULT_TIMEOUT_SECONDS = 90.0
+"""How long one model call may take before the SDK gives up.
+
+**This is a per-call number and it is not a turn budget.** A turn runs up to
+:data:`chip_chat.agent.loop.DEFAULT_MAX_STEPS` model calls, so the worst case a
+turn can reach is this multiplied by that and again by
+:data:`_DEFAULT_MAX_RETRIES` attempts. Bounding the turn itself is a different
+mechanism and is deliberately not this one -- a turn budget has to decide what to
+*say* when it fires, which is a product decision, whereas this only has to stop
+an HTTP request hanging forever.
+
+Ninety seconds has headroom in it rather than a measurement behind it, and the
+distinction matters. ``docs/deployment.md`` §3.13 measured p50 41 s, p95 72.8 s
+and a longest of 95.2 s, but those are **whole turns** -- several model calls plus
+tool time -- and nothing here has measured a single completion. So the number is
+set above the longest observed whole turn, on the reasoning that a single call
+taking longer than an entire slow conversation is a hang rather than a slow
+answer. What it should actually be is unmeasured, and
+``docs/decisions/model-call-timeout.md`` says so.
+
+Without it the openai-python default applies: 600 seconds, twice, per call.
+"""
+
+_DEFAULT_MAX_RETRIES = 1
+"""How many times the SDK retries one model call, beyond the first attempt.
+
+One rather than the library's two, because retries multiply against
+:data:`_DEFAULT_TIMEOUT_SECONDS` and against the step count, and because the
+deployment this talks to is provisioned at capacity 10 and its observed failure
+mode is ``RateLimitError`` under concurrency (``docs/deployment.md`` §3.13). A
+third attempt into a deployment that is already refusing for want of capacity
+spends ninety more seconds to be told the same thing.
+
+Set explicitly rather than left to the default so that the number is a decision
+somebody made and can find, which is the whole reason this bug existed.
+"""
 """Last GA data-plane version. Pinned, not floating: a silently newer API
 version is a silently different response shape, and this is the tier every
 evaluation in Phase 9 reads its numbers from."""
@@ -84,6 +121,47 @@ def _required(env: Mapping[str, str], name: str, hint: str) -> str:
     value = env.get(name, "").strip()
     if not value:
         raise FoundryConfigError(f"{name} is not set. {hint}")
+    return value
+
+
+def _positive_float(source: Mapping[str, str], name: str, default: float) -> float:
+    """Read ``name`` as a number of seconds, or return ``default``.
+
+    Raises rather than falling back when the variable is set to something that
+    is not a positive number. A timeout silently reverting to its default
+    because somebody typed ``90s`` is the kind of quiet failure this whole
+    change exists to remove.
+    """
+    raw = source.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        raise FoundryConfigError(
+            f"{name} is {raw!r}, which is not a number of seconds."
+        ) from None
+    if value <= 0:
+        raise FoundryConfigError(f"{name} is {value}; it must be greater than zero.")
+    return value
+
+
+def _non_negative_int(source: Mapping[str, str], name: str, default: int) -> int:
+    """Read ``name`` as a retry count, or return ``default``.
+
+    Zero is meaningful and allowed: it means one attempt and no retry.
+    """
+    raw = source.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise FoundryConfigError(
+            f"{name} is {raw!r}, which is not a whole number of retries."
+        ) from None
+    if value < 0:
+        raise FoundryConfigError(f"{name} is {value}; it cannot be negative.")
     return value
 
 
@@ -109,6 +187,12 @@ class FoundryConfig:
 
     api_key: str | None = None
     """Development escape hatch. ``None`` means Entra, which is the real path."""
+
+    timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS
+    """Per-call ceiling, in seconds. See :data:`_DEFAULT_TIMEOUT_SECONDS`."""
+
+    max_retries: int = _DEFAULT_MAX_RETRIES
+    """Retries per call, beyond the first attempt. See :data:`_DEFAULT_MAX_RETRIES`."""
 
     @property
     def uses_entra(self) -> bool:
@@ -173,6 +257,16 @@ class FoundryConfig:
                 or _DEFAULT_API_VERSION
             ),
             api_key=source.get("CHIP_CHAT_FOUNDRY_API_KEY", "").strip() or None,
+            timeout_seconds=_positive_float(
+                source,
+                "CHIP_CHAT_FOUNDRY_TIMEOUT_SECONDS",
+                _DEFAULT_TIMEOUT_SECONDS,
+            ),
+            max_retries=_non_negative_int(
+                source,
+                "CHIP_CHAT_FOUNDRY_MAX_RETRIES",
+                _DEFAULT_MAX_RETRIES,
+            ),
         )
 
 
@@ -202,11 +296,21 @@ def chat_client(config: FoundryConfig) -> "AzureOpenAI":
     """
     from openai import AzureOpenAI
 
+    # `timeout` and `max_retries` are passed explicitly on BOTH constructions.
+    # Leaving them off is what made a turn unbounded: the library's defaults are
+    # 600 seconds and two retries, and `loop.py` runs up to `DEFAULT_MAX_STEPS`
+    # calls per turn, so a hung deployment could hold one conversation open for
+    # the better part of an hour. Nothing downstream would have noticed --
+    # `_held_open` in the API keeps writing its heartbeat for exactly as long as
+    # the turn runs, so the fix that stopped ingress cutting slow turns also
+    # removed the only thing that was cutting hung ones.
     if config.api_key is not None:
         return AzureOpenAI(
             azure_endpoint=config.endpoint,
             api_key=config.api_key,
             api_version=config.api_version,
+            timeout=config.timeout_seconds,
+            max_retries=config.max_retries,
         )
 
     from azure.identity import get_bearer_token_provider
@@ -217,4 +321,6 @@ def chat_client(config: FoundryConfig) -> "AzureOpenAI":
             credential(), COGNITIVE_SERVICES_SCOPE
         ),
         api_version=config.api_version,
+        timeout=config.timeout_seconds,
+        max_retries=config.max_retries,
     )

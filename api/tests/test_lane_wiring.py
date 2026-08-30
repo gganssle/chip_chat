@@ -25,13 +25,17 @@ wrong:
    "Uvicorn running", and a credential chain resolved per lane would spend it.
 """
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
+from chip_chat.agent.lanes import Lanes
+from chip_chat.agent.tools import offered_tools
 from chip_chat.api import app as app_module
 from chip_chat.api.app import build_knowledge_lane, build_lanes, build_photo_lane
+from chip_chat.api.pool import VisitorPool
 from chip_chat.catalog import MenuCatalog
+from chip_chat.otel import ToolName
 from chip_chat.search.lane import KnowledgeLane
 from chip_chat.vision import PhotoLane
 
@@ -199,6 +203,57 @@ def test_a_deployment_told_nothing_wires_nothing_and_does_not_raise() -> None:
 
 
 # ---------------------------------------------------------------------------
+# The tool a wired lane cannot answer
+# ---------------------------------------------------------------------------
+
+
+def test_the_recommendations_tool_is_withheld_rather_than_left_declining() -> None:
+    """``chip-znk``, at the one place that knows which tables exist.
+
+    ``CHIP_CHAT.MARTS.recommendations`` is not on the account and RFC-001 §04 is
+    why nothing publishes it, so a deployment that offered
+    ``get_recommendations`` offered a name every call of which came back
+    ``PERSONALIZATION_LANE_UNAVAILABLE``. The withdrawal is a fact about this
+    deployment's data, which is why it is spelled in ``api/`` and not in the
+    agent's lane vocabulary.
+    """
+    lanes = build_lanes(None)
+
+    assert ToolName.GET_RECOMMENDATIONS in lanes.withheld
+    assert ToolName.GET_RECOMMENDATIONS not in offered_tools(lanes)
+
+
+def test_withholding_the_tool_does_not_withhold_the_lane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The narrowness is the point, and it is what ``cc-lpy4`` bought.
+
+    Wiring personalization is what moved ``get_usual_order`` off the hardcoded
+    fixture -- half of ``docs/public-demo.md`` §9. A fix that took the lane away
+    to take one tool away would hand that back.
+    """
+    lanes = _snowflake_backed(monkeypatch)
+
+    assert lanes.personalization is not None
+    assert ToolName.GET_USUAL_ORDER in offered_tools(lanes)
+    assert ToolName.GET_RECOMMENDATIONS not in offered_tools(lanes)
+
+
+def test_the_withdrawal_is_reported_rather_than_silent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What the start-up log prints and ``GET /healthz/lanes`` renders.
+
+    Offered-and-declining was at least visible in a trace. A tool that simply
+    stopped existing, with nothing anywhere saying so, would be the same defect
+    with the evidence removed.
+    """
+    lanes = _snowflake_backed(monkeypatch)
+
+    assert lanes.withdrawn() == (ToolName.GET_RECOMMENDATIONS,)
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -214,8 +269,36 @@ class _Stub:
     content_version: str | None = None
     """Read by the start-up log line, which names both catalogue builds."""
 
+    account: str = "acct.example"
+    """Read by ``_analyst_host`` when it derives a REST hostname."""
+
     def from_env(self) -> "_Stub":
         return self
+
+    def for_session(self, session_id: str) -> "_Stub":
+        """Stand in for :meth:`chip_chat.api.pool.VisitorPool.for_session`."""
+        del session_id
+        return self
+
+
+def _snowflake_backed(monkeypatch: pytest.MonkeyPatch) -> Lanes:
+    """Return what ``build_lanes`` assembles on a deployment that has a pool.
+
+    Everything between the pool and the two Snowflake-backed lanes is stubbed --
+    the settings, the key, the JWT and the Analyst transport -- because none of
+    it is what these two tests are about and all of it would want a credential.
+    What is left real is the branch under test: which lanes come back, and which
+    tool name is withheld from them.
+    """
+    monkeypatch.setattr(app_module, "SnowflakeSettings", _Stub())
+    for name in ("PrivateKey", "KeyPairJwt", "HttpAnalystTransport"):
+        monkeypatch.setattr(app_module, name, lambda *a, **k: _Stub())
+    monkeypatch.setattr(app_module, "pooled_client", lambda: _Stub())
+    monkeypatch.setattr(app_module, "AccountLane", lambda *a, **k: _Stub())
+    monkeypatch.setattr(app_module, "PersonalizationLane", lambda *a, **k: _Stub())
+    # The pool is a `for_session` and nothing else, which is
+    # `chip_chat.snowflake.reads.SessionCheckout`'s whole shape.
+    return build_lanes(cast(VisitorPool, _Stub()))
 
 
 def _retriever_kwargs(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:

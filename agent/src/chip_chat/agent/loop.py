@@ -12,6 +12,15 @@ module is reached and the rendered response after it. :func:`run_turn` refuses
 to open ``agent.step`` outside a ``chat.turn`` -- the span helpers enforce that,
 not this docstring.
 
+**The reply is read before it leaves.** A completion is prose plus, per D9, a
+declared citation field, and this file is where the two are separated: the ids a
+step's tool calls retrieved are collected as the loop runs, and the last
+completion is turned into a :class:`~chip_chat.agent.envelope.ResponseEnvelope`
+before the turn returns. It is a small amount of code and it was missing for a
+while, which is bead ``chip-2ky`` -- the model wrote the field, nothing parsed
+it, and ``{"claim_class":"food","citations":[...]}`` was on the screen of every
+food answer the deployment gave.
+
 **Later, this becomes a hosted Foundry agent.** ``docs/decisions/foundry-agent-shape.md``
 settles that the agent runs on the Agent Service with Microsoft-managed threads,
 and #64 is where it moves. What survives the move is the span tree and the tool
@@ -27,6 +36,13 @@ from dataclasses import dataclass, field
 from typing import Any, Final
 
 from chip_chat.agent.desk import Desk
+from chip_chat.agent.envelope import (
+    Citation,
+    ClaimClass,
+    ResponseEnvelope,
+    parse,
+    render,
+)
 from chip_chat.agent.hardcoded import ACCOUNT, MENU, SIMULATION_NOTICE, STORE
 from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.model import ChatModel, ModelReply
@@ -331,9 +347,35 @@ class TurnResult:
     receipt: bool = False
     """True when :attr:`card` is a receipt rather than a draft to confirm."""
 
+    envelope: ResponseEnvelope | None = None
+    """D9's response envelope for this turn, where a model wrote one.
+
+    :attr:`reply` is always :attr:`ResponseEnvelope.text` when this is set, and
+    the two are built together in one expression so that they cannot come apart
+    -- the same rule :attr:`card` follows, and for the same reason: two
+    renderings of one turn that can disagree eventually do.
+
+    ``None`` on the replies the *app* wrote rather than the model:
+    :data:`_FALLBACK_REPLY` when the loop hits its step ceiling, and the stop
+    state and the failure sentence in :mod:`chip_chat.api.app`. Those are not
+    claims about food and there is nothing for them to cite, so an empty
+    envelope would be a claim of ``claim_class: none`` where the honest answer
+    is that no model spoke.
+    """
+
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
+
+    @property
+    def citations(self) -> tuple[Citation, ...]:
+        """What the app draws under this reply. Empty where there is no envelope."""
+        return () if self.envelope is None else self.envelope.citations
+
+    @property
+    def claim_class(self) -> ClaimClass:
+        """What kind of claim this reply makes, for the citation rule."""
+        return ClaimClass.NONE if self.envelope is None else self.envelope.claim_class
 
 
 class ToolRegistrationError(RuntimeError):
@@ -383,7 +425,10 @@ def run_turn(
             :data:`DEFAULT_MAX_STEPS` for why it is a spend control.
 
     Returns:
-        The reply, the tokens it cost across every round trip, and any card.
+        The reply, the tokens it cost across every round trip, any card, and
+        D9's response envelope -- the prose separated from the citation field
+        the model declared, with every id it named resolved against what
+        ``retriever.search`` returned on this turn.
 
     Raises:
         ToolRegistrationError: If ``conversation`` was opened believing a
@@ -412,6 +457,15 @@ def run_turn(
     completion_tokens = 0
     card: Mapping[str, Any] | None = None
     receipt = False
+    # Every passage this turn retrieved, across every step and every call of
+    # `search_menu_knowledge`, keyed by id. It accumulates rather than resetting
+    # per step because the model may search twice and cite from the first search
+    # in a reply written after the second -- and because a citation the retriever
+    # genuinely returned should not be dropped as minted just for being a round
+    # trip old. What it never does is accumulate across *turns*: the mapping is
+    # local to this call, so an id from a previous turn resolves against nothing
+    # and is counted as a violation, which is what D9 asks for.
+    retrieved: dict[str, Citation] = {}
 
     schemas = offered_schemas(lanes, desk)
 
@@ -429,17 +483,34 @@ def run_turn(
             conversation.messages.append(_assistant_message(reply))
 
             if not reply.tool_calls:
-                step.record_output(reply.content or "")
+                # D9's whole path, in three lines and in this order. `parse`
+                # separates the prose the visitor reads from the field the model
+                # declared; `render` resolves the ids it named against what
+                # `retriever.search` actually returned this turn, dropping the
+                # rest; and the envelope travels with the reply so that the app
+                # can draw the source line instead of the visitor reading a line
+                # of JSON. Bead `chip-2ky` is what happened while these three
+                # lines were missing.
+                envelope = render(parse(reply.content), retrieved=retrieved)
+                # The prose, never the raw content: `step.record_output` is
+                # "what did this step produce", and after the parse that is the
+                # answer rather than the answer plus its packaging.
+                step.record_output(envelope.text)
                 step.record_token_rollup(spent)
                 prompt_tokens += spent.prompt_tokens
                 completion_tokens += spent.completion_tokens
+                spoken = envelope.text.strip()
                 return TurnResult(
-                    reply=(reply.content or "").strip() or _FALLBACK_REPLY,
+                    reply=spoken or _FALLBACK_REPLY,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     steps=step_index + 1,
                     card=card,
                     receipt=receipt,
+                    # A reply the model did not manage to write is the app
+                    # speaking, and the app cites nothing -- see
+                    # `TurnResult.envelope`.
+                    envelope=envelope if spoken else None,
                 )
 
             for invocation in reply.tool_calls:
@@ -450,6 +521,7 @@ def run_turn(
                     desk=desk,
                     lanes=lanes,
                     record_spend=lane_spend.append,
+                    record_citations=retrieved.update,
                 )
                 for usage in lane_spend:
                     spent = spent + usage
