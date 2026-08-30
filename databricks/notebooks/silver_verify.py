@@ -27,11 +27,18 @@
 # MAGIC    collapsing anything from a corpus in which no fact is published on
 # MAGIC    two documents, and the seeded landing zone is the second of those.
 # MAGIC 3. **Boilerplate removal verified against a sample of chunks.** Furniture
-# MAGIC    is the text that is on nearly every page, so the assertion is that no
-# MAGIC    surviving block appears in more than `MAXIMUM_DOCUMENT_SHARE` of the
-# MAGIC    corpus. The sample is printed underneath it: the ten most widely
+# MAGIC    is not merely text that is frequent -- it is text on pages that have
+# MAGIC    nothing else in common, and that distinction is the whole of this
+# MAGIC    check. A share alone measures how the seed list was built: when 86
+# MAGIC    percent of the corpus is one site section, a promotional module that
+# MAGIC    is genuinely on all of that section clears `MAXIMUM_DOCUMENT_SHARE`
+# MAGIC    without anything being wrong with the stripper. So the assertion is
+# MAGIC    asked of `silver.furniture_verdict`, which requires the block to cross
+# MAGIC    site sections before a share convicts it, and which backs it with a
+# MAGIC    second rule no corpus composition can excuse -- a block on *every*
+# MAGIC    document. The sample is printed underneath it: the most widely
 # MAGIC    repeated blocks, which is where a missed footer would be if there were
-# MAGIC    one.
+# MAGIC    one. `docs/decisions/corpus-document-frequency.md` is the argument.
 # MAGIC
 # MAGIC It also checks the thing #34's brief is bluntest about, which is not one
 # MAGIC of the three: **deduplication must not collapse two genuinely different
@@ -326,6 +333,17 @@ spark.table(blocks).orderBy(silver.DOCUMENT_FREQUENCY, ascending=False).selectEx
 
 # COMMAND ----------
 
+# The verdict is asked of `silver.furniture_verdict` rather than recomputed here
+# from `share`. Restating a rule by hand in the notebook that verifies it is how
+# these two came apart in the first place: the pipeline learned that a share is
+# only evidence of furniture when the block crosses site sections, and this cell
+# went on rejecting on the bare ratio, so `chip-chat-silver-verify` would have
+# failed on precisely the blocks `chip-chat-silver-conform` had just been taught
+# to admit. One function, two callers, and the SQL constraints assembled from the
+# same constants -- there is now no copy of the rule that can drift on its own.
+#
+# `sources` is the citation array the dedup already conserves, which is what lets
+# the section question be asked at all without a new column.
 worst = (
     spark.table(blocks)
     .selectExpr(
@@ -334,6 +352,7 @@ worst = (
         silver.DOCUMENT_FREQUENCY,
         "corpus_documents",
         f"{silver.DOCUMENT_FREQUENCY} / corpus_documents AS share",
+        f"transform({silver.CITATION}, citation -> citation.source_url) AS sources",
     )
     .orderBy("share", ascending=False)
     .limit(5)
@@ -341,10 +360,17 @@ worst = (
 )
 
 for row in worst:
+    verdict = silver.furniture_verdict(
+        row[silver.DOCUMENT_FREQUENCY],
+        row["corpus_documents"],
+        row["sources"] or [],
+    )
+    sections = sorted({silver.site_section(url) for url in (row["sources"] or [])})
     check(
-        row["share"] <= silver.MAXIMUM_DOCUMENT_SHARE,
-        f"{blocks}: a block appears in {row['share']:.0%} of the corpus "
-        f"(limit {silver.MAXIMUM_DOCUMENT_SHARE:.0%}): "
+        verdict is None,
+        f"{blocks}: {verdict} -- a block appears in {row['share']:.0%} of the "
+        f"corpus across {len(sections)} site section(s) "
+        f"({', '.join(sections) or 'none recorded'}): "
         f"{(row['heading'] or row['text'])[:70]!r}",
     )
 

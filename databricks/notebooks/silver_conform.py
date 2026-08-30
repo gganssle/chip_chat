@@ -464,15 +464,30 @@ def _documents():
 # MAGIC
 # MAGIC `document_frequency` beside `corpus_documents` is the evidence that
 # MAGIC boilerplate removal worked. Furniture is, by definition, the text that is
-# MAGIC on nearly every page, so a block that survived extraction and still
-# MAGIC appears in more than `silver.MAXIMUM_DOCUMENT_SHARE` of the corpus is
-# MAGIC navigation the tag list did not know about — and it fails the update
-# MAGIC rather than quietly dominating every chunk embedding built on top of it.
+# MAGIC on nearly every page — but "nearly every page" is a claim about *pages
+# MAGIC that have nothing else in common*, and a bare share cannot make that
+# MAGIC distinction. When 86 percent of the corpus is one site section, a share
+# MAGIC measures how the seed list was built and reports it as a verdict on the
+# MAGIC stripper. That is not a hypothetical: it held this table at zero rows
+# MAGIC from 26 August 2026, on one promotional module Chipotle publishes on all
+# MAGIC thirty of its store pages and nowhere else.
 # MAGIC
-# MAGIC Half is a generous threshold on purpose. A genuinely shared fact is
-# MAGIC exactly what this table is *supposed* to collapse into one row with
-# MAGIC several citations, and the check must not turn that success into a
-# MAGIC failure.
+# MAGIC So the frequency is checked twice, and the two fail for different
+# MAGIC reasons and say so by name in the event log.
+# MAGIC `silver.FURNITURE_EXPECTATION` convicts on the share only once the block
+# MAGIC crosses site sections, which is the part of "on nearly every page" that
+# MAGIC a lopsided corpus cannot fake.
+# MAGIC `silver.EVERY_DOCUMENT_EXPECTATION` is the floor underneath it: a block
+# MAGIC on *every* document of a corpus of more than one is furniture whatever
+# MAGIC the corpus is made of, and no composition argument excuses it.
+# MAGIC
+# MAGIC Half is a generous threshold on purpose, and it did not move — the
+# MAGIC denominator did. A genuinely shared fact is exactly what this table is
+# MAGIC *supposed* to collapse into one row with several citations, and the check
+# MAGIC must not turn that success into a failure. That paragraph was written
+# MAGIC before the case arrived and it described it exactly;
+# MAGIC `docs/decisions/corpus-document-frequency.md` is the argument for
+# MAGIC believing it rather than raising the number until the update passed.
 
 # COMMAND ----------
 
