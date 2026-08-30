@@ -134,7 +134,7 @@ TF        ?= terraform
 TF_DIR    := infra/terraform
 TF_RUN    := $(TF) -chdir=$(TF_DIR)
 
-.PHONY: infra-bootstrap infra-init infra-fmt infra-validate infra-plan infra-apply infra-destroy infra-output infra-check-uploads
+.PHONY: infra-bootstrap infra-init infra-fmt infra-validate infra-plan infra-apply infra-destroy infra-output infra-check-uploads infra-check-databricks infra-list-databricks
 
 infra-bootstrap: ## Create the remote state storage account (once per subscription)
 	./infra/scripts/bootstrap-state.sh
@@ -162,6 +162,42 @@ infra-output: ## Print stack outputs
 
 infra-check-uploads: ## Verify uploaded photos really do expire (read-only)
 	./infra/scripts/check-uploads-retention.sh
+
+# The eight library modules under /Shared/chip-chat/lib and the sixteen notebooks
+# beside them are declared as databricks_workspace_file and databricks_notebook
+# resources, so `terraform plan` has always been able to see when the deployed
+# copy has fallen behind this repository. Nothing ran one. On 2026-08-28 the
+# nightly publish failed with a message about a row access policy and the cause
+# was a workspace copy of publish.py that was 37 lines behind main and had never
+# had the committed fix applied to it -- see cc-rxs and docs/workspace-drift.md.
+#
+# This is the check that would have said so. It needs a Databricks credential
+# and so it is NOT part of `make ci`, for the same reason `verify-*`,
+# `snowflake-*` and the rest of `infra-*` are not: a gate that needs a logged-in
+# human is not a gate. Run it after an apply, and before believing a nightly
+# failure is about the thing its error message names.
+#
+# It reads the list of managed paths out of infra/terraform/databricks_*.tf
+# rather than carrying one, so a resource added tomorrow is checked tomorrow.
+# It deliberately resolves nothing through `terraform output` -- unlike every
+# other operations target in this file, which is what docs/runbook.md §1 is
+# about -- so it works in a fresh clone with no initialised working directory.
+# Read-only, ~11 s for all twenty-four paths, quiet and exit 0 when they match.
+#
+# DATABRICKS_BASE is the stack prefix, and defaults to the live demo stack.
+# DATABRICKS_PROFILE overrides $DATABRICKS_CONFIG_PROFILE for one run.
+
+DATABRICKS_BASE ?=
+DATABRICKS_PROFILE ?=
+
+infra-check-databricks: ## Diff the deployed Databricks lib and notebooks against this checkout (read-only, needs a Databricks credential)
+	$(UV) run python -m chip_chat.infra.workspace_drift \
+		$(if $(DATABRICKS_BASE),--base $(DATABRICKS_BASE),) \
+		$(if $(DATABRICKS_PROFILE),--profile $(DATABRICKS_PROFILE),)
+
+infra-list-databricks: ## Print the workspace paths Terraform manages, without asking the workspace (free)
+	$(UV) run python -m chip_chat.infra.workspace_drift --list \
+		$(if $(DATABRICKS_BASE),--base $(DATABRICKS_BASE),)
 
 # --- Model deployments ------------------------------------------------------
 #

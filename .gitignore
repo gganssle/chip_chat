@@ -30,6 +30,15 @@ htmlcov/
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
+# ...and one shared, deliberately-not-secret exception. `snowflake_account_url`
+# gates the nightly publish job, its verify job and both permission sets, so an
+# apply that does not carry it plans FOUR TO DESTROY -- and because `*.tfvars` is
+# ignored, there was nowhere shared to put it and every operator had to know.
+# The value is a hostname the committed `terraform.tfvars.example` already prints
+# in a comment; it is not a credential, and the private key it implies lives in a
+# Databricks secret scope that Terraform creates empty. See infra/terraform/
+# demo.auto.tfvars and GitHub #chip-oui.
+!*.auto.tfvars
 tfplan
 *.tfplan
 crash.log

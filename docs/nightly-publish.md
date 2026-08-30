@@ -34,6 +34,11 @@ test it. `databricks/notebooks/snowflake_publish.py` is the loop.
 > the rows and so is filtered by no policy. The checked-in SQL and the live
 > policy agree. §7 has the whole argument, including why the exemption looked
 > like a fix.
+>
+> **The same error message then appeared on 2026-08-28 from the opposite
+> cause** — a deployed `publish.py` that was 37 lines behind this repository and
+> had never had the fix applied to it. §7 has that too, and
+> `make infra-check-databricks` is what now asks the question.
 
 ---
 
@@ -576,6 +581,35 @@ added to `make snowflake-verify`, all under #43:
 The last one is there because a guarantee that costs somebody their job is a
 guarantee that gets edited at three in the morning. The pair is the finding:
 the publisher sees none of the rows and all of the count.
+
+**And then the same error message appeared again, from the opposite cause.** On
+2026-08-28 the job failed with the identical
+`holds 0 rows after the swap and staging held 18898`, and the policy was
+untouched. `/Shared/chip-chat/lib/publish.py` in the workspace was 850 lines
+against this repository's 887 and had no `row_count()` in it: the deployed job
+was still counting with `SELECT COUNT(*)`, because the fix above had been
+committed and never applied. The deployed `snowflake_publish` notebook matched
+the stale module. `databricks_workspace_file.publish_module` and
+`databricks_notebook.snowflake_publish` are both Terraform-managed, so a plan
+would have printed both — but nothing runs one, and `make ci` cannot, since a
+plan needs a backend and a credential.
+
+That is the exact mirror of the paragraph above, and the pair of them is the
+lesson. There, the repair was reachable only by a statement that leaves the
+repository unchanged, so the file and the account could disagree with `make ci`
+green. Here, the repair *was* in the repository, reviewed and tested, and the
+account had never been told. **Both directions of "the checked-in thing and the
+running thing agree" need something that asks**, and neither can be `make ci`.
+For the policy it is the three checks in `make snowflake-verify`; for the
+deployed code it is now `make infra-check-databricks`, which diffs the eight lib
+modules and sixteen notebooks against this checkout in about eleven seconds and
+needs only a Databricks credential. Run it after any change to
+`databricks/src/` or `databricks/notebooks/` reaches `main`, and — this is the
+part that would have saved a night — run it *before* believing a message like
+the one above, because a good diagnostic describes the code that emitted it and
+that only helps if the deployed code is the code you are reading.
+`docs/workspace-drift.md` is the write-up, `docs/runbook.md` §8 the procedure and
+§10 the triage entry.
 
 **Not yet measured: these three have not been run against the live account.**
 They were written from the 2026-08-27 evidence above rather than from a green
