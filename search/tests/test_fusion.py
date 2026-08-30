@@ -28,6 +28,7 @@ from chip_chat.search.fusion import (
     contribution,
     fused_by_both,
     placed_by_both,
+    tell,
 )
 from chip_chat.search.query import Halves
 
@@ -209,3 +210,95 @@ def test_only_dropped_counts_as_degraded() -> None:
     assert not VectorArm.CONTRIBUTED.degraded
     assert not VectorArm.NOT_SENT.degraded
     assert not VectorArm.UNDETERMINED.degraded
+
+
+# --- The span-facing reading -------------------------------------------------
+#
+# `tell` adds numbers to a verdict `contribution` has already reached; it never
+# reaches a second one. These tests are about the three cases the attributes
+# have to keep apart -- the vector half contributed nothing, nothing matched at
+# all, and this was never a hybrid query -- because a dashboard that cannot tell
+# those apart is a dashboard that reports the negative set as an outage.
+
+
+def test_a_degraded_hybrid_result_is_flagged_with_its_evidence() -> None:
+    reading = tell(
+        arm=VectorArm.DROPPED, halves=Halves.HYBRID, scores=LIVE_DEGRADED_HYBRID
+    )
+    assert reading.single_ranker is True
+    assert reading.documents == len(LIVE_DEGRADED_HYBRID)
+    # The float32 1/60 the service actually sends, carried unrounded: the whole
+    # point of putting the number beside the verdict is that a later reader can
+    # re-judge it, and a rounded number cannot be re-judged.
+    assert reading.top_score == LIVE_FLOAT32_CEILING
+    assert reading.ceiling == SINGLE_RANKER_CEILING
+
+
+def test_a_healthy_hybrid_result_is_not_flagged() -> None:
+    reading = tell(
+        arm=VectorArm.CONTRIBUTED, halves=Halves.HYBRID, scores=LIVE_HEALTHY_HYBRID
+    )
+    assert reading.single_ranker is False
+    assert reading.top_score == max(LIVE_HEALTHY_HYBRID)
+    assert reading.ceiling == SINGLE_RANKER_CEILING
+
+
+def test_the_top_score_is_the_maximum_and_not_the_first() -> None:
+    # The reranked arm reorders by relevance, so the first score printed is
+    # regularly one only BM25 placed. Reading it would flag a healthy query.
+    scores = (
+        0.01666666753590107,
+        0.014285714365541935,
+        0.011904762126505375,
+        0.03154495730996132,
+        0.02765064872801304,
+    )
+    reading = tell(arm=VectorArm.CONTRIBUTED, halves=Halves.HYBRID, scores=scores)
+    assert reading.top_score == 0.03154495730996132
+    assert reading.single_ranker is False
+
+
+def test_a_keyword_only_query_carries_no_fusion_arithmetic_at_all() -> None:
+    # BM25 scores. Running the ceiling over them would answer a question nobody
+    # asked, and answering it False would say "healthy" about a query that has
+    # no vector half to be healthy about.
+    reading = tell(arm=VectorArm.NOT_SENT, halves=Halves.KEYWORD, scores=(34.6, 20.5))
+    assert reading.single_ranker is None
+    assert reading.top_score is None
+    assert reading.ceiling is None
+    assert reading.documents == 2
+
+
+def test_a_vector_only_query_carries_no_fusion_arithmetic_either() -> None:
+    # Cosine similarities. Every one of them clears 1/60 by two orders of
+    # magnitude, so a threshold applied here would read "healthy" from a number
+    # that is not a fused score -- including on the empty-response case that is
+    # the whole reason that arm is instrumented.
+    reading = tell(arm=VectorArm.CONTRIBUTED, halves=Halves.VECTOR, scores=(0.705, 0.695))
+    assert reading.single_ranker is None
+    assert reading.top_score is None
+    assert reading.ceiling is None
+
+    empty = tell(arm=VectorArm.DROPPED, halves=Halves.VECTOR, scores=())
+    assert empty.single_ranker is None
+    assert empty.documents == 0
+
+
+def test_nothing_matched_at_all_is_a_count_and_not_a_flag() -> None:
+    # A filter that matches no published item, an index with nothing in it and a
+    # dropped vector half beside a lexical half that matched nothing all produce
+    # this. The count says the result set was empty; the tell stays silent,
+    # because there is no score to read and therefore nothing to prove.
+    reading = tell(arm=VectorArm.UNDETERMINED, halves=Halves.HYBRID, scores=())
+    assert reading.documents == 0
+    assert reading.single_ranker is None
+    assert reading.top_score is None
+    assert reading.ceiling is None
+
+
+def test_the_verdict_is_carried_rather_than_recomputed() -> None:
+    # `tell` adds numbers and never a verdict: whatever arm the retrieval
+    # reached is the arm the span reports, so the trace cannot contradict the
+    # tool result it describes.
+    for arm in VectorArm:
+        assert tell(arm=arm, halves=Halves.HYBRID, scores=LIVE_HEALTHY_HYBRID).arm is arm

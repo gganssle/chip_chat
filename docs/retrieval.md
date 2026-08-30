@@ -437,10 +437,61 @@ caught would not have caught it.
 **On the span.** `retriever.search` carries `vector_arm` and `degraded` in its
 metadata, `fused_by_both` on every document — so a trace says *which* passages
 the vector half placed, not merely that some were — and the tag
-`retrieval.lexical_only`, which is what makes the rate in the table above
-countable over a day instead of measurable by hand. The span is **not** marked
-failed. The service answered 200 and returned real passages; putting this in the
-same bucket as an outage would send somebody to the wrong page.
+`retrieval.lexical_only`. The span is **not** marked failed. The service answered
+200 and returned real passages; putting this in the same bucket as an outage
+would send somebody to the wrong page.
+
+**And the tell itself is now an attribute, not only a number somebody could
+derive.** The metadata above is one JSON string. That is the right shape for
+reading a single trace and the wrong shape for counting a defect over a week,
+because Application Insights filters attributes and does not parse blobs — the
+same reason `chip_chat.tokens.*` exists beside `llm.token_count.*`. So the
+reading rides twice, and the flat copy is five keys in the `chip_chat.*`
+namespace, registered in `otel/src/chip_chat/otel/attributes.py` and written by
+`RetrieverRecorder.record_fusion`. The choice, including the two it rejected, is
+in [decisions/rrf-tell-as-a-span-attribute.md](decisions/rrf-tell-as-a-span-attribute.md):
+
+| Attribute | When it is set | What it says |
+|---|---|---|
+| `chip_chat.retrieval.vector_arm` | every retrieval | `contributed`, `dropped`, `not_sent`, `undetermined` |
+| `chip_chat.retrieval.document_count` | every retrieval, `0` included | how many passages came back |
+| `chip_chat.retrieval.single_ranker_fusion` | hybrid, non-empty | the tell: no returned document cleared `1/60` |
+| `chip_chat.retrieval.top_fused_score` | hybrid, non-empty | the largest fused score, unrounded — the evidence |
+| `chip_chat.retrieval.single_ranker_ceiling` | hybrid, non-empty | `1/60`, the threshold that verdict was reached against |
+
+The threshold is computed as `1.0 / RRF_K` and passed in rather than typed as a
+float at the span, and the reason is that `chip_chat.otel` is a leaf: it imports
+nothing from this workspace and holds no opinion about anybody's ranker. `k`
+belongs to the search service, `chip_chat.search.fusion` owns the constant and
+the zero-based-rank finding behind it, and the quotient travels to the span as an
+argument. Recording it beside the verdict is what lets a trace read next quarter
+say which number produced its answer instead of leaving that to be reconstructed
+from whichever revision somebody guesses was deployed.
+
+Three properties of that table are the whole point of it, and each is a test.
+**Absent is not false**: the inequality only speaks about a hybrid query that
+returned at least one document, so on the `keyword only` and `vector only` arms
+the last three keys are simply not written — a BM25 score and a cosine similarity
+both clear `1/60` by a wide margin and thresholding either would record
+*healthy* about a query that has no fusion to be healthy about. **An empty result
+set is a count and not a flag**: `undetermined` with `document_count` of `0` is a
+finding about the corpus or the filter, and `dropped` stays claimed from the
+arithmetic or not at all. **A retrieval that never happened is still on the
+dashboard**: the outage path records `undetermined` and a count of zero rather
+than nothing, because a query that silently omits the failed rows flatters the
+healthy rate.
+
+**What this does not measure, and cannot from here.** The rate at which the flag
+actually fires in production is **not measured** in this repository. The 80%
+in the table below was measured by hand, through a probe script, against the live
+alias on 2026-08-27; the attributes are what would let the same number be read
+off a dashboard instead, and reading it needs the deployed service, a day of
+traffic and an Application Insights query, none of which exist inside `make ci`.
+So what is verified here is that the flag fires on the score sequences the live
+service actually returned, stays silent on the ones it returns when healthy, and
+is withheld everywhere the arithmetic does not apply. Whether the production rate
+is 80%, or has moved since, is unknown and will stay unknown until somebody runs
+the query.
 
 **At the tool boundary.** `search_menu_knowledge` now carries `degraded` and
 `vector_arm` beside `confidence` and `reranked`, so *declined*, *low confidence*

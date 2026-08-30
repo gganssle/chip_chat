@@ -11,7 +11,8 @@ Three sources, in strict order of precedence:
    OTel names already exist, so they are spelled out here rather than invented.
 3. **Chip Chat's own namespace** (:class:`ChipChatAttributes`), for the handful
    of facts neither standard covers -- turn index, guard outcomes, matcher slot
-   confidences, ops confirmation state.
+   confidences, ops confirmation state, and whether the retrieval that produced
+   ``retrieval.documents.*`` had both of its rankers.
 
 Nothing here is a free-form key. Call sites reach these through the recorders in
 :mod:`chip_chat.otel.spans` and generally never name an attribute at all.
@@ -105,6 +106,94 @@ class ChipChatAttributes:
     not walk trace trees: "what did this conversation cost" and "what does the
     photo lane cost per call" are one attribute lookup with them, and a
     tree-walk without them.
+    """
+
+    RETRIEVAL_VECTOR_ARM: Final = "chip_chat.retrieval.vector_arm"
+    """Which halves of a hybrid query actually *answered*, as one searchable word.
+
+    ``contributed``, ``dropped``, ``not_sent`` or ``undetermined``. The
+    vocabulary is the retriever's -- this package does not import it, because
+    ``chip_chat.otel`` is a leaf and the whole reading arrives here as a string
+    -- but the reason it is four values rather than a boolean belongs on the
+    span, because that is where somebody reads it back.
+
+    *Free-tier vector search returns an empty result set with HTTP 200*
+    (``docs/retrieval.md`` §9). A hybrid query whose vector half was dropped
+    fuses into a perfectly ordinary hybrid response that is silently the keyword
+    response, so the application cannot tell it apart from a healthy one without
+    the arithmetic in :attr:`RETRIEVAL_SINGLE_RANKER_FUSION`. ``dropped`` is that
+    fault. ``undetermined`` is *nothing came back and there is therefore nothing
+    to read*, which a filter matching no published item produces just as readily
+    as a defect does; collapsing the two would put a defect report on top of a
+    correct answer. ``not_sent`` is a query that asked for no vector half at all
+    and so lost nothing.
+    """
+
+    RETRIEVAL_DOCUMENT_COUNT: Final = "chip_chat.retrieval.document_count"
+    """How many passages the retrieval returned, including zero.
+
+    Set on every ``retriever.search`` span, present even when it is ``0``,
+    because *the retriever returned nothing* and *the retriever was never asked*
+    are different facts and an absent attribute cannot tell them apart. It is
+    what separates the third case from the other two: a
+    :attr:`RETRIEVAL_VECTOR_ARM` of ``undetermined`` with a count of ``0`` is
+    *nothing matched at all*, which is a finding about the corpus or the filter
+    rather than about the service.
+    """
+
+    RETRIEVAL_SINGLE_RANKER_FUSION: Final = "chip_chat.retrieval.single_ranker_fusion"
+    """The reciprocal-rank-fusion tell: no returned document was placed by both rankers.
+
+    Reciprocal rank fusion gives a document ``1/(k + rank)`` from each ranker
+    that placed it and sums the terms, so a document exactly one ranker placed
+    can score at most ``1/k`` and a document both rankers placed scores strictly
+    more. ``True`` here means every returned score sat at or below
+    :attr:`RETRIEVAL_SINGLE_RANKER_CEILING`, which is a proof that one ranker
+    contributed -- and on a query that asked for both halves, a proof that the
+    vector half returned nothing while the service reported success.
+
+    **Set only when the inequality was actually evaluated**, which means only on
+    a hybrid query that returned at least one document. A lexical-only or
+    vector-only query carries a BM25 score or a cosine similarity rather than a
+    fusion, and the threshold means nothing against either; an empty result set
+    has no score to read at all. In both cases this attribute is *absent* rather
+    than ``False``, so a dashboard counting it is counting evaluated readings and
+    never a query the tell does not apply to.
+
+    A boolean rather than a derivation from :attr:`RETRIEVAL_VECTOR_ARM` for the
+    reason the token rollups exist: Application Insights searches attributes and
+    does not walk trace trees, and *how often is the retriever running on half of
+    itself* should be one attribute lookup and an alert rule rather than a query
+    somebody has to compose correctly under pressure.
+    """
+
+    RETRIEVAL_TOP_FUSED_SCORE: Final = "chip_chat.retrieval.top_fused_score"
+    """The largest fused ``@search.score`` in the result set -- the tell's evidence.
+
+    The maximum over every returned passage rather than the score of the first
+    one, and the difference is not pedantry. On the reranked path the service
+    reorders by ``@search.rerankerScore``, so the passage printed first is
+    regularly one that only the lexical half placed even while the vector half is
+    working normally. Reading the top *printed* score would report those healthy
+    queries as degraded.
+
+    Recorded beside the reading rather than instead of it so that a trace read
+    months later can be re-judged against a different threshold without
+    re-querying a service whose behaviour by then may have changed. Set on the
+    same queries as :attr:`RETRIEVAL_SINGLE_RANKER_FUSION` and absent on the
+    rest.
+    """
+
+    RETRIEVAL_SINGLE_RANKER_CEILING: Final = "chip_chat.retrieval.single_ranker_ceiling"
+    """The threshold :attr:`RETRIEVAL_SINGLE_RANKER_FUSION` was decided against.
+
+    ``1/k`` for the fusion constant the search service actually uses, computed by
+    the caller and passed in -- this package is a leaf and holds no opinion about
+    anybody's ranker. It is on the span because the reading is only as good as
+    the constant behind it: if the service ever changes ``k``, or if this
+    repository ever gets it wrong, the traces already recorded say which number
+    produced their verdict instead of leaving it to be reconstructed from the
+    source tree at the version somebody guesses was deployed.
     """
 
     GUARD_OUTCOME: Final = "chip_chat.guard.outcome"

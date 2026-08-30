@@ -21,11 +21,24 @@ alone say it and nobody reads scores that way.** The Free tier drops the vector
 half of a hybrid query and returns HTTP 200 (``docs/retrieval.md`` §9), and the
 only evidence is that every fused score is at or below ``1/60``. An operator can
 work that out from the numbers already here; an operator *will* work it out from
-the ``retrieval.lexical_only`` tag and the ``vector_arm`` attribute, which is a
-different thing. Both the roll-up and the per-document reading are recorded —
-:attr:`fused_by_both` on each document is the individual arithmetic, so a trace
-shows which passages the vector half actually placed and not merely that some
-did.
+the ``retrieval.lexical_only`` tag and the ``chip_chat.retrieval.*`` attributes,
+which is a different thing. Both the roll-up and the per-document reading are
+recorded — :attr:`fused_by_both` on each document is the individual arithmetic,
+so a trace shows which passages the vector half actually placed and not merely
+that some did.
+
+**The roll-up rides in flat attributes as well as in metadata, and that is not
+duplication for its own sake.** ``set_metadata`` writes one JSON string, which is
+where somebody reading a single trace wants everything about a retrieval
+together; it is not where a dashboard counting a defect over a week can look,
+because Application Insights filters attributes and does not parse blobs — the
+standing reason the token rollups exist. So
+:meth:`~chip_chat.otel.spans.RetrieverRecorder.record_fusion` puts the reading,
+the passage count, the top fused score, the threshold that score was judged
+against and the tell itself under ``chip_chat.retrieval.*``. The last three are
+set only on a hybrid query that returned something, because that is the only
+query the inequality speaks about; absent there means *not applicable* and never
+*healthy*.
 
 **A declining lane is not a failing turn.** RFC-001 §10 gives this lane a blast
 radius of one row — *AI Search unavailable → the knowledge lane declines and
@@ -45,7 +58,7 @@ nobody can fix before the first of the month.
 
 from chip_chat.otel import Document, retriever_search
 from chip_chat.search.errors import SearchError
-from chip_chat.search.fusion import VectorArm, placed_by_both
+from chip_chat.search.fusion import VectorArm, placed_by_both, tell
 from chip_chat.search.query import Constraints
 from chip_chat.search.retrieve import Confidence, Retrieval, Retriever
 
@@ -118,6 +131,7 @@ class KnowledgeLane:
                 )
             except SearchError as error:
                 span.record_failure(error)
+                span.record_fusion(vector_arm=VectorArm.UNDETERMINED.value, documents=0)
                 span.set_metadata(
                     index=self._retriever.alias,
                     declined=True,
@@ -150,6 +164,26 @@ class KnowledgeLane:
                     )
                     for passage in result.passages
                 ]
+            )
+            # The reading again, in flat attributes this time, because the
+            # metadata below is one JSON string and Application Insights filters
+            # attributes rather than parsing blobs. The verdict is not recomputed
+            # here -- ``tell`` is handed the arm the retrieval already carries,
+            # so the span cannot contradict the tool result it describes -- and
+            # the threshold arrives from ``fusion`` rather than being restated,
+            # because ``chip_chat.otel`` is a leaf and holds no opinion about
+            # anybody's ranker.
+            reading = tell(
+                arm=result.vector_arm,
+                halves=result.halves,
+                scores=[passage.score for passage in result.passages],
+            )
+            span.record_fusion(
+                vector_arm=reading.arm.value,
+                documents=reading.documents,
+                top_fused_score=reading.top_score,
+                single_ranker_ceiling=reading.ceiling,
+                single_ranker_fusion=reading.single_ranker,
             )
             # Supersedes the ``{"index": ...}`` metadata ``retriever_search``
             # set on entry: one metadata attribute, so it carries the index and

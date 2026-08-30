@@ -539,6 +539,84 @@ class RetrieverRecorder(_Recorder):
                     _json(document.metadata),
                 )
 
+    def record_fusion(
+        self,
+        *,
+        vector_arm: str,
+        documents: int,
+        top_fused_score: float | None = None,
+        single_ranker_ceiling: float | None = None,
+        single_ranker_fusion: bool | None = None,
+    ) -> None:
+        """Record whether this retrieval had both of its rankers.
+
+        A hybrid search can lose half of itself and still answer 200 with a
+        well-formed result set -- ``docs/retrieval.md`` section 9 measures that
+        happening to between a quarter and nine in ten queries against the Free
+        tier. The retriever detects it from the fused scores; this is where the
+        detection becomes something an operator can count. It goes in the
+        ``chip_chat.*`` namespace because neither OpenInference nor the OTel
+        database conventions has anything to say about rank fusion, and it goes
+        in flat attributes rather than into ``metadata`` for the reason the token
+        rollups do: Application Insights searches attributes and does not walk
+        trace trees, and a JSON blob is not a filter.
+
+        The three optional arguments are the arithmetic and they travel
+        together. Pass all three on a query where the inequality was evaluated --
+        a hybrid query that returned at least one document -- and none of them
+        otherwise. **Absent is not false here.** A lexical-only or vector-only
+        query has no fused score to threshold, and an empty result set has no
+        score at all; recording ``False`` for either would put a healthy-looking
+        reading on a query the tell cannot speak about, which is how a detector
+        stops being believed.
+
+        Args:
+            vector_arm: The retriever's reading, as one lowercase word.
+            documents: How many passages came back, ``0`` included. Recorded
+                unconditionally, because *nothing matched* and *this was never
+                asked* have to be distinguishable.
+            top_fused_score: The largest fused score in the result set. The
+                maximum, never the first: the reranked path reorders by
+                relevance and its top hit is regularly one only the lexical half
+                placed.
+            single_ranker_ceiling: ``1/k`` for the fusion constant the service
+                uses, computed by the caller.
+            single_ranker_fusion: Whether no returned document cleared that
+                ceiling, which proves exactly one ranker contributed.
+
+        Raises:
+            ValueError: If the arithmetic arrives incomplete. A fired tell with
+                no threshold beside it is evidence nobody can check, and the
+                cheapest moment to refuse it is here.
+        """
+        self._span.set_attribute(ChipChatAttributes.RETRIEVAL_VECTOR_ARM, vector_arm)
+        self._span.set_attribute(ChipChatAttributes.RETRIEVAL_DOCUMENT_COUNT, documents)
+        if (
+            top_fused_score is None
+            and single_ranker_ceiling is None
+            and single_ranker_fusion is None
+        ):
+            return
+        if (
+            top_fused_score is None
+            or single_ranker_ceiling is None
+            or single_ranker_fusion is None
+        ):
+            raise ValueError(
+                "the fusion tell travels whole: top_fused_score, "
+                "single_ranker_ceiling and single_ranker_fusion are recorded "
+                "together or not at all"
+            )
+        self._span.set_attribute(
+            ChipChatAttributes.RETRIEVAL_TOP_FUSED_SCORE, top_fused_score
+        )
+        self._span.set_attribute(
+            ChipChatAttributes.RETRIEVAL_SINGLE_RANKER_CEILING, single_ranker_ceiling
+        )
+        self._span.set_attribute(
+            ChipChatAttributes.RETRIEVAL_SINGLE_RANKER_FUSION, single_ranker_fusion
+        )
+
 
 class CortexAnalystRecorder(_Recorder):
     """``db.cortex_analyst`` -- the generated SQL and how many rows it returned."""

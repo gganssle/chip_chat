@@ -90,6 +90,7 @@ a normal state either, and is worth the same look.
 """
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
@@ -98,10 +99,12 @@ from chip_chat.search.query import Halves
 __all__ = [
     "RRF_K",
     "SINGLE_RANKER_CEILING",
+    "Tell",
     "VectorArm",
     "contribution",
     "fused_by_both",
     "placed_by_both",
+    "tell",
 ]
 
 RRF_K: Final = 60
@@ -248,4 +251,79 @@ def contribution(*, halves: Halves, scores: Sequence[float], filtered: bool) -> 
         VectorArm.CONTRIBUTED
         if any(fused_by_both(score) for score in scores)
         else VectorArm.DROPPED
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class Tell:
+    """The reading and the arithmetic that produced it, shaped for a span.
+
+    :func:`contribution` answers the question the application branches on and
+    :class:`VectorArm` is that answer. This is the same reading with its working
+    shown, and it exists because a verdict recorded without its evidence is a
+    verdict nobody can re-judge. ``docs/retrieval.md`` §9 had to establish the
+    rate of this defect by hand, over five hundred queries, reading raw scores
+    out of a probe script; the point of putting the numbers on the span is that
+    nobody has to do that again.
+
+    The three optional fields travel together and are set **only when the
+    inequality was actually evaluated** — a hybrid query that returned at least
+    one document. On a single-half query the score is a BM25 score or a cosine
+    similarity and :data:`SINGLE_RANKER_CEILING` means nothing against either; on
+    an empty result set there is no score at all. ``None`` in those cases is *not
+    applicable*, and it must not be recorded as a healthy reading, because a
+    detector that answers questions it cannot answer is worse than one that says
+    nothing.
+
+    Attributes:
+        arm: The reading, unchanged from :func:`contribution`.
+        documents: How many passages came back, ``0`` included.
+        top_score: The largest fused ``@search.score``, or ``None``. The maximum
+            rather than the first, for the reason spelled out in the module
+            docstring: the reranked arm reorders by relevance and its top hit is
+            regularly one that only the lexical half placed.
+        ceiling: :data:`SINGLE_RANKER_CEILING`, or ``None``. Carried rather than
+            assumed, so a trace records which threshold produced its verdict.
+        single_ranker: Whether no returned document cleared the ceiling — the
+            tell itself — or ``None`` where it was not evaluated.
+    """
+
+    arm: VectorArm
+    documents: int
+    top_score: float | None = None
+    ceiling: float | None = None
+    single_ranker: bool | None = None
+
+
+def tell(*, arm: VectorArm, halves: Halves, scores: Sequence[float]) -> Tell:
+    """Assemble the span-facing reading from an arm that has already been read.
+
+    Takes the :class:`VectorArm` rather than re-deriving it, deliberately. The
+    arm on a :class:`~chip_chat.search.retrieve.Retrieval` is what the tool
+    boundary reports and what the eval refuses to score; a second computation
+    here could disagree with it after a future edit to :func:`contribution`, and
+    a span that contradicts the tool result it describes is worse than a span
+    with less on it. So this function adds numbers and never a verdict.
+
+    Args:
+        arm: The reading :func:`contribution` produced for this retrieval.
+        halves: Which halves the request asked for. The only thing that decides
+            whether the fusion arithmetic applies at all.
+        scores: Every returned hit's ``@search.score``, in any order.
+
+    Returns:
+        The :class:`Tell`. Never raises.
+    """
+    if halves is not Halves.HYBRID or not scores:
+        return Tell(arm=arm, documents=len(scores))
+    # ``fused_by_both`` is monotone in the score, so testing the maximum is the
+    # same statement as "no returned document was placed by both" and it is the
+    # one number worth carrying beside the verdict.
+    top = max(scores)
+    return Tell(
+        arm=arm,
+        documents=len(scores),
+        top_score=top,
+        ceiling=SINGLE_RANKER_CEILING,
+        single_ranker=not fused_by_both(top),
     )
