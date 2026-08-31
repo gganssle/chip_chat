@@ -7,7 +7,7 @@ test is the contract around it -- one word in, three outcomes out, an abstention
 that is never a failure, and a token count that is never lost.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -35,6 +35,7 @@ class ScriptedModel:
         messages: Sequence[Mapping[str, Any]],
         *,
         tools: Sequence[Mapping[str, Any]] = (),
+        on_text: Callable[[str], None] | None = None,
     ) -> ModelReply:
         if self.raises:
             raise RuntimeError("the judge deployment refused the call")

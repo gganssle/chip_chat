@@ -320,7 +320,29 @@ variable "embedding_deployment" {
 variable "spend_caps" {
   description = <<-EOT
     The inline spend cap's ceilings, passed to the app as CHIP_CHAT_* settings.
-    Defaults match the ones in api/src/chip_chat/api/limits.py.
+    Defaults match the ones in api/src/chip_chat/api/limits.py, which is where
+    the arithmetic behind each number is written down. Changing one here and not
+    there leaves the deployed app and the test suite disagreeing about what the
+    demo is shaped like, which is how issue #108 stayed invisible for a week.
+
+    The three session and daily numbers were retuned on 2026-08-31 against
+    measured per-turn token counts: a turn on the deployed app costs a mean of
+    27,437 tokens, so the previous 120,000 session cap was crossed on the fifth
+    turn of an ordinary conversation. They now describe roughly 20 turns per
+    conversation (800,000 at 40,000 a turn) and roughly 10 full conversations
+    per day (8,000,000). That is a fourfold rise in worst-case daily model spend
+    -- about $2.70 a day of gpt-5-mini at list rather than $0.68 -- bought
+    knowingly, and priced in docs/cost.md section 14.
+
+    session_turn_cap is a backstop, not the cap. At 22 it sits just above the
+    20-turn conversation the token cap is sized for, so a visitor having the
+    intended conversation meets the cost-shaped ceiling rather than a turn
+    count; what 22 catches is a pathologically cheap loop the token cap would
+    let run all afternoon. Whenever either is retuned, check the quotient:
+    session_token_cap / session_turn_cap must stay well above
+    turn_token_reservation. The old pair failed that test -- 120000/40 is 3000,
+    below the 8000 a single turn reserves -- which made the turn cap
+    unreachable dead configuration.
 
     turn_token_reservation is the one to think hardest about: it is what a turn
     is charged against the daily ceiling *before* the model answers, and setting
@@ -328,9 +350,9 @@ variable "spend_caps" {
     turns can collectively overshoot.
   EOT
   type = object({
-    daily_token_ceiling        = optional(number, 2000000)
-    session_turn_cap           = optional(number, 40)
-    session_token_cap          = optional(number, 120000)
+    daily_token_ceiling        = optional(number, 8000000)
+    session_turn_cap           = optional(number, 22)
+    session_token_cap          = optional(number, 800000)
     source_requests_per_window = optional(number, 20)
     source_window_seconds      = optional(number, 60)
     turn_token_reservation     = optional(number, 8000)

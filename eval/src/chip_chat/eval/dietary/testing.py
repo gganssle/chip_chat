@@ -38,7 +38,7 @@ produced, so the hand path can be driven in a test without a person and without
 pretending in the committed file that one has read anything.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
@@ -381,6 +381,7 @@ class RetrievalOracle:
         messages: Sequence[Mapping[str, Any]],
         *,
         tools: Sequence[Mapping[str, Any]] = (),
+        on_text: Callable[[str], None] | None = None,
     ) -> ModelReply:
         """Search once, then answer with what the search returned.
 

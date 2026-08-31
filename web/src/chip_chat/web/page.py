@@ -125,6 +125,28 @@ label { display:block; font-size:.85rem; color:var(--muted); margin:0 0 .35rem; 
 .source-line:hover { text-decoration:underline; }
 .source-detail { font-size:.76rem; color:var(--muted); padding:.1rem 0 .35rem; }
 .source-detail a { color:var(--muted); overflow-wrap:anywhere; }
+/* A citation whose fact has no published page a person can read. Shown, dated,
+   and deliberately not a link -- `chip_chat.search.public_url` explains why an
+   unlinked source line beats one that opens a JSON body. */
+.source-detail .nolink { color:var(--muted); opacity:.85; }
+/* The waiting indicator, animated off the client's own clock.
+   It used to be a literal "…" that only changed when a `waiting` frame landed,
+   so between frames nothing moved and a slow turn was indistinguishable from a
+   hung page -- which is the reported bug. Motion here is never contingent on
+   the server saying anything. */
+.dots { display:inline-flex; gap:.22rem; align-items:center; padding:.15rem 0; }
+.dots i { width:.4rem; height:.4rem; border-radius:50%; background:currentColor;
+  opacity:.35; animation:dot 1.2s ease-in-out infinite; }
+.dots i:nth-child(2) { animation-delay:.18s; }
+.dots i:nth-child(3) { animation-delay:.36s; }
+@keyframes dot {
+  0%, 60%, 100% { opacity:.28; transform:translateY(0); }
+  30%           { opacity:.95; transform:translateY(-.18rem); }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Still visibly a "working" state, just not a moving one. */
+  .dots i { animation:none; opacity:.55; }
+}
 .card { border:1px solid var(--accent); border-radius:.9rem; padding:.85rem .9rem;
   margin:.55rem 0; background:var(--card); }
 .card .title { font-weight:600; letter-spacing:.02em; text-transform:uppercase;
@@ -474,11 +496,21 @@ function renderSources(node, citations, claimClass) {
     const detail = el('div', 'source-detail');
     detail.hidden = true;
     detail.appendChild(el('div', null, 'Published ' + shortDate(citation.harvested_at)));
-    const link = el('a', null, citation.source_url);
-    link.href = citation.source_url;
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    detail.appendChild(link);
+    // Only `public_url` is ever a link. `source_url` is provenance and for
+    // anything read from the ordering API it is a JSON endpoint -- linking it
+    // is what sent visitors to a null page under a sentence about barbacoa.
+    // Where the fact has no published page, the citation still shows, dated,
+    // and simply does not click.
+    if (citation.public_url) {
+      const link = el('a', null, citation.public_url);
+      link.href = citation.public_url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      detail.appendChild(link);
+    } else {
+      const note = 'Read from the published data. No public page for this one.';
+      detail.appendChild(el('div', 'nolink', note));
+    }
     line.onclick = () => { detail.hidden = !detail.hidden; };
     row.appendChild(line);
     row.appendChild(detail);
@@ -497,9 +529,22 @@ async function send(text, extra) {
   busy = true;
   chips.replaceChildren();
   if (text) bubble(text, 'you');
-  const answer = bubble('\\u2026', 'them');
+  const answer = bubble('', 'them');
+  // The waiting state is three animated dots rather than a literal ellipsis.
+  // It moves off the browser's own clock, so a turn that is merely slow never
+  // looks like a turn that has died -- which is what the static character did.
+  const dots = el('span', 'dots');
+  dots.appendChild(el('i'));
+  dots.appendChild(el('i'));
+  dots.appendChild(el('i'));
+  answer.appendChild(dots);
+  const stopDots = () => { if (dots.parentNode) dots.remove(); };
+  // Prose lives in its own node so that writing the streamed text cannot wipe
+  // a source line already drawn into this bubble, and so that the dots can be
+  // removed without touching either.
+  let prose = null;
+  let drewSources = false;
   let streamed = '';
-  let waited = 0;
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
@@ -521,28 +566,48 @@ async function send(text, extra) {
         const frame = JSON.parse(raw);
         if (frame.type === 'text') {
           streamed += frame.text;
-          answer.textContent = streamed;
+          stopDots();
+          if (!prose) { prose = el('span'); answer.appendChild(prose); }
+          prose.textContent = streamed;
+          bottom(answer);
+        } else if (frame.type === 'text_final') {
+          // The authority on what was said. A streamed turn paints the
+          // provider's raw fragments as they land; this is the parsed reply,
+          // and where the two differ -- an envelope the filter held back, a
+          // fallback the model never wrote -- this one wins. Replacing rather
+          // than appending is what makes that true.
+          streamed = frame.text;
+          stopDots();
+          if (!prose) { prose = el('span'); answer.appendChild(prose); }
+          prose.textContent = frame.text;
           bottom(answer);
         } else if (frame.type === 'sources') {
           // Inside the answer's own bubble, so a source line cannot drift away
           // from the sentence it supports when a card lands after it.
-          renderSources(answer, frame.citations, frame.claim_class);
+          if (renderSources(answer, frame.citations, frame.claim_class)) {
+            drewSources = true;
+          }
         } else if (frame.type === 'card') {
           renderCard(frame.card, frame.receipt);
-        } else if (frame.type === 'waiting' && !streamed) {
-          // The server saying it is still there. Only meaningful before any
-          // prose has arrived; after that the text is its own evidence.
-          waited += 1;
-          answer.textContent = '\u2026'.repeat(Math.min(waited, 3));
+        } else if (frame.type === 'waiting') {
+          // The server saying it is still there. It no longer drives anything
+          // the visitor can see: the dots animate whether or not this arrives,
+          // which is the point. Kept because it holds the connection open
+          // through a long first token and is the server's own evidence of
+          // liveness in a trace.
+          bottom(answer);
         }
       }
     }
-    // Only when nothing at all landed. Assigning textContent would wipe a
-    // source line that had already been drawn into this bubble.
-    if (!streamed && !answer.children.length) {
+    // Only when nothing at all landed. The dots have to come off first, and
+    // the test is for a drawn source line rather than for any child at all,
+    // because the indicator is itself a child until this point.
+    stopDots();
+    if (!streamed && !drewSources) {
       answer.textContent = 'I did not have anything to say to that.';
     }
   } catch (error) {
+    stopDots();
     answer.textContent = 'I could not reach the server just then. Try again.';
   } finally {
     busy = false;

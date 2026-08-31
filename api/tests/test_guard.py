@@ -14,7 +14,12 @@ from chip_chat.api.guard import SpendGuard, TurnBudget
 from chip_chat.api.killswitch import ManualKillSwitch
 from chip_chat.api.ledger import BudgetLedger
 from chip_chat.api.limits import SpendLimits
-from chip_chat.api.outcome import STOP_STATE_MESSAGE, BudgetScope, StopReason
+from chip_chat.api.outcome import (
+    SESSION_STOP_MESSAGE,
+    STOP_STATE_MESSAGE,
+    BudgetScope,
+    StopReason,
+)
 from chip_chat.api.testing import FakeClock, RecordingModel
 from chip_chat.otel import (
     ChipChatAttributes,
@@ -144,6 +149,7 @@ def test_a_tripped_ceiling_blocks_the_check_with_a_groupable_reason(
 def test_the_stop_state_is_the_copy_the_prd_specifies(
     guard: SpendGuard, model: RecordingModel
 ) -> None:
+    """The day is spent, so the sentence about the day is the right one."""
     with span_recorder("api"):
         exhaust_the_ceiling(guard, model)
         budget = take_a_turn(guard, model, session_id="one-too-many")
@@ -258,6 +264,32 @@ def test_a_session_that_will_not_stop_talking_is_capped(
 
     assert budget.stop is not None
     assert budget.stop.reason is StopReason.SESSION_TURN_CAP
+
+
+def test_a_capped_session_is_not_told_the_day_is_over(
+    guard: SpendGuard, model: RecordingModel
+) -> None:
+    """#108, through the guard rather than through the ledger.
+
+    The visitor who reported this had spent one conversation, not the app's day,
+    and was told to come back tomorrow. The test asserts both halves of why that
+    was wrong: the sentence does not say tomorrow, and the day it claimed was
+    gone is demonstrably still there -- the very next turn, on a fresh session,
+    reaches the model.
+    """
+    with span_recorder("api"):
+        for index in range(guard.limits.session_turn_cap):
+            take_a_turn(
+                guard, model, source_address=f"198.51.100.{index}", turn_index=index
+            )
+        capped = take_a_turn(guard, model, source_address="198.51.100.99")
+        calls_before = model.call_count
+        fresh = take_a_turn(guard, model, session_id="a-new-conversation")
+
+    assert capped.message == SESSION_STOP_MESSAGE
+    assert "tomorrow" not in SESSION_STOP_MESSAGE
+    assert fresh.allowed
+    assert model.call_count == calls_before + 1
 
 
 def test_a_turn_that_raised_gives_its_reservation_back(guard: SpendGuard) -> None:

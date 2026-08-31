@@ -418,7 +418,7 @@ class ExplodingModel:
 
     deployment = "gpt-test-mini"
 
-    def complete(self, messages: Any, *, tools: Any = ()) -> Any:
+    def complete(self, messages: Any, *, tools: Any = (), on_text: Any = None) -> Any:
         raise RuntimeError("the deployment is having a day")
 
 

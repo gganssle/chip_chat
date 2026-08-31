@@ -23,7 +23,7 @@ deployment that no amount of prompt work will move.
 """
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final
 
 from chip_chat.agent.hardcoded import MENU
@@ -85,6 +85,7 @@ class RoutingOracle:
         messages: Sequence[Mapping[str, Any]],
         *,
         tools: Sequence[Mapping[str, Any]] = (),
+        on_text: Callable[[str], None] | None = None,
     ) -> ModelReply:
         """Call the expected tool, or answer once it has been called.
 

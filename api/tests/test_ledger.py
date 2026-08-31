@@ -9,7 +9,12 @@ from datetime import UTC, datetime
 
 from chip_chat.api.ledger import BudgetLedger
 from chip_chat.api.limits import SpendLimits
-from chip_chat.api.outcome import BudgetScope, StopReason
+from chip_chat.api.outcome import (
+    SESSION_STOP_MESSAGE,
+    STOP_STATE_MESSAGE,
+    BudgetScope,
+    StopReason,
+)
 from chip_chat.api.testing import FakeClock
 
 
@@ -84,6 +89,33 @@ def test_a_ceiling_refusal_reports_the_stop_state_copy(
 
     assert refused.stop is not None
     assert refused.stop.message == "Cilantro's had a busy day — come back tomorrow"
+    assert refused.stop.message == STOP_STATE_MESSAGE
+
+
+def test_a_session_refusal_does_not_tell_the_visitor_to_come_back_tomorrow(
+    limits: SpendLimits, clock: FakeClock
+) -> None:
+    """#108: the day is fine, this conversation is not, and the two differ.
+
+    The daily ceiling here is untouched -- only the session's turn cap is spent
+    -- so a visitor who is told to come back tomorrow has been told something
+    the ledger itself contradicts: their next reserve on a fresh session
+    succeeds in the very next statement.
+    """
+    ledger = BudgetLedger(limits, clock)
+    for _ in range(limits.session_turn_cap):
+        ledger.reserve("chatty").settle(1)
+
+    refused = ledger.reserve("chatty")
+
+    assert refused.stop is not None
+    assert (
+        refused.stop.message
+        == "That's a good long conversation — start a new one to keep going"
+    )
+    assert refused.stop.message == SESSION_STOP_MESSAGE
+    assert "tomorrow" not in refused.stop.message
+    assert ledger.reserve("someone-else").granted
 
 
 def test_one_session_cannot_take_the_day_in_turns(
@@ -116,6 +148,9 @@ def test_one_session_cannot_take_the_day_in_tokens(clock: FakeClock) -> None:
 
     assert refused.stop is not None
     assert refused.stop.reason is StopReason.SESSION_TOKEN_CAP
+    # Both session-scoped reasons carry the same remedy, because the remedy is
+    # the same and naming which counter ran out would say which one to re-roll.
+    assert refused.stop.message == SESSION_STOP_MESSAGE
 
 
 def test_a_session_cap_does_not_bind_a_different_session(

@@ -96,7 +96,13 @@ def test_citations_are_keyed_by_the_id_the_envelope_will_reference() -> None:
     assert set(citations) == {passage.id for passage in result.passages}
     for chunk_id, citation in citations.items():
         assert citation["id"] == chunk_id
-        assert set(citation) == {"id", "label", "source_url", "harvested_at"}
+        assert set(citation) == {
+            "id",
+            "label",
+            "source_url",
+            "public_url",
+            "harvested_at",
+        }
 
 
 def test_a_label_says_which_kind_of_page_a_passage_came_from() -> None:

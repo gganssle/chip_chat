@@ -39,6 +39,7 @@ actually feels: those tests fail when the *invariant* breaks, not when the
 output changes.
 """
 
+import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
@@ -48,6 +49,7 @@ from chip_chat.agent.loop import Conversation, TurnResult, run_turn
 from chip_chat.agent.model import ChatModel
 from chip_chat.agent.orders import OrderDesk
 from chip_chat.api.guard import SpendGuard, TurnBudget
+from chip_chat.api.limits import DEFAULT_TURN_TOKEN_RESERVATION
 from chip_chat.api.moderation import (
     BLOCKED_MESSAGE,
     ModerationUnavailableError,
@@ -56,6 +58,9 @@ from chip_chat.api.moderation import (
 from chip_chat.api.outcome import Stop, StopReason
 
 __all__ = ["FundedTurn", "SpendGate", "UnfundedTurnError"]
+
+
+_log = logging.getLogger(__name__)
 
 
 class UnfundedTurnError(RuntimeError):
@@ -73,7 +78,7 @@ class FundedTurn:
     The constructor is the enforcement. Everything else is bookkeeping.
     """
 
-    __slots__ = ("_budget", "_desk", "_lanes", "_model")
+    __slots__ = ("_budget", "_desk", "_lanes", "_model", "_reservation")
 
     def __init__(
         self,
@@ -81,6 +86,7 @@ class FundedTurn:
         model: ChatModel,
         desk: Desk,
         lanes: Lanes = NO_LANES,
+        reservation: int = DEFAULT_TURN_TOKEN_RESERVATION,
     ) -> None:
         """Bind an allowed budget to the model it paid for.
 
@@ -89,6 +95,10 @@ class FundedTurn:
             model: The chat model this turn may call.
             desk: The order desk holding this session's drafts.
             lanes: The backing services this deployment has.
+            reservation: What to charge when the provider streams an answer and
+                declines to say what it cost. Held here rather than looked up
+                at the moment it is needed, because the moment it is needed is
+                the moment the ceiling is about to be told a turn was free.
 
         Raises:
             UnfundedTurnError: If ``budget`` is not allowed. There is no such
@@ -103,6 +113,7 @@ class FundedTurn:
         self._model = model
         self._desk = desk
         self._lanes = lanes
+        self._reservation = reservation
 
     @property
     def tokens_used(self) -> int:
@@ -115,6 +126,7 @@ class FundedTurn:
         message: str,
         *,
         confirm_draft_id: str | None = None,
+        on_text: Callable[[str], None] | None = None,
     ) -> TurnResult:
         """Run the agent, and charge the ceiling what it actually cost.
 
@@ -125,6 +137,11 @@ class FundedTurn:
         Args:
             conversation: The visitor's history, appended to in place.
             message: What the visitor said.
+            on_text: Forwarded to the agent, which calls it with each fragment
+                of the answer as the provider writes it. It has no bearing on
+                what is charged: settlement below reads the finished
+                :class:`~chip_chat.agent.loop.TurnResult`, so a turn costs the
+                same whether or not anybody was watching it arrive.
             confirm_draft_id: The card the visitor confirmed by pressing the
                 button. Applied before the agent runs, so ``place_order`` finds
                 a confirmed record rather than being told about one. Nothing the
@@ -152,11 +169,25 @@ class FundedTurn:
             model=self._model,
             desk=self._desk,
             lanes=self._lanes,
+            on_text=on_text,
         )
-        self._budget.record_usage(
-            prompt_tokens=result.prompt_tokens,
-            completion_tokens=result.completion_tokens,
-        )
+        if result.usage_reported:
+            self._budget.record_usage(
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+            )
+        else:
+            # The provider streamed an answer and never said what it cost. The
+            # counts on the result are zero because nothing reported them, not
+            # because the turn was free, and settling a zero is how an inline
+            # spend cap quietly stops being one -- so this charges the same
+            # pessimistic estimate a turn that died mid-flight is charged.
+            # Over-counting by less than one turn is the safe direction.
+            _log.warning(
+                "no usage reported for a streamed turn; charging the "
+                "reservation rather than settling zero"
+            )
+            self.charge_reservation(self._reservation)
         return result
 
     def charge_reservation(self, reservation: int) -> None:
@@ -286,7 +317,13 @@ class SpendGate:
             if refusal is not None:
                 yield refusal
                 return
-            yield FundedTurn(budget, self._model_for_this_turn(), self._desk, self._lanes)
+            yield FundedTurn(
+                budget,
+                self._model_for_this_turn(),
+                self._desk,
+                self._lanes,
+                reservation=self._guard.limits.turn_token_reservation,
+            )
 
     def _screen(self, message: str, budget: TurnBudget) -> Stop | None:
         """Moderate ``message``, or return the ``Stop`` that refuses the turn.

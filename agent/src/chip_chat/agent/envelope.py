@@ -54,6 +54,7 @@ __all__ = [
     "CitationPlacement",
     "ClaimClass",
     "ModelResponse",
+    "ProseStream",
     "ResponseEnvelope",
     "citations_from",
     "parse",
@@ -107,6 +108,23 @@ class Citation:
     label: str
     source_url: str
     harvested_at: str
+    public_url: str = ""
+    """Where a *person* is sent, empty where no published page exists.
+
+    Separate from :attr:`source_url` because the two answer different
+    questions and only one of them is a link. Provenance points at the endpoint
+    the fact was read from, which for everything behind the ordering API is
+    JSON; this points at a page, or at nothing at all.
+    :mod:`chip_chat.search.public_url` decides which, and empty is a designed
+    outcome that the renderer draws as an unlinked source line rather than
+    suppressing.
+
+    Defaulted rather than required because a citation is still a citation
+    without a clickable page, which is exactly the opposite of
+    :attr:`source_url` -- a passage that cannot say where it came from is
+    dropped by :func:`citations_from`, and a passage that merely has nowhere
+    public to send anyone is kept.
+    """
 
     def as_dict(self) -> dict[str, str]:
         """Return the wire form D9 specifies."""
@@ -114,6 +132,7 @@ class Citation:
             "id": self.id,
             "label": self.label,
             "source_url": self.source_url,
+            "public_url": self.public_url,
             "harvested_at": self.harvested_at,
         }
 
@@ -233,7 +252,9 @@ def citations_from(payload: Mapping[str, Mapping[str, str]]) -> dict[str, Citati
     evidence can be made of.
 
     Args:
-        payload: ``{chunk_id: {id, label, source_url, harvested_at}}``.
+        payload: ``{chunk_id: {id, label, source_url, public_url,
+            harvested_at}}``. ``public_url`` is optional and may be empty; the
+            other four are required.
 
     Returns:
         The same mapping with each value a :class:`Citation`. A passage missing
@@ -253,6 +274,7 @@ def citations_from(payload: Mapping[str, Mapping[str, str]]) -> dict[str, Citati
             label=label,
             source_url=source_url,
             harvested_at=harvested_at,
+            public_url=fields.get("public_url", ""),
         )
     return resolved
 
@@ -266,6 +288,89 @@ trailing JSON object that a visitor actually asked to see.
 """
 
 _TEXT_KEY: Final = "text"
+
+
+class ProseStream:
+    """Hold back anything a streamed reply might later turn out to be envelope.
+
+    :func:`parse` scans *backwards* from the end of a finished reply, because
+    the envelope it is looking for is a trailing object and its start cannot be
+    identified until its end is known. A stream does not have an end yet, so the
+    two cannot be made to agree exactly -- and the failure that matters is
+    asymmetric. Emitting a fragment that turns out to be envelope puts
+    ``{"claim_class":"food","citations":[...]}`` in front of the visitor, which
+    is precisely the bug ``chip-2ky`` closed and the reason there is a parser at
+    all. Holding a fragment back that turns out to be prose shows the visitor
+    slightly less of the answer for slightly longer, and the correction arrives
+    a moment later.
+
+    So this errs the safe way: from the first ``{`` or code fence onward,
+    nothing is emitted. If that character really did begin the envelope --
+    which is what the deployed model does on every food answer -- the visitor
+    never sees a brace. If it was prose, the authoritative reply that follows
+    the stream replaces what was shown with the real thing.
+
+    **It is a display filter and nothing else.** No caller may read a citation,
+    a claim class or the reply itself off this: those come from :func:`parse`
+    over the complete content, exactly as before. This decides only what is
+    safe to paint early.
+    """
+
+    __slots__ = ("_held", "_holding")
+
+    def __init__(self) -> None:
+        self._held = ""
+        self._holding = False
+
+    def feed(self, fragment: str) -> str:
+        """Take one fragment from the provider and return what is safe to show.
+
+        Args:
+            fragment: The text the provider just wrote.
+
+        Returns:
+            The part of it that cannot be the beginning of a trailing envelope.
+            Often the whole fragment; the empty string once holding has begun.
+        """
+        if self._holding:
+            self._held += fragment
+            return ""
+        self._held += fragment
+        cut = _envelope_start(self._held)
+        if cut is not None:
+            self._holding = True
+            shown = self._held[:cut]
+            self._held = self._held[cut:]
+            # The newline the model writes between its answer and its envelope
+            # is part of the envelope as far as a reader is concerned, and
+            # `parse` strips it. Trailing whitespace is already being withheld
+            # by the rule below, so by the time a brace arrives it has not been
+            # shown -- which is why the streamed text matches the parsed reply
+            # exactly rather than approximately.
+            return shown.rstrip()
+        # Whitespace at the end of a fragment is held rather than shown, because
+        # what follows it decides what it was: a space between two words, or the
+        # newline before an envelope. One more fragment settles it, and holding a
+        # space for a few milliseconds is invisible.
+        shown = self._held.rstrip()
+        self._held = self._held[len(shown) :]
+        return shown
+
+
+def _envelope_start(text: str) -> int | None:
+    """Return where a trailing envelope could begin in ``text``, or ``None``.
+
+    Deliberately generous about what counts: an opening brace, or a code fence,
+    since :func:`_trailing_object` accepts a fenced object too. A trailing
+    backtick run that is not yet three characters long is treated as a possible
+    fence rather than shown and regretted -- a fragment boundary can fall in the
+    middle of one.
+    """
+    candidates = [position for position in (text.find("{"),) if position != -1]
+    fence = text.find("`")
+    if fence != -1:
+        candidates.append(fence)
+    return min(candidates) if candidates else None
 
 
 def parse(content: str | None) -> ModelResponse:

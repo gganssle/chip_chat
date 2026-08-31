@@ -45,7 +45,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Final
 
@@ -116,6 +116,7 @@ class MeteredModel:
         messages: Sequence[Mapping[str, Any]],
         *,
         tools: Sequence[Mapping[str, Any]] = (),
+        on_text: Callable[[str], None] | None = None,
     ) -> ModelReply:
         with self._lock:
             self.calls.append(len(messages))

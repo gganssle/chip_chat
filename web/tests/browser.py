@@ -96,6 +96,15 @@ class El {
     this.parentNode.children[at] = node;
     this.parentNode = null;
   }
+  // The waiting indicator takes itself out of the bubble when the first token
+  // lands, so the shim has to model the one DOM call that does it. A node with
+  // no parent removes to nothing, which is what the browser does too.
+  remove() {
+    if (!this.parentNode) return;
+    const at = this.parentNode.children.indexOf(this);
+    if (at >= 0) this.parentNode.children.splice(at, 1);
+    this.parentNode = null;
+  }
   scrollIntoView() {}
   focus() {}
 }

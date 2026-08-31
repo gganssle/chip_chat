@@ -22,8 +22,13 @@ front of the model: see :meth:`SpendGuard.upload` and
 acceptance -- :meth:`TurnBudget.record_upload` -- because the vision call it
 implies is spend that is already committed.
 
-Every one of them refuses the same way: :data:`~chip_chat.api.outcome.STOP_STATE_MESSAGE`,
-a designed state and never an error, on entry and mid-conversation alike.
+Every one of them refuses the same way -- a designed state and never an error, on
+entry and mid-conversation alike -- and in one of two sentences, chosen by
+:func:`~chip_chat.api.outcome.stop_message` from the reason rather than by the
+layer that refused. The global ceilings and the kill switch say
+:data:`~chip_chat.api.outcome.STOP_STATE_MESSAGE`; the two per-session caps say
+:data:`~chip_chat.api.outcome.SESSION_STOP_MESSAGE`, because a conversation that
+ran out is fixed by starting another one and a day that ran out is not.
 
 Typical use, inside whatever the request handler already opened::
 

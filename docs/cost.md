@@ -284,7 +284,10 @@ says not to do about writes and should not start doing about spend.
 
 A conversation is a session. Thirteen of them exist on the deployed app,
 **median 8 turns, longest 13**, against the per-session cap of 40 turns and
-120,000 tokens in `api/limits.py`.
+120,000 tokens that `api/limits.py` carried on the day of this snapshot. That
+cap has since been retuned to 22 turns and 800,000 tokens, for reasons that are
+visible in the very next paragraph if you read the p95 row against it — §14.1
+does the reading.
 
 | Per session | prompt | completion | model cost, list | at the observed 68% cache rate |
 | --- | ---: | ---: | ---: | ---: |
@@ -616,6 +619,12 @@ reads like one.
 - **A month.** Every figure in this document is from a three-day-old account and a
   six-hour-old revision. #88's "compared against the first real bill" cannot be
   satisfied until there is one.
+- **A p95 turn on the wired system.** §14.1's retune is sized against five
+  consecutive turns of *one* conversation on *one* afternoon. There is no
+  distribution across visitors behind the mean of 27,437, and the growth of the
+  prompt past turn five is extrapolated rather than observed — no conversation
+  on the deployed app has ever reached twenty turns, because until 31 August the
+  cap made that impossible.
 
 ---
 
@@ -693,8 +702,92 @@ command that read it, so a reader can redo any line rather than trust it.
 | **Model deployments** deliberately low | `gpt-4.1-mini`, `gpt-5-mini`, `text-embedding-3-small`, all `GlobalStandard`, all **capacity 10**; Terraform *refuses* any `Provisioned*` SKU | ✅ — and the 429s in §3 are this working |
 | **Budget alerts** | `chip-chat-monthly`, $150.0, Monthly, four notifications, `currentSpend` $3.24 | ⚠️ present; **never observed to fire** (`cc-05h`) |
 | **Inline cap verified independently** | #85; `guard.budget_check` median **0 ms** over 77 deployed spans | ✅ |
+| **Inline cap sized against a turn that actually costs something** — *added 2026-08-31 by [#108]; the original list checked that the cap existed and worked, never that its number was still the right number* | a turn on the deployed app costs a mean of **27,437** tokens across five consecutive turns of one conversation; the 120,000 session cap was therefore crossed on the **fifth** turn, and the 40-turn cap was arithmetically unreachable | ⚠️ **was mis-sized**; retuned to 800,000 tokens / 22 turns / 8,000,000 a day — §14.1 |
 | **Arize**: Phoenix through dev, AX only when justified | AX not purchased; `var.otlp_endpoint = ""`; #78 open | ✅ |
 | **Snowflake egress** — *added by this pass; #104 made the publish cross-cloud after the original list was written* | Snowflake ingress $0; Azure internet egress $0 under 100 GB; NAT gateway `Standard Data Processed` **$0.0325** MTD against `Standard Gateway` **$1.4478** | ✅ priced — see §7 |
+
+### 14.1 The session cap, retuned on 31 August
+
+The row above is the one guardrail on this list that failed in the *other*
+direction, and it is worth separating from the three findings below because the
+failure mode is different. Nothing was misconfigured, nothing had drifted, and
+`make snowflake-verify` would never have caught it: the cap was exactly what the
+code said it was, doing exactly what it was written to do, against a system that
+had grown out from under the number while nobody re-measured it.
+
+A visitor in the user-testing session of **2026-08-31** reported hitting
+*"Cilantro's had a busy day — come back tomorrow"* after five to ten turns and
+could not tell whether it was an error. Five consecutive `chat.turn` spans of
+one conversation, `chip_chat.tokens.total`, 14:03–14:09 UTC:
+
+| Turn | this turn | cumulative | against the old 120,000 cap |
+| ---: | ---: | ---: | --- |
+| 1 | 30,339 | 30,339 | |
+| 2 | 33,708 | 64,047 | |
+| 3 | 18,125 | 82,172 | |
+| 4 | 18,074 | 100,246 | |
+| 5 | 36,938 | **137,184** | **crossed** |
+
+Mean 27,437 a turn, and **the prompt is nearly all of it** — 28,620 prompt
+against 1,719 completion on turn 1, and 35,998 prompt on turn 5. That is the
+second finding and it matters more than the first: prompt tokens grow with the
+history, so late turns cost more than early ones and a flat per-turn average
+understates a long conversation.
+
+Compare this with §3.1, which is the same measurement taken four days earlier
+and reads 4,603 tokens for a turn with no tool call and 8,732 for a
+`search_menu_knowledge` turn. **A turn now costs between three and six times
+what it cost on 27 August**, and §3.1 said in advance why: *"a real
+chunk-carrying prompt will be larger and the number will move"*, written while
+`/healthz/lanes` still reported every lane `not_wired`. #106 wired them. The
+prediction was correct and the cap was not revisited when it came true.
+
+The two session ceilings were also **mutually inconsistent**, which is the part
+that had never been arithmetic anybody did. 120,000 over 40 turns is 3,000
+tokens a turn — *below* the 8,000 a single turn reserves against the ceiling
+before the model is called. The token cap therefore refused the sixteenth turn
+of the cheapest conversation that could possibly exist, and the 40-turn cap has
+been unreachable dead configuration since the day it was written.
+
+The new numbers, in `api/src/chip_chat/api/limits.py` and mirrored in
+`infra/terraform/variables.tf`:
+
+| | was | is | the arithmetic |
+| --- | ---: | ---: | --- |
+| `session_token_cap` | 120,000 | **800,000** | 20 turns at 40,000, where 40,000 is above the measured mean of 27,437 to pay for prompt growth, and above the largest measured turn |
+| `session_turn_cap` | 40 | **22** | just above the 20-turn target, so the token cap is what a visitor meets and the turn cap is a backstop against a pathologically cheap loop |
+| `daily_token_ceiling` | 2,000,000 | **8,000,000** | ten full conversations |
+
+800,000 / 22 = 36,364 tokens a turn, comfortably above the 8,000 reservation and
+inside the measured range. That quotient is the check to redo whenever either
+number is retuned; it is asserted in
+`api/tests/test_limits.py::test_the_two_session_caps_describe_the_same_conversation`
+so that the next inconsistent pair fails a test rather than sitting unreachable
+for a month.
+
+**What it costs, stated as plainly as it can be: the worst-case day is now four
+times more expensive.** At §3.2's prices and the 95%-prompt split measured
+above, a conversation that spends its whole 800,000-token allowance costs
+**$0.27** of `gpt-5-mini` at list, or **$0.15** at the 67.6% cache rate §3.2
+reverses out of the meter. Ten of them is **$2.70 a day at list** where the old
+ceiling allowed $0.68, and a month of hitting the ceiling every single day would
+be **$81** rather than $20.
+
+Two things stop that from being alarming and one thing should stop it from being
+comfortable. It is a ceiling and not a forecast: the entire model spend of this
+project to date is **$0.0941** (§3.2), so a single day at the new ceiling would
+be twenty-eight times everything Cilantro has ever cost, and the busiest day on
+record produced thirteen conversations rather than ten thousand. And the
+guardrails underneath it are unchanged — the per-address rate limit, the upload
+ceilings and the kill switch all still bound the same things they did. What
+should stop it being comfortable is §4: a 20-turn conversation that asks three
+account questions spends **$0.60** on Cortex Analyst, more than twice its entire
+model bill, and *the token ceiling does not count a single credit of it*. That
+remains the open guardrail listed at the end of this section, and raising the
+token cap has made it slightly worse by making the conversations longer.
+
+The full argument, including what could not be measured, is in
+[`decisions/session-token-cap.md`](decisions/session-token-cap.md).
 
 ### The three things that were not right, and what was done
 
@@ -812,3 +905,4 @@ which costs money and needs a logged-in human is not a gate.
 [#87]: https://github.com/gganssle/chip_chat/issues/87
 [#88]: https://github.com/gganssle/chip_chat/issues/88
 [#104]: https://github.com/gganssle/chip_chat/issues/104
+[#108]: https://github.com/gganssle/chip_chat/issues/108

@@ -29,22 +29,39 @@ import pytest
 
 from chip_chat.web import chat_page
 
+# `source_url` is provenance and `public_url` is the page a person is sent to.
+# They differ here the way they differ in production: the menu is read from the
+# ordering API, so the first is an endpoint and the second is the published page
+# `chip_chat.search.public_url` maps it to. A fixture that made them equal would
+# test the one case that never needed fixing.
 BARBACOA = {
     "id": "menu-barbacoa-1",
     "label": "Menu · Barbacoa",
-    "source_url": "https://www.chipotle.com/menu/barbacoa",
+    "source_url": "https://services.chipotle.com/menuinnovation/v1/items/barbacoa",
+    "public_url": "https://www.chipotle.com/order/build-your-own",
     "harvested_at": "2026-08-24T03:11:00+00:00",
 }
 STEAK = {
     "id": "menu-steak-1",
     "label": "Menu · Steak",
-    "source_url": "https://www.chipotle.com/menu/steak",
+    "source_url": "https://services.chipotle.com/menuinnovation/v1/items/steak",
+    "public_url": "https://www.chipotle.com/order/build-your-own",
+    "harvested_at": "2026-08-24T03:11:00+00:00",
+}
+UNPUBLISHED = {
+    "id": "faq-1",
+    "label": "FAQ · Delivery",
+    "source_url": (
+        "https://www.chipotle.com/graphql/execute.json/chipotle/FAQ-Query;region=en-us"
+    ),
+    "public_url": "",
     "harvested_at": "2026-08-24T03:11:00+00:00",
 }
 BARBACOA_AGAIN = {
     "id": "menu-barbacoa-2",
     "label": "Menu · Barbacoa",
     "source_url": BARBACOA["source_url"],
+    "public_url": BARBACOA["public_url"],
     "harvested_at": BARBACOA["harvested_at"],
 }
 
@@ -196,7 +213,47 @@ def test_the_detail_is_on_demand_and_the_presence_is_not(tmp_path: Path) -> None
     detail = row["children"][1]
 
     assert detail["hidden"] is True
-    assert BARBACOA["source_url"] in detail["text"]
+    # The page a person can read, never the endpoint it was harvested from.
+    assert BARBACOA["public_url"] in detail["text"]
+    assert BARBACOA["source_url"] not in detail["text"]
+
+
+@needs_node
+def test_a_source_with_no_published_page_is_shown_but_is_not_a_link(
+    tmp_path: Path,
+) -> None:
+    """A citation the visitor cannot usefully be sent anywhere for.
+
+    ``chip-at7``: the FAQ is harvested from a GraphQL endpoint that lives on the
+    ordinary public host, answers 200, and serves ``application/json``. Linking
+    it sent visitors to a JSON body, which is the bug. Dropping the citation
+    would be worse -- the claim would lose its evidence -- so the row is drawn,
+    dated, and simply does not click. That is the whole of the decision, and it
+    is asserted here rather than left to the renderer's good intentions.
+    """
+    drew = _turn(
+        tmp_path,
+        reply="Delivery is handled by our partners.",
+        citations=[UNPUBLISHED],
+        claim_class="policy",
+    )
+    rows = _sources(_answer(drew["drawn"]))
+    assert len(rows) == 1
+    detail = rows[0]["children"][1]
+
+    assert "no public page" in detail["text"].lower()
+    assert UNPUBLISHED["source_url"] not in detail["text"]
+    assert not _links(detail)
+
+
+def _links(node: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return every anchor drawn inside ``node``, at any depth."""
+    found = []
+    for child in node.get("children", []):
+        if child.get("tag") == "a":
+            found.append(child)
+        found.extend(_links(child))
+    return found
 
 
 # ---------------------------------------------------------------------------

@@ -15,6 +15,32 @@ def test_the_defaults_are_a_usable_configuration() -> None:
     assert limits.reset_timezone == "UTC"
 
 
+def test_the_two_session_caps_describe_the_same_conversation() -> None:
+    """#108's dead configuration, as an assertion rather than as a comment.
+
+    Two ceilings on one conversation are only meaningful if they agree about
+    roughly how long that conversation is. The pair shipped before #108 did not:
+    120,000 tokens over 40 turns is 3,000 tokens a turn, *below* the 8,000 a
+    single turn reserves before the model is called, so the token cap always
+    refused first and the turn cap could not be reached by any conversation at
+    all. It was configuration that looked like a control and was not one.
+
+    The quotient is the check, and it is the one to redo whenever either number
+    is retuned: the tokens a turn may average under the pair has to leave room
+    for a turn that costs what turns actually cost. The upper bound keeps the
+    turn cap doing its own job -- if a conversation could reach 22 turns while
+    spending well under the token cap, the token cap would be the dead one and
+    the mistake would simply have changed hands.
+    """
+    limits = SpendLimits()
+    tokens_per_turn = limits.session_token_cap / limits.session_turn_cap
+
+    assert tokens_per_turn > limits.turn_token_reservation
+    # The range measured on the deployed app on 2026-08-31: a mean turn of
+    # 27,437 tokens and a largest of 36,938. See docs/decisions/session-token-cap.md.
+    assert 27_437 < tokens_per_turn < 2 * 36_938
+
+
 @pytest.mark.parametrize(
     ("name", "build"),
     [
