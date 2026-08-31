@@ -504,7 +504,36 @@ def run_turn(
             # the agent's, and a step total that stopped at the agent's would
             # make every downstream figure wrong by exactly the lane.
             spent = _spent(reply)
-            conversation.messages.append(_assistant_message(reply))
+            if reply.content or reply.tool_calls:
+                # **A step that produced neither prose nor a tool call leaves
+                # nothing behind, and that condition is load-bearing rather
+                # than tidy.** ``_assistant_message`` would render such a reply
+                # as ``{"role": "assistant", "content": null}`` with no
+                # ``tool_calls`` beside it, which the chat completions API
+                # rejects outright -- *"Invalid value for 'content': expected a
+                # string, got null"* -- and because :class:`Conversation` is
+                # replayed whole on every subsequent request, one such message
+                # ends the conversation permanently. Not the turn: the
+                # conversation. Every later turn dies on the same 400 before it
+                # reaches a model, and the visitor reads the app's failure
+                # sentence until they abandon the session.
+                #
+                # It is reached by an ordinary path. A reasoning model spends
+                # its ``max_completion_tokens`` on reasoning before it writes
+                # anything visible, so a step that thinks hard and gets cut off
+                # returns ``finish_reason="length"`` with empty content --
+                # which is bead ``chip-1sq``, observed live on 31 August 2026
+                # after ``propose_order`` rejected an unorderable item and the
+                # recovery step ran out of budget mid-thought.
+                #
+                # Skipping the append is the truthful repair rather than
+                # coercing ``None`` to ``""``. There genuinely is no assistant
+                # turn here to give back, and a history ending in tool results
+                # with no assistant message after them is a shape the API
+                # accepts. An empty string would also be accepted, but it would
+                # put a message that says nothing into every future prompt and
+                # invite the model to imitate it.
+                conversation.messages.append(_assistant_message(reply))
 
             if not reply.tool_calls:
                 # D9's whole path, in three lines and in this order. `parse`

@@ -163,7 +163,7 @@ has been charged against yet. The real number replaces it when
 actually billed.
 """
 
-DEFAULT_TURN_TOKEN_RESERVATION = 8_000
+DEFAULT_TURN_TOKEN_RESERVATION = 32_000
 """What a turn is charged against the ceiling before the model is called.
 
 The check is synchronous and the true cost is not known until the model has
@@ -171,6 +171,37 @@ already answered, so a turn reserves a pessimistic estimate up front and settles
 the real number afterwards. Set this at or above the worst turn the agent can
 produce: too low and concurrent turns can collectively overshoot the ceiling,
 which is the one thing this module exists to prevent.
+
+**8,000 never satisfied that sentence, and raising the agent's completion
+ceiling is what forced the arithmetic to be done.** The five turns measured on
+2026-08-31 and tabulated under :data:`DEFAULT_SESSION_TOKEN_CAP` cost a mean of
+27,437 tokens and a largest of 36,938 -- so the reservation was understating a
+typical turn by a factor of three and the worst one by four and a half, and had
+been since #106 wired the knowledge lane and put retrieved passages into every
+food answer. Sequential turns never noticed, because the reservation is settled
+against the real number the moment the model answers; the exposure was always
+and only concurrent turns, each of which could claim 8,000 and then spend
+36,938, and the daily ceiling would find out afterwards.
+
+``chip-1sq`` raised
+:class:`~chip_chat.agent.model.AzureChatModel`'s ``max_completion_tokens`` from
+2,000 to 16,000, which moves the worst turn the agent can produce up by
+fourteen thousand per step. Leaving the reservation where it was would have
+widened a gap that was already the wrong sign.
+
+**32,000 is bounded from above, not chosen from feel.** The reconciliation
+:data:`DEFAULT_SESSION_TURN_CAP` asks for -- that the session token cap divided
+by the turn cap stays above the reservation, or the token cap refuses a turn the
+turn cap was supposed to allow -- gives 800,000 over 22, which is 36,364. The
+reservation must sit under that and above the measured worst turn of 36,938...
+which it cannot do, because those two numbers cross. **That is a real conflict
+and 32,000 does not resolve it**: it sits above the mean and below the quotient,
+and a turn as expensive as the worst one measured will still be under-reserved
+by about five thousand tokens while it is in flight. Closing it properly means
+either a larger session token cap or a reservation that knows the size of the
+history it is about to replay, and neither is a change to make inside a bug
+fix. What is fixed here is the factor of three; what remains is a margin of
+fifteen percent on the tail, recorded rather than papered over.
 """
 
 DEFAULT_RESET_TIMEZONE = "UTC"

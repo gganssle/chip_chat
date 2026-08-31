@@ -291,6 +291,59 @@ def test_an_empty_reply_falls_back_rather_than_showing_nothing(
     assert result.reply.strip()
 
 
+def test_a_step_that_said_nothing_leaves_nothing_in_the_history(
+    conversation: Conversation, desk: OrderDesk
+) -> None:
+    """A reply with no prose and no tool call must not reach the next request.
+
+    ``_assistant_message`` would write it as ``{"role": "assistant", "content":
+    null}`` with nothing beside it, which the chat completions API rejects --
+    and since the whole history is replayed on every request, that message ends
+    not the turn but the *conversation*. This is bead ``chip-1sq``, and what it
+    looked like in production was every turn after the bad one answering with
+    the app's failure sentence.
+
+    A reasoning model reaches this by running out of ``max_completion_tokens``
+    while still thinking, which is why the reply is written here with
+    ``finish_reason="length"`` rather than as an arbitrary malformed double.
+    """
+    model = ScriptedModel(ModelReply(content=None, finish_reason="length"))
+    with span_recorder("api"):
+        one_turn(conversation, "what should I order?", model, desk)
+
+    assert not any(
+        message.get("role") == "assistant" and message.get("content") is None
+        for message in conversation.messages
+    )
+
+
+def test_the_conversation_after_a_silent_step_can_still_take_a_turn(
+    conversation: Conversation, desk: OrderDesk
+) -> None:
+    """The turn after the bad one is the assertion, not the bad turn itself.
+
+    The visitor always saw *something* for the truncated turn -- the fallback
+    sentence -- so watching that turn alone showed a system degrading politely.
+    What was actually broken was every turn after it, which is the only place
+    the poisoned history is read.
+    """
+    model = ScriptedModel(
+        ModelReply(content=None, finish_reason="length"),
+        answer("A burrito bowl is a burrito without the tortilla."),
+    )
+    with span_recorder("api"):
+        one_turn(conversation, "what should I order?", model, desk)
+        second = one_turn(conversation, "what is a burrito bowl?", model, desk)
+
+    assert "without the tortilla" in second.reply
+    # What the second call was actually given, which is the thing Azure read.
+    assert all(
+        isinstance(message.get("content"), str)
+        for message in model.requests[1]
+        if message.get("role") == "assistant" and not message.get("tool_calls")
+    )
+
+
 def test_a_confirmed_draft_is_announced_to_the_model(
     conversation: Conversation, desk: OrderDesk
 ) -> None:

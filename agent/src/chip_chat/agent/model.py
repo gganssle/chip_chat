@@ -151,7 +151,7 @@ class AzureChatModel:
     __slots__ = ("_client", "_config", "_deployment", "_max_completion_tokens")
 
     def __init__(
-        self, config: FoundryConfig, *, max_completion_tokens: int = 2_000
+        self, config: FoundryConfig, *, max_completion_tokens: int = 16_000
     ) -> None:
         """Bind to the chat deployment ``config`` names.
 
@@ -160,6 +160,33 @@ class AzureChatModel:
             max_completion_tokens: Ceiling on one reply. A second line of
                 defence under the spend cap rather than a substitute for it:
                 this bounds a single call, the cap bounds the day.
+
+                **16,000 rather than the 2,000 it was, because on a reasoning
+                model this budget is not the length of the answer.** Reasoning
+                tokens are billed against ``max_completion_tokens`` and are
+                spent before a single visible character is written, so a step
+                that thinks hard can exhaust the whole allowance and return
+                ``finish_reason="length"`` having said nothing at all. That is
+                not a hypothetical: two of the twenty completions on the
+                deployment on 31 August 2026 finished on ``length``, both at
+                exactly 2,000 completion tokens, and one of them -- a recovery
+                step after ``propose_order`` rejected an unorderable item, with
+                17,395 tokens of prompt behind it -- produced the empty reply
+                that bead ``chip-1sq`` is about.
+
+                A conversational answer here is one to two thousand tokens; the
+                other fourteen are headroom for the thinking in front of it.
+                **What has not been measured is how much reasoning this model
+                actually wants on the hardest turn**, only that it wants more
+                than two thousand, so this number is a ceiling chosen to stop
+                binding rather than one fitted to a distribution.
+
+                It is deliberately not unbounded. The step ceiling and the
+                per-session token cap both still apply above it, and
+                :data:`~chip_chat.api.limits.DEFAULT_TURN_TOKEN_RESERVATION`
+                moves with it -- a reservation below the worst turn the agent
+                can now produce would let concurrent turns overshoot the daily
+                ceiling, which is the one thing the ledger exists to prevent.
         """
         self._config = config
         self._deployment = config.deployment_for("chat")

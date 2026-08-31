@@ -445,6 +445,97 @@ app answers honestly and the probe is still unscored. That is a capacity number
 in `infra/terraform/variables.tf`, not a transport bug, and it is the floor under
 any write-gate run taken while something else is also driving that deployment.
 
+### 3.14 One truncated step ends the conversation, not the turn
+
+The report was *"lots of 'Something went wrong on my side just then' errors."*
+That sentence describes a rate of failure, and the instinct it invites — a flaky
+dependency, a saturated model deployment, the 429s of §3.13 again — is wrong in
+a way worth recording, because the shape of the real fault is the opposite of
+the shape of the complaint.
+
+Application Insights over the day: **eighteen turns, three failed, and all three
+in one session.** Every failure was the same 400, and none of them was a
+dependency at all:
+
+```
+openai.BadRequestError: Error code: 400 - Invalid value for 'content':
+expected a string, got null.   param: messages.[10].content
+```
+
+Nine exception records for three failures, because the exception is recorded on
+`llm.completion`, `agent.step` and `chat.turn` — a detail worth knowing before
+you read an exception count as a failure count.
+
+**`messages.[10]` is the whole diagnosis.** A request that fails on the *tenth
+message* has not failed on anything the visitor just typed; it has failed on the
+history. And the failing turns took 250 ms, 219 ms and 284 ms — far too fast to
+have reached a model. Session `ORbA10i37OYwq_qcWtNupg` took turns 0 through 2
+successfully and then could never take another one. Index ten counts out exactly:
+two system messages, turn 0's user and assistant, turn 2's user, two
+assistant-with-tool-calls, three tool results, and then the poison.
+
+The chain, in order, because each link is individually reasonable:
+
+1. `propose_order` **correctly** rejected `CMG-1001` as `ITEM_NOT_ORDERABLE`.
+   The guard worked. Nothing here is a bug yet.
+2. The recovery step went in carrying 17,395 tokens of prompt and spent all
+   2,000 of its `max_completion_tokens` on reasoning without writing a visible
+   character: `finish_reason: length`, empty content.
+3. `AzureChatModel._streamed` reduces "no prose" to `None` —
+   `"".join(content) or None`.
+4. `run_turn` appended `_assistant_message(reply)` *unconditionally*, before the
+   `if not reply.tool_calls:` branch. So `{"role": "assistant", "content": null}`
+   with no `tool_calls` beside it landed in `Conversation.messages`.
+5. `Conversation` is replayed whole on every subsequent request. The session was
+   over.
+
+**What made this survive a user-testing session is that the bad turn looked
+fine.** The visitor saw `"I got a bit tangled there -- could you ask me that
+again, more simply?"` — the loop's fallback, a system degrading politely. The
+damage was invisible until the *next* turn, and the next turn is the one nobody
+was watching. Both regression tests in `agent/tests/test_loop.py` therefore
+assert on the turn *after* the truncated one; a test that checked only the
+truncated turn would have passed against the broken code.
+
+**The trigger is not rare and is not the model misbehaving.** Two of the twenty
+completions that day finished on `length`, both at exactly 2,000 tokens. The
+other one survived only by accident: it had written 2,000 tokens of real prose
+before truncating, so its content was a string and the message stayed legal. The
+difference between a poisoned session and a healthy one was whether the model
+spent its budget thinking or talking.
+
+The fix is that a reply with neither prose nor a tool call is not appended at
+all. Coercing `None` to `""` would also have satisfied the API, and was
+rejected: there is genuinely no assistant turn to hand back, and an empty
+message in every future prompt is an invitation to imitate it. A history ending
+in tool results with no assistant message after them is a shape the API accepts.
+
+**Two things were raised alongside it, and only one was asked for.**
+`max_completion_tokens` went from 2,000 to 16,000, because on a reasoning model
+that budget is not the length of the answer — reasoning tokens are billed
+against it and spent before the first visible character, so 2,000 was a ceiling
+on *thinking* that nobody had priced as one. That in turn broke the contract
+written in `DEFAULT_TURN_TOKEN_RESERVATION`'s own docstring — *"set this at or
+above the worst turn the agent can produce"* — which 8,000 had not satisfied
+since #106 wired the knowledge lane, against a measured mean of 27,437. It is
+now 32,000.
+
+**What is still not right, stated rather than smoothed over.** 32,000 sits above
+the mean and below the 36,364 that §`DEFAULT_SESSION_TURN_CAP`'s reconciliation
+allows, but the worst turn actually measured was 36,938. Those two numbers
+cross, so a turn as expensive as the worst one seen is still under-reserved by
+about five thousand tokens *while it is in flight*. Sequential turns never
+notice — the reservation is settled against the real number the moment the model
+answers — and the exposure is concurrent turns only. Closing it needs either a
+larger session token cap or a reservation that knows the size of the history it
+is about to replay, and neither belongs in a bug fix.
+
+**And what was not measured.** How much reasoning this model wants on its
+hardest turn is unknown; 16,000 is a ceiling chosen to stop binding, not one
+fitted to a distribution. Whether 16,000 changes turn latency or per-turn cost
+is also unmeasured — the fix has not yet been deployed, and the numbers in §6.3
+are from the old ceiling.
+
 ## 4. What it costs
 
 | Thing | Charge |
