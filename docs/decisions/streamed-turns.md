@@ -84,11 +84,8 @@ direction; the other direction is how an inline cap quietly stops being one.
 
 ## What was not measured
 
-- **Time to first token after the change.** The numbers above are from the
-  unstreamed deployment. The expectation is that first paint moves from ~6.5 s to
-  roughly the provider's first-chunk latency, but that is an expectation and this
-  document will not print it as a measurement. Re-run the same query after the
-  deploy.
+- ~~Time to first token after the change.~~ **Now measured, and the result is
+  worse than the expectation this section originally recorded. See below.**
 - **Total turn duration is not expected to improve at all**, and nothing here
   tries to. `chat.turn` should measure the same after this change as before it;
   what changes is when the visitor starts reading. If a later reader finds this
@@ -103,3 +100,55 @@ direction; the other direction is how an inline cap quietly stops being one.
 - **How often `ProseStream` withholds prose it did not need to**, i.e. how often
   a `{` appears in a genuine answer. Expected to be rare for a restaurant
   assistant and not counted.
+
+
+## Measured again after the deploy, and the honest result
+
+Revision `ca-chip-chat-web--0000045`, 31 August 2026, three questions, streamed
+shape, timed from request to first `text` frame:
+
+| Question | First token | Whole turn | Fragments | First token at |
+| --- | --- | --- | --- | --- |
+| what is in a burrito bowl? | 27.17 s | 28.72 s | 111 | 95% of the turn |
+| do you have vegan options? | 10.39 s | 11.85 s | 80 | 88% of the turn |
+| is the barbacoa spicy? | 12.62 s | 13.56 s | 48 | 93% of the turn |
+
+**The streaming is real and it does not fix the reported problem.** The
+fragments are genuine — 48 to 111 of them, arriving continuously, with no
+envelope leaking into any of them — but they all arrive in the last 5–12% of the
+turn. A visitor still waits ten to twenty-seven seconds before a single
+character appears.
+
+The reason is structural and was visible in the first table without anybody
+reading it correctly, this author included. A turn is two or three *sequential*
+model calls: the model is asked what to do, a tool answers, and only then is the
+model asked to write prose. Streaming can only begin when the last call begins,
+so it compresses the final 1.5 s of an answer and can do nothing at all about
+the 10–27 s in front of it. The `llm.completion` p50 of 6.5 s is the cost of a
+*step*, and the wait a visitor experiences is the sum of the steps before the
+last one.
+
+An earlier revision of this document is worth keeping in view: it predicted
+first paint would move "from ~6.5 s to roughly the provider's first-chunk
+latency". That was wrong, and it was wrong because it reasoned about one span
+instead of the sequence. The measurement is the correction.
+
+**What was gained, stated without inflation.** The waiting indicator now stops
+and prose flows continuously once it starts, so the end of a turn reads as an
+answer being written rather than a block of text appearing. Combined with #109's
+animated dots, the app no longer *looks* dead. It is still slow.
+
+**What would actually move the number**, none of it done here and each its own
+piece of work:
+
+- **Tell the visitor what the turn is doing.** The 10–27 s of silence is spent
+  in `tool.search_menu_knowledge`, `tool.get_points_balance` and the reasoning
+  around them, all of which the app knows about as they happen. A frame saying
+  "checking the published menu" would not make the turn faster and would change
+  what the wait feels like more than streaming did.
+- **Fewer round trips.** Two or three steps is what an eleven-tool agent costs
+  when it plans, calls, and then answers. Whether a turn can routinely be done
+  in one is a prompt and tool-design question, not a transport one.
+- **Prompt caching**, still untried, still the tester's own suggestion, and now
+  the most attractive remaining lever: at 28–36k prompt tokens against ~1.7k of
+  completion, the prefix dominates every one of those sequential calls.
