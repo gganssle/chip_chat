@@ -92,11 +92,11 @@ import secrets
 import threading
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeout
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from functools import partial
 from queue import Empty, Queue
+from time import monotonic
 from typing import Any, Final
 
 from fastapi import FastAPI, Request, Response
@@ -257,6 +257,19 @@ _OBJECT_MEDIA_TYPE = "application/json"
 """One JSON object, sent incrementally. See :func:`_object`."""
 
 _HEARTBEAT_SECONDS = 10.0
+
+_DELTA_POLL_SECONDS = 0.05
+"""How often the streamed shape looks for another fragment of the answer.
+
+Nothing to do with :data:`_HEARTBEAT_SECONDS`, which answers a different
+question -- how long ingress will tolerate silence -- and is three orders of
+magnitude larger. Sharing one number between them is the bug this constant was
+added to fix: fragments were being released on the heartbeat's schedule, so a
+streamed answer arrived in ten-second batches and the first token was no earlier
+than the last. Fifty milliseconds is below the threshold at which text appearing
+reads as continuous, and the cost of a poll that finds nothing is one timed wait
+on a queue.
+"""
 """How long a turn may go silent before its response says it is still there.
 
 Well inside Container Apps ingress' sixty-second idle timeout, and far enough
@@ -2075,34 +2088,47 @@ def _held_open(
             admitted,
             on_text,
         )
+        # **The wait is on the queue, not on the future**, and the difference is
+        # the whole value of streaming. Waiting on the future and draining only
+        # when it timed out meant fragments left the process in
+        # `_HEARTBEAT_SECONDS` batches: measured against the deployment, the
+        # first token reached the browser at 24.43 s on a turn that finished at
+        # 24.47 s, which is to say the visitor waited exactly as long as before
+        # and then got the whole answer at once. Polling the queue on a short
+        # interval and keeping the heartbeat on its own clock is what makes the
+        # first token early rather than merely differently packaged.
+        last_written = monotonic()
+        while True:
+            # Checked before the wait rather than after it, so a turn that has
+            # already finished leaves immediately. The object shape reaches this
+            # with an always-empty queue, and waiting a poll interval it did not
+            # need would put `_DELTA_POLL_SECONDS` on the end of every one of its
+            # turns -- and a whole heartbeat, when the poll was the heartbeat.
+            if pending.done() and deltas.empty():
+                break
+            try:
+                yield _Delta(deltas.get(timeout=_DELTA_POLL_SECONDS))
+            except Empty:
+                pass
+            else:
+                # A fragment is traffic. Ingress does not need a heartbeat on
+                # top of an answer that is actively arriving.
+                last_written = monotonic()
+                continue
+            if monotonic() - last_written >= _HEARTBEAT_SECONDS:
+                yield idle
+                last_written = monotonic()
+        # The turn is finished, but the queue can still hold the tail of the
+        # answer -- the last fragments and the future completing race, and the
+        # future usually wins. Draining before the payload is what stops the
+        # last few words of every streamed answer from being dropped.
         while True:
             try:
-                payload = pending.result(timeout=_HEARTBEAT_SECONDS)
-            except FutureTimeout:
-                # Prose that arrived while waiting goes out before the
-                # heartbeat: the heartbeat exists because nothing has been sent
-                # for a while, and a fragment is something to send.
-                sent = False
-                while True:
-                    try:
-                        yield _Delta(deltas.get_nowait())
-                    except Empty:
-                        break
-                    sent = True
-                if not sent:
-                    yield idle
-                continue
-            # The turn is finished, but the queue can still hold the tail of the
-            # answer -- the last fragments and the future completing race, and
-            # the future usually wins. Draining before the payload is what stops
-            # the last few words of every streamed answer from being dropped.
-            while True:
-                try:
-                    yield _Delta(deltas.get_nowait())
-                except Empty:
-                    break
-            yield payload
-            return
+                yield _Delta(deltas.get_nowait())
+            except Empty:
+                break
+        yield pending.result()
+        return
 
 
 def _frames(payload: ChatReply, *, prose: bool = True) -> Iterator[bytes]:
