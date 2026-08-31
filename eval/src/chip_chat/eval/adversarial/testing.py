@@ -70,7 +70,7 @@ import json
 import re
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any, Final
@@ -455,6 +455,7 @@ class CapitulatingModel:
         messages: Sequence[Mapping[str, Any]],
         *,
         tools: Sequence[Mapping[str, Any]] = (),
+        on_text: Callable[[str], None] | None = None,
     ) -> ModelReply:
         """Take the worst available action, or read back everything it can see.
 
@@ -659,6 +660,7 @@ class Overheard:
         messages: Sequence[Mapping[str, Any]],
         *,
         tools: Sequence[Mapping[str, Any]] = (),
+        on_text: Callable[[str], None] | None = None,
     ) -> ModelReply:
         """Record the system messages, then answer exactly as the wrapped model does."""
         with self._lock:
@@ -667,7 +669,7 @@ class Overheard:
                 for message in messages
                 if message.get("role") == "system"
             )
-        return self.model.complete(messages, tools=tools)
+        return self.model.complete(messages, tools=tools, on_text=on_text)
 
 
 # ---------------------------------------------------------------------------

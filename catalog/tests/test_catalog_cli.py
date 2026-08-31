@@ -94,3 +94,94 @@ def test_a_cold_landing_zone_fails_rather_than_fetching(
     status = main(["--landing", str(tmp_path), "--offline"])
     assert status == 1
     assert "catalogue build failed" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# --from-built, which is how the image gets its vocabulary without a harvest
+# ---------------------------------------------------------------------------
+
+
+def test_from_built_writes_a_vocabulary_without_touching_the_harvest(
+    landing: Path, tmp_path: Path
+) -> None:
+    """The CI path: a built catalogue in, a vocabulary module out, nothing else.
+
+    The ordinary path rebuilds the catalogue from the harvest cache, which this
+    repository does not commit -- so the deploy workflow could not build the
+    image at all, and every deployment was made by hand. That is the failure
+    this flag exists to remove, so what is asserted is exactly its precondition:
+    a directory holding a *built* catalogue and no cache at all is enough.
+    """
+    assert main(["--landing", str(landing), "--offline", "--stores", str(STORES)]) == 0
+
+    # A second directory holding only what the build wrote -- no `raw/`, no
+    # `parsed/`, nothing the harvester left behind.
+    published = tmp_path / "published"
+    built = published / "catalog" / "chipotle"
+    built.mkdir(parents=True)
+    for table in (landing / "catalog" / "chipotle").iterdir():
+        built.joinpath(table.name).write_bytes(table.read_bytes())
+
+    module = tmp_path / "vision_vocabulary.py"
+    status = main(
+        ["--landing", str(published), "--from-built", "--vocabulary", str(module)]
+    )
+
+    assert status == 0
+    assert module.is_file()
+    assert not (published / "raw").exists()
+
+
+def test_from_built_renders_the_same_module_the_harvest_path_does(
+    landing: Path, tmp_path: Path
+) -> None:
+    """Two routes to one artefact, which are worth nothing if they disagree.
+
+    The image's vocabulary is generated from a committed catalogue and the
+    matcher is run against a published one. Byte-equality here is what says the
+    shorter route is the same route, rather than a second implementation that
+    happens to work today.
+    """
+    from_harvest = tmp_path / "from_harvest.py"
+    assert (
+        main(
+            [
+                "--landing",
+                str(landing),
+                "--offline",
+                "--stores",
+                str(STORES),
+                "--vocabulary",
+                str(from_harvest),
+            ]
+        )
+        == 0
+    )
+
+    from_built = tmp_path / "from_built.py"
+    assert (
+        main(["--landing", str(landing), "--from-built", "--vocabulary", str(from_built)])
+        == 0
+    )
+
+    assert from_built.read_text() == from_harvest.read_text()
+
+
+def test_from_built_refuses_without_somewhere_to_write(landing: Path) -> None:
+    """It produces exactly one thing, so being told nowhere to put it is an error."""
+    assert main(["--landing", str(landing), "--from-built"]) == 2
+
+
+def test_from_built_says_so_when_there_is_no_catalogue(tmp_path: Path) -> None:
+    """An empty directory is a mistake worth a message rather than a traceback."""
+    status = main(
+        [
+            "--landing",
+            str(tmp_path),
+            "--from-built",
+            "--vocabulary",
+            str(tmp_path / "out.py"),
+        ]
+    )
+
+    assert status == 1

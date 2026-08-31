@@ -91,11 +91,43 @@ COPY --from=build --chown=cilantro:cilantro /app/.venv /app/.venv
 # bare `docker build .` therefore needs `make vocabulary` to have run; that is
 # not an oversight, it is the build step being visible rather than implied.
 #
-# ARG is redeclared here because an ARG from before the FROM is out of scope in
-# the stage that follows it.
-ARG PYTHON_VERSION
-COPY --chown=cilantro:cilantro build/vision_vocabulary.py \
-     /app/.venv/lib/python${PYTHON_VERSION}/site-packages/chip_chat/vision_vocabulary.py
+# The destination is *discovered*, not spelled, and that is the fix for #110.
+# This used to be a single COPY to
+# `/app/.venv/lib/python${PYTHON_VERSION}/site-packages/...`, which quietly
+# assumed that PYTHON_VERSION and the virtualenv's site-packages directory are
+# the same string. They are not. PYTHON_VERSION is a base-image tag and may be
+# fully pinned -- `python:3.13.15-slim-bookworm` is a perfectly reasonable thing
+# for somebody chasing a reproducible build to write -- while a virtualenv's
+# library directory is *always* `pythonX.Y` and never carries the patch level.
+# Build the deployed image with `PYTHON_VERSION=3.13.15` and COPY does not fail:
+# it creates `/app/.venv/lib/python3.13.15/site-packages/chip_chat/`, a
+# directory tree that is on no `sys.path` anywhere, and the build exits 0. The
+# only symptom is at runtime, and it is a quiet one, because `build_photo_lane`
+# treats a missing vocabulary as a reason to withdraw the photo lane rather than
+# as a reason to refuse to start -- so the container comes up healthy and every
+# photograph a visitor uploads is answered "matching a meal from a photo isn't
+# available on this turn". Asking the interpreter where its own `purelib` is
+# costs one RUN and cannot drift from the interpreter that will do the import.
+#
+# The `python -c "import chip_chat.vision_vocabulary"` on the last line is not
+# belt-and-braces; it is the point. A silent COPY into the wrong directory
+# survived code review, a build, a push and a deploy, and was found by a tester
+# uploading a photograph. Nothing between the generation of that file and the
+# visitor's turn had ever asserted that the module was importable. Now the build
+# does, in the final stage, as the user that will run the process, against the
+# interpreter on PATH -- so any future way of getting the placement wrong stops
+# being a deployment that lies about being healthy and becomes a build that
+# fails on the line that broke it. The generated module imports nothing but
+# `enum`, which is what makes this assertion cheap enough to be unconditional.
+COPY --chown=cilantro:cilantro build/vision_vocabulary.py /tmp/vision_vocabulary.py
+RUN set -eu; \
+    purelib="$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"; \
+    test -d "$purelib/chip_chat" || { \
+        echo "no chip_chat namespace package under $purelib -- the venv did not copy"; \
+        exit 1; }; \
+    cp /tmp/vision_vocabulary.py "$purelib/chip_chat/vision_vocabulary.py"; \
+    rm /tmp/vision_vocabulary.py; \
+    python -c 'import chip_chat.vision_vocabulary as v; print("vocabulary:", v.__file__)'
 
 WORKDIR /app
 EXPOSE 8000

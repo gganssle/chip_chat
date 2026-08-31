@@ -16,7 +16,7 @@ under ``agent/tests`` would not be importable from there.
 """
 
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from chip_chat.agent.model import ModelReply, ToolInvocation
@@ -72,8 +72,17 @@ class ScriptedModel:
         messages: Sequence[Mapping[str, Any]],
         *,
         tools: Sequence[Mapping[str, Any]] = (),
+        on_text: Callable[[str], None] | None = None,
     ) -> ModelReply:
         """Record the request and return the next scripted reply.
+
+        ``on_text`` is honoured rather than ignored, and the scripted content
+        is handed over in one fragment. A fake that accepted the callback and
+        never called it would let a test pass while the streamed route
+        delivered nothing to the browser, which is the one bug this seam is
+        supposed to make impossible to ship. One fragment rather than several
+        because the number of fragments is the provider's business and no
+        caller may depend on it.
 
         Raises:
             AssertionError: If the script has run out.
@@ -85,7 +94,10 @@ class ScriptedModel:
                     f"ScriptedModel ran out of replies after {len(self.requests)} "
                     "round trips"
                 )
-            return self._replies.pop(0)
+            reply = self._replies.pop(0)
+        if on_text is not None and reply.content:
+            on_text(reply.content)
+        return reply
 
 
 def calls_tool(

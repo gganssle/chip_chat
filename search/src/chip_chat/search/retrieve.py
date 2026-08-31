@@ -61,6 +61,7 @@ from chip_chat.search import query as query_module
 from chip_chat.search.allowance import SemanticAllowance
 from chip_chat.search.client import SearchService, ServiceError
 from chip_chat.search.fusion import VectorArm
+from chip_chat.search.public_url import public_url
 from chip_chat.search.schema import ALIAS
 
 __all__ = [
@@ -241,12 +242,36 @@ class Passage:
         """Return the score this passage was ordered by."""
         return self.score if self.reranker_score is None else self.reranker_score
 
+    @property
+    def public_url(self) -> str:
+        """Return a page a person can read for this passage, or ``""``.
+
+        Distinct from :attr:`source_url`, and the distinction is the whole of
+        ``chip-at7``: provenance says where the fact was *read*, which for
+        everything behind the ordering API is a JSON endpoint. This says where
+        a visitor should be *sent*, and is empty where no published page
+        exists. :mod:`chip_chat.search.public_url` carries the rules and the
+        measurements behind them.
+
+        Empty string rather than ``None`` because this crosses the wire inside
+        a ``dict[str, str]``; the renderer treats empty as "draw the citation
+        without a link", which is a designed state.
+        """
+        return public_url(self.source_url) or ""
+
     def citation(self) -> dict[str, str]:
-        """Return the four fields D9's response envelope carries per citation."""
+        """Return the fields D9's response envelope carries per citation.
+
+        Five now rather than four. ``public_url`` joins the original four
+        because the web renderer was making an ``<a href>`` out of
+        ``source_url`` and landing visitors on JSON bodies and 404s; the two
+        fields answer different questions and only one of them is a link.
+        """
         return {
             "id": self.id,
             "label": self.label,
             "source_url": self.source_url,
+            "public_url": self.public_url,
             "harvested_at": self.harvested_at,
         }
 

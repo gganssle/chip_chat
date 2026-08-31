@@ -8,7 +8,7 @@ sequence would be three times the cost for the same information, and nothing but
 a count can tell the two designs apart from the outside.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -42,9 +42,10 @@ class CountingOracle:
         messages: Sequence[Mapping[str, Any]],
         *,
         tools: Sequence[Mapping[str, Any]] = (),
+        on_text: Callable[[str], None] | None = None,
     ) -> ModelReply:
         self.calls.append("complete")
-        return self.inner.complete(messages, tools=tools)
+        return self.inner.complete(messages, tools=tools, on_text=on_text)
 
 
 def _arm(name: str = "an-arm") -> ExperimentConfiguration:

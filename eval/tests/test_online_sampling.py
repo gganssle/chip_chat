@@ -125,7 +125,9 @@ def test_the_loop_counts_what_it_spent() -> None:
     class ScriptedModel:
         deployment = "scripted"
 
-        def complete(self, messages: object, *, tools: object = ()) -> object:
+        def complete(
+            self, messages: object, *, tools: object = (), on_text: object = None
+        ) -> object:
             from chip_chat.agent.model import ModelReply
 
             return ModelReply(content="SUPPORTED", prompt_tokens=400, completion_tokens=2)

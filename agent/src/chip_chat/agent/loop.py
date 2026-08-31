@@ -31,7 +31,7 @@ part designed to be thrown away.
 
 import json
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -339,6 +339,17 @@ class TurnResult:
     prompt_tokens: int
     completion_tokens: int
     steps: int
+    usage_reported: bool = True
+    """False when any step's model call reported no usage at all.
+
+    Streamed calls report usage only in a final chunk that has to be requested,
+    so a provider or an API version that declines to send it leaves the counts
+    above at zero. Zero and *unknown* are the same number and completely
+    different facts, and the difference matters exactly once: at
+    :meth:`chip_chat.api.turns.FundedTurn.run`, where a zero believed would
+    settle a real turn against the day's ceiling as free. The flag travels so
+    the caller can charge the reservation instead.
+    """
     card: Mapping[str, Any] | None = None
     """A draft awaiting confirmation, or a receipt. The widget renders it; the
     model's prose describes it. Both come from the same tool result, so they
@@ -403,6 +414,7 @@ def run_turn(
     lanes: Lanes = NO_LANES,
     confirmed_draft_id: str | None = None,
     max_steps: int = DEFAULT_MAX_STEPS,
+    on_text: Callable[[str], None] | None = None,
 ) -> TurnResult:
     """Run one visitor message to an answer.
 
@@ -417,6 +429,13 @@ def run_turn(
             withdraws its tool rather than leaving one nothing can answer -- see
             :func:`~chip_chat.agent.tools.offered_tools` for why an unanswerable
             tool definition is worse than an absent one.
+        on_text: Called with each fragment of the answer as the provider
+            writes it, or ``None`` for the finished-reply behaviour. It changes
+            nothing about what this function returns -- the complete reply, the
+            card and the token counts are all still on the
+            :class:`TurnResult` -- and exists so that the visitor can begin
+            reading at the first token instead of at the last. A step that
+            turns out to be a tool call never calls it.
         confirmed_draft_id: A draft the desk has *already* confirmed. The model
             is told, because it cannot see the button. See
             :data:`CONFIRMATION_NOTE` for why telling it is not the same as
@@ -455,6 +474,7 @@ def run_turn(
     conversation.messages.append({"role": "user", "content": message})
     prompt_tokens = 0
     completion_tokens = 0
+    usage_reported = True
     card: Mapping[str, Any] | None = None
     receipt = False
     # Every passage this turn retrieved, across every step and every call of
@@ -472,7 +492,11 @@ def run_turn(
     for step_index in range(max_steps):
         with agent_step(index=step_index) as step:
             reply = _complete(
-                model, conversation.messages, schemas, is_first=step_index == 0
+                model,
+                conversation.messages,
+                schemas,
+                is_first=step_index == 0,
+                on_text=on_text,
             )
             # This step's own model call, plus whatever its tools spend on model
             # calls of their own. A tool that calls a model -- the photo lane
@@ -499,11 +523,13 @@ def run_turn(
                 step.record_token_rollup(spent)
                 prompt_tokens += spent.prompt_tokens
                 completion_tokens += spent.completion_tokens
+                usage_reported = usage_reported and reply.usage_reported
                 spoken = envelope.text.strip()
                 return TurnResult(
                     reply=spoken or _FALLBACK_REPLY,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
+                    usage_reported=usage_reported,
                     steps=step_index + 1,
                     card=card,
                     receipt=receipt,
@@ -542,11 +568,13 @@ def run_turn(
             step.record_token_rollup(spent)
             prompt_tokens += spent.prompt_tokens
             completion_tokens += spent.completion_tokens
+            usage_reported = usage_reported and reply.usage_reported
 
     return TurnResult(
         reply=_FALLBACK_REPLY,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
+        usage_reported=usage_reported,
         steps=max_steps,
         card=card,
         receipt=receipt,
@@ -566,8 +594,18 @@ def _complete(
     schemas: Sequence[Mapping[str, Any]],
     *,
     is_first: bool,
+    on_text: Callable[[str], None] | None = None,
 ) -> ModelReply:
-    """One ``llm.completion``, with everything the span schema wants on it."""
+    """One ``llm.completion``, with everything the span schema wants on it.
+
+    ``on_text`` is handed straight to the model and is the whole of token
+    streaming in this loop. Nothing about the span changes: the usage, the
+    finish reason and the output message are all recorded from the finished
+    :class:`~chip_chat.agent.model.ModelReply` exactly as before, because a
+    span describing half an answer would be worse than one written a moment
+    later. What the callback buys is that the visitor stops waiting for the
+    whole of it before seeing any of it.
+    """
     with llm_completion(
         model=model.deployment, provider=_PROVIDER, system=_SYSTEM
     ) as recorder:
@@ -577,7 +615,7 @@ def _complete(
             # size of a trace to say the same thing three times.
             recorder.record_tools(schemas)
         recorder.record_input_messages(_as_messages(messages))
-        reply = model.complete(messages, tools=schemas)
+        reply = model.complete(messages, tools=schemas, on_text=on_text)
         recorder.record_usage(
             prompt_tokens=reply.prompt_tokens,
             completion_tokens=reply.completion_tokens,

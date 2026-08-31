@@ -203,9 +203,9 @@ Every ceiling is an environment variable, all optional, all defaulted small:
 
 | Variable | Default |
 | --- | --- |
-| `CHIP_CHAT_DAILY_TOKEN_CEILING` | `2000000` |
-| `CHIP_CHAT_SESSION_TURN_CAP` | `40` |
-| `CHIP_CHAT_SESSION_TOKEN_CAP` | `120000` |
+| `CHIP_CHAT_DAILY_TOKEN_CEILING` | `8000000` |
+| `CHIP_CHAT_SESSION_TURN_CAP` | `22` |
+| `CHIP_CHAT_SESSION_TOKEN_CAP` | `800000` |
 | `CHIP_CHAT_SOURCE_REQUESTS_PER_WINDOW` | `20` |
 | `CHIP_CHAT_SOURCE_WINDOW_SECONDS` | `60` |
 | `CHIP_CHAT_SESSION_UPLOADS_PER_WINDOW` | `5` |

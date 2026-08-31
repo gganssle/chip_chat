@@ -92,10 +92,11 @@ import secrets
 import threading
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeout
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from functools import partial
+from queue import Empty, Queue
+from time import monotonic
 from typing import Any, Final
 
 from fastapi import FastAPI, Request, Response
@@ -109,7 +110,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from chip_chat.agent import ACCOUNT, AzureChatModel, FoundryConfig
-from chip_chat.agent.envelope import ClaimClass, ResponseEnvelope
+from chip_chat.agent.envelope import ClaimClass, ProseStream, ResponseEnvelope
 from chip_chat.agent.health import probe
 from chip_chat.agent.lanes import NO_LANES, Lanes
 from chip_chat.agent.loop import PROMPT_VERSION, Conversation
@@ -256,6 +257,19 @@ _OBJECT_MEDIA_TYPE = "application/json"
 """One JSON object, sent incrementally. See :func:`_object`."""
 
 _HEARTBEAT_SECONDS = 10.0
+
+_DELTA_POLL_SECONDS = 0.05
+"""How often the streamed shape looks for another fragment of the answer.
+
+Nothing to do with :data:`_HEARTBEAT_SECONDS`, which answers a different
+question -- how long ingress will tolerate silence -- and is three orders of
+magnitude larger. Sharing one number between them is the bug this constant was
+added to fix: fragments were being released on the heartbeat's schedule, so a
+streamed answer arrived in ten-second batches and the first token was no earlier
+than the last. Fifty milliseconds is below the threshold at which text appearing
+reads as continuous, and the cost of a poll that finds nothing is one timed wait
+on a queue.
+"""
 """How long a turn may go silent before its response says it is still there.
 
 Well inside Container Apps ingress' sixty-second idle timeout, and far enough
@@ -1682,7 +1696,9 @@ async def _accept_photo(
 
     Order matters and is the same order the spend cap uses: the ceiling that an
     attacker cannot re-roll for free runs first, and nothing is read from the
-    socket until it has admitted.
+    socket until it has admitted. Ahead of even that is the question of whether
+    a photograph can be acted on at all on this deployment -- refusing there
+    costs the socket and nothing else, which is the point.
 
     Args:
         service: The assembled service.
@@ -1692,12 +1708,36 @@ async def _accept_photo(
     Returns:
         The reference the next chat request carries, or the refusal.
     """
+    # Before anything is read from the socket, and before the upload ceiling is
+    # even consulted: can this deployment *do* anything with a photograph?
+    #
+    # Two different things have to be wired and only one of them was checked
+    # here. `service.photos` is the intake -- Content Safety and the blob
+    # container -- and `Lanes.photo` is the half that looks at the picture and
+    # resolves a meal. The deployment that prompted `chip-cfi` had the first and
+    # not the second, so a visitor's photograph was moderated, written to blob
+    # storage with a retention obligation, and charged
+    # `DEFAULT_UPLOAD_TOKEN_CHARGE` against their session -- and *then* the turn
+    # came back saying photo matching was not available. They paid for the
+    # storage of an image nothing would ever look at, and the budget they paid
+    # it out of is the one that ends conversations early.
+    #
+    # An absent lane is a smaller surface, never a broken one: that is
+    # `chip_chat.agent.lanes`' rule for the model's tool list, and this is the
+    # same rule applied to the route. Refuse first, cheaply, and say so.
     intake = service.photos if service.photos is not None else build_photos()
     if intake is None:
         return PhotoReply(
             reply=(
                 "Photographs are not wired up on this deployment, so I cannot "
                 "look at one just now -- tell me what you want instead."
+            )
+        )
+    if service.gate.lanes.photo is None:
+        return PhotoReply(
+            reply=(
+                "I cannot look at photographs on this deployment just now -- "
+                "tell me what you are after and I will help from the menu."
             )
         )
     stop = service.uploads.check(
@@ -1878,6 +1918,7 @@ def _stream(
     body of :func:`_chunks` and nothing else.
     """
     yield _frame({"type": "open"})
+    streamed = False
     for held in _held_open(
         service,
         conversation,
@@ -1886,11 +1927,18 @@ def _stream(
         source_address,
         admitted,
         idle=_frame({"type": "waiting"}),
+        stream_text=True,
     ):
         if isinstance(held, bytes):
             yield held
+        elif isinstance(held, _Delta):
+            streamed = True
+            yield _frame({"type": "text", "text": held.text})
         else:
-            yield from _frames(held)
+            # `prose=not streamed` is the whole of the handover. Where the
+            # provider streamed the answer the browser already has every word of
+            # it, and re-sending the finished reply would print it twice.
+            yield from _frames(held, prose=not streamed)
 
 
 def _object(
@@ -1931,6 +1979,12 @@ def _object(
     ):
         if isinstance(held, bytes):
             yield held
+        elif isinstance(held, _Delta):
+            # Unreachable while `stream_text` is left at its default, and here
+            # anyway: this shape is one JSON object, so half an answer has
+            # nowhere to go. Dropping it is correct rather than lossy -- the
+            # same words arrive in full on the `ChatReply` below.
+            continue
         else:
             # The arguments Starlette's own `JSONResponse` renders with, spelled
             # out rather than inherited, so that the bytes on the wire did not
@@ -1944,6 +1998,20 @@ def _object(
             ).encode("utf-8")
 
 
+@dataclass(frozen=True, slots=True)
+class _Delta:
+    """One fragment of the answer, on its way from the provider to the browser.
+
+    A wrapper rather than a bare ``str`` because :func:`_held_open` already
+    yields two other things -- heartbeat ``bytes`` and the finished
+    :class:`ChatReply` -- and a third channel that was simply "a string" would
+    be told apart from them by an ``isinstance`` that happened to work. This
+    one says what it is.
+    """
+
+    text: str
+
+
 def _held_open(
     service: Service,
     conversation: Conversation,
@@ -1953,7 +2021,8 @@ def _held_open(
     admitted: VisitorSession | None,
     *,
     idle: bytes,
-) -> Iterator[bytes | ChatReply]:
+    stream_text: bool = False,
+) -> Iterator[bytes | ChatReply | _Delta]:
     """Run one turn on a worker thread, yielding ``idle`` until it finishes.
 
     The heartbeat, and it is not cosmetic. Container Apps ingress closes a
@@ -1972,25 +2041,97 @@ def _held_open(
     rendered in its own shape. That split is what lets the frames and the object
     share one timer rather than two implementations of it.
 
+    **Fragments of the answer come out the same way the heartbeat does**, as
+    :class:`_Delta` values interleaved with the ``idle`` bytes, and the caller
+    decides whether they mean anything. That is what keeps one timer serving
+    both shapes: the streamed shape turns a delta into a ``text`` frame, and the
+    object shape -- which has no way to render half an answer -- drops it and
+    waits for the whole :class:`ChatReply`, exactly as it did before there was
+    anything to drop.
+
     Args:
         idle: What to write while the turn is still running. A ``waiting`` frame
             for the streamed shape, a space for the object shape.
+        stream_text: Whether to ask the turn for fragments at all. ``False``
+            leaves the model on its unstreamed path, which is what every caller
+            that cannot use a fragment should want.
     """
+    # Where the provider's fragments cross the thread boundary. The turn runs on
+    # the worker and this generator is iterated on another; a queue is the whole
+    # of the synchronisation, and it is unbounded because a full queue would
+    # block the model call to wait for a browser, which has the dependency
+    # exactly backwards.
+    deltas: Queue[str] = Queue()
+    # The provider writes the model's *raw* output, which on every food answer
+    # ends with the D9 envelope as a line of JSON. Forwarding that verbatim
+    # would put `{"claim_class":"food","citations":[...]}` in front of the
+    # visitor -- bead `chip-2ky`, reopened by the back door. `ProseStream` holds
+    # back anything that might be envelope, and `_frames` sends the parsed reply
+    # afterwards as the authority on what was actually said.
+    prose_filter = ProseStream()
+
+    def _forward(fragment: str) -> None:
+        shown = prose_filter.feed(fragment)
+        if shown:
+            deltas.put(shown)
+
+    on_text = _forward if stream_text else None
+
     with ThreadPoolExecutor(max_workers=1) as pool:
         pending = pool.submit(
-            _run_turn, service, conversation, body, message, source_address, admitted
+            _run_turn,
+            service,
+            conversation,
+            body,
+            message,
+            source_address,
+            admitted,
+            on_text,
         )
+        # **The wait is on the queue, not on the future**, and the difference is
+        # the whole value of streaming. Waiting on the future and draining only
+        # when it timed out meant fragments left the process in
+        # `_HEARTBEAT_SECONDS` batches: measured against the deployment, the
+        # first token reached the browser at 24.43 s on a turn that finished at
+        # 24.47 s, which is to say the visitor waited exactly as long as before
+        # and then got the whole answer at once. Polling the queue on a short
+        # interval and keeping the heartbeat on its own clock is what makes the
+        # first token early rather than merely differently packaged.
+        last_written = monotonic()
+        while True:
+            # Checked before the wait rather than after it, so a turn that has
+            # already finished leaves immediately. The object shape reaches this
+            # with an always-empty queue, and waiting a poll interval it did not
+            # need would put `_DELTA_POLL_SECONDS` on the end of every one of its
+            # turns -- and a whole heartbeat, when the poll was the heartbeat.
+            if pending.done() and deltas.empty():
+                break
+            try:
+                yield _Delta(deltas.get(timeout=_DELTA_POLL_SECONDS))
+            except Empty:
+                pass
+            else:
+                # A fragment is traffic. Ingress does not need a heartbeat on
+                # top of an answer that is actively arriving.
+                last_written = monotonic()
+                continue
+            if monotonic() - last_written >= _HEARTBEAT_SECONDS:
+                yield idle
+                last_written = monotonic()
+        # The turn is finished, but the queue can still hold the tail of the
+        # answer -- the last fragments and the future completing race, and the
+        # future usually wins. Draining before the payload is what stops the
+        # last few words of every streamed answer from being dropped.
         while True:
             try:
-                payload = pending.result(timeout=_HEARTBEAT_SECONDS)
-            except FutureTimeout:
-                yield idle
-                continue
-            yield payload
-            return
+                yield _Delta(deltas.get_nowait())
+            except Empty:
+                break
+        yield pending.result()
+        return
 
 
-def _frames(payload: ChatReply) -> Iterator[bytes]:
+def _frames(payload: ChatReply, *, prose: bool = True) -> Iterator[bytes]:
     """Take one reply apart into the frames the widget renders.
 
     The sources frame comes after the prose and before the card, which is the
@@ -1998,9 +2139,29 @@ def _frames(payload: ChatReply) -> Iterator[bytes]:
     it supports, and a confirmation card belongs under everything. It is sent
     even when the list is empty, so the widget can clear a source line rather
     than having to remember whether one is showing.
+
+    Args:
+        payload: The finished reply.
+        prose: Whether to write the answer text. ``False`` when the provider
+            already streamed it word by word and the browser has all of it --
+            every other frame here still has to be sent, because the sources,
+            the card and the end frame are not things a model streams. A stop
+            state and a failure both arrive with ``prose=True``, since neither
+            streamed anything: they are the app speaking, not the model.
     """
-    for chunk in _chunks(payload.reply):
-        yield _frame({"type": "text", "text": chunk})
+    if prose:
+        for chunk in _chunks(payload.reply):
+            yield _frame({"type": "text", "text": chunk})
+    else:
+        # What the visitor has on screen is raw model output minus whatever the
+        # filter held back. What they should have is `payload.reply`, which is
+        # the parsed prose: envelope removed, fallback substituted where the
+        # model wrote nothing usable. Those are the same string on a well-formed
+        # turn and different on every interesting one, so the answer is settled
+        # here rather than hoped for -- the widget replaces what it painted with
+        # this, and a stream can never leave a visitor reading something the
+        # turn did not conclude.
+        yield _frame({"type": "text_final", "text": payload.reply})
     yield _frame(
         {
             "type": "sources",
@@ -2046,6 +2207,7 @@ def _run_turn(
     message: str,
     source_address: str,
     admitted: VisitorSession | None = None,
+    on_text: Callable[[str], None] | None = None,
 ) -> ChatReply:
     """One ``chat.turn``, from the budget check to the rendered reply.
 
@@ -2067,6 +2229,9 @@ def _run_turn(
             :attr:`~chip_chat.otel.attributes.ChipChatAttributes.DEMO_ID` -- and
             the *binding* travels to Snowflake through the session store, which
             is the only path RFC-001 §05 permits.
+        on_text: Called with each fragment of the answer as the provider writes
+            it, for the streamed shape. ``None`` for the object shape, which
+            has nowhere to put a fragment and wants the finished reply.
     """
     session_id = conversation.session_id
     with (
@@ -2103,6 +2268,7 @@ def _run_turn(
                 conversation,
                 message,
                 confirm_draft_id=body.confirm_draft_id,
+                on_text=on_text,
             )
         except Exception as error:
             turn.record_failure(error)

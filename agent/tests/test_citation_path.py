@@ -45,7 +45,13 @@ from chip_chat.search.retrieve import Retriever
 
 SESSION = "sess-cite"
 BARBACOA_ID = "menu-barbacoa-1"
-BARBACOA_URL = "https://www.chipotle.com/menu/barbacoa"
+# The endpoint the row was actually read from, which is what the harvest writes
+# and what an ordering-API fact really carries. The published page a person can
+# be sent to is a different string, and keeping the two different here is the
+# point: a fixture where they were equal would pass whether or not the renderer
+# had ever learned the difference.
+BARBACOA_URL = "https://services.chipotle.com/menuinnovation/v1/items/barbacoa"
+BARBACOA_PUBLIC_URL = "https://www.chipotle.com/order/build-your-own"
 HARVESTED = "2026-08-24T03:11:00+00:00"
 
 
@@ -178,6 +184,7 @@ def test_the_citation_carries_the_retriever_s_fields_and_not_the_model_s(
             "id": BARBACOA_ID,
             "label": "Menu · Barbacoa",
             "source_url": BARBACOA_URL,
+            "public_url": BARBACOA_PUBLIC_URL,
             "harvested_at": HARVESTED,
         }
     ]

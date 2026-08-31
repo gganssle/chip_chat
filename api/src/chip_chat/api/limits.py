@@ -21,6 +21,13 @@ Circuit breaker             not a number -- see :mod:`chip_chat.api.killswitch`
 The defaults are deliberately small. This is a demo attached to a real
 subscription, and the failure mode that costs money is a ceiling set high
 "for now" and never revisited.
+
+There is a second failure mode, and issue #108 is what it looks like: a ceiling
+set small against a system that then grew underneath it, so that the cap starts
+refusing the ordinary case and reads to the visitor as a fault. Every number
+here is therefore written with the arithmetic that produced it and the date it
+was measured, so the next person retuning one can see what it was sized against
+rather than guessing whether it was ever sized at all.
 """
 
 import os
@@ -30,14 +37,93 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 __all__ = ["SpendLimits"]
 
-DEFAULT_DAILY_TOKEN_CEILING = 2_000_000
-"""Tokens across every visitor, per day. Roughly a day of honest demo traffic."""
+DEFAULT_DAILY_TOKEN_CEILING = 8_000_000
+"""Tokens across every visitor, per day.
 
-DEFAULT_SESSION_TURN_CAP = 40
-"""Turns one conversation may take. Long enough to demo, short enough to bound."""
+Ten full conversations, and the arithmetic is deliberately that simple: ten
+times :data:`DEFAULT_SESSION_TOKEN_CAP` is 8,000,000, so the number of visitors
+who can reach the end of a conversation on the worst possible day is a number
+somebody can hold in their head rather than a quotient they have to work out.
 
-DEFAULT_SESSION_TOKEN_CAP = 120_000
-"""Tokens one conversation may consume, so one visitor cannot take the day."""
+Note which direction this moved the headroom. The old pair -- 2,000,000 over a
+120,000 session cap -- admitted about sixteen capped conversations; the new pair
+admits ten. **The ceiling went up four times and the number of visitors it
+serves went down**, because the conversation it is now sized for is four times
+longer than the one it was sized for before. That is the honest reading of the
+change and it is the reason this is not simply a bigger number: the worst-case
+day now costs four times what it used to (about $2.70 of `gpt-5-mini` at list,
+`docs/cost.md` §3.2's prices against §14's measured 95%-prompt split), against a
+day that has never in fact exceeded thirteen conversations.
+"""
+
+DEFAULT_SESSION_TURN_CAP = 22
+"""Turns one conversation may take, as a backstop rather than as the cap.
+
+Twenty is the conversation this demo is built to hold: enough to visit all five
+lanes, order something, change your mind, and ask about the photo you took.
+Twenty-two is that plus a little, so that a visitor having the intended
+conversation is stopped by :data:`DEFAULT_SESSION_TOKEN_CAP` -- the honest,
+cost-shaped ceiling -- rather than by a turn count that knows nothing about what
+the turns cost.
+
+What this leaves the turn cap doing is the case the token cap cannot see: a loop
+that is pathologically *cheap*. Twenty-two one-word turns cost almost nothing
+and would run for a very long time under a token ceiling alone, and a session is
+also a row in a ledger and a persona held out of the roster. The turn cap bounds
+that; it is not meant to bound spend.
+
+**The two caps used to contradict each other, and it went unnoticed because the
+contradiction was invisible from either side.** 120,000 over 40 turns is 3,000
+tokens a turn, which is *below* the 8,000
+:data:`DEFAULT_TURN_TOKEN_RESERVATION` a single turn claims before the model is
+even called -- so the token cap refused the sixteenth turn of the cheapest
+conversation that could possibly exist, and forty was unreachable dead
+configuration from the day it was written. The reconciliation to check whenever
+either number is retuned is that quotient: 800,000 over 22 is 36,364 tokens a
+turn, comfortably above the reservation and inside the range of turns actually
+measured on 2026-08-31 (mean 27,437, largest 36,938). Both numbers now describe
+the same conversation instead of two that differ by a factor of three.
+"""
+
+DEFAULT_SESSION_TOKEN_CAP = 800_000
+"""Tokens one conversation may consume, so one visitor cannot take the day.
+
+Sized from measurement rather than from feel, and the measurement is the whole
+of issue #108. Five consecutive turns of one real conversation during the user
+testing session of 2026-08-31, read off ``chip_chat.tokens.total`` on
+``chat.turn`` in Application Insights between 14:03 and 14:09 UTC:
+
+=========== ============ ==============
+Turn        this turn    cumulative
+=========== ============ ==============
+1           30,339       30,339
+2           33,708       64,047
+3           18,125       82,172
+4           18,074       100,246
+5           36,938       137,184
+=========== ============ ==============
+
+The old cap was 120,000. **It is crossed on the fifth turn**, which is exactly
+the report that opened #108 -- *"it happens after only about five or ten turns"*
+-- and it is not a bug in the ledger: the reservations were settling correctly
+and those are the real numbers a turn costs on the deployed app. The cap was set
+when a turn was much cheaper, before #106 wired the knowledge lane, and a turn
+now carries the system prompt, eleven tool schemas, retrieved passages on every
+food question and the whole history replayed at each agent step. The mean is
+27,437 and the prompt is nearly all of it -- 28,620 prompt against 1,719
+completion on turn 1.
+
+800,000 is twenty turns at 40,000, and 40,000 is chosen above the mean rather
+than at it for a reason visible in the table: **prompt tokens grow with the
+history, so late turns cost more than early ones.** Turn 5 carried 35,998 prompt
+tokens where turn 1 carried 28,620. A flat per-turn average understates a long
+conversation, so multiplying the mean by twenty (548,740) would have produced a
+cap that binds somewhere around turn sixteen -- the same mistake as the old one,
+made a second time with better arithmetic. The margin between 27,437 and 40,000
+is what pays for the growth, and it is a margin rather than a measurement:
+`docs/decisions/session-token-cap.md` records that the growth curve past turn
+five is extrapolated from five points and has never been observed.
+"""
 
 DEFAULT_SOURCE_REQUESTS_PER_WINDOW = 20
 DEFAULT_SOURCE_WINDOW_SECONDS = 60.0

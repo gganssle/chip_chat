@@ -1126,6 +1126,11 @@ IMAGE_TAG  ?= $(shell git rev-parse --short HEAD)
 # fail to start with an exec-format error nobody enjoys diagnosing.
 IMAGE_PLATFORM ?= linux/amd64
 
+# Where `vocabulary-ci` reads a built catalogue from. A variable rather than a
+# literal so that a re-harvest can point it somewhere else without editing the
+# recipe.
+CI_CATALOG_LANDING ?= data-gen/roster/inputs
+
 REGISTRY = $(shell $(TF_RUN) output -raw container_registry_login_server)
 IMAGE    = $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
 APP      = $(shell $(TF_RUN) output -raw container_app_name)
@@ -1133,7 +1138,7 @@ APP_URL  = $(shell $(TF_RUN) output -raw web_url)
 RG       = $(shell $(TF_RUN) output -raw resource_group_name)
 
 .PHONY: image image-push deploy deploy-check rollback revisions scale-one scale-zero takedown \
-        vocabulary
+        vocabulary vocabulary-ci
 
 # The photo lane's vocabulary, which the image carries and nothing commits.
 #
@@ -1159,6 +1164,30 @@ vocabulary: ## Generate the photo lane's vocabulary from $(LANDING)/catalog
 	$(UV) run python -m chip_chat.catalog --landing $(LANDING) --offline \
 		--stores $(STORES) --vocabulary build/vision_vocabulary.py >/dev/null
 	@echo "build/vision_vocabulary.py <- $(LANDING)/catalog/chipotle"
+
+# The same file, from the built catalogue this repository *does* commit.
+#
+# `vocabulary` above needs the harvest cache, which is twenty-odd megabytes of
+# fetched pages that are deliberately not committed -- so it can only run where
+# somebody has already harvested. That is fine on a laptop and fatal in CI, and
+# it is why `.github/workflows/deploy.yml` had been failing on every push since
+# the vocabulary was first copied into the image: every deploy since then was
+# made by hand, which is how an image with its vocabulary in the wrong directory
+# reached production unnoticed.
+#
+# `data-gen/roster/inputs/catalog/chipotle` is a built catalogue, committed
+# because the roster generator needs one, and byte-identical to what is
+# published -- both were content version 920ce7a1 when this was written. So the
+# image can be built with no credentials and no harvest, which is what
+# deploy.yml's own comment promises a fork. The credentialed half of that
+# workflow then checks this file's content version against the *published*
+# catalogue before it pushes anything, so a snapshot that goes stale fails the
+# deploy rather than shipping a matcher that resolves last month's salsa.
+vocabulary-ci: ## Generate the vocabulary from the committed catalogue (no harvest)
+	@mkdir -p build
+	$(UV) run python -m chip_chat.catalog --landing $(CI_CATALOG_LANDING) \
+		--from-built --vocabulary build/vision_vocabulary.py >/dev/null
+	@echo "build/vision_vocabulary.py <- $(CI_CATALOG_LANDING)/catalog/chipotle"
 
 image: vocabulary ## Build the chat app image for Container Apps
 	docker buildx build --platform $(IMAGE_PLATFORM) -t $(IMAGE) --load .
